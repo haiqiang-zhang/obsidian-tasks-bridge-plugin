@@ -38,7 +38,13 @@ Set `completedTasks` to `true` to include completed tasks alongside active tasks
 
 The initial refresh loads the newest three-month window. Each Todoist request asks for up to 200 completed tasks, and the plugin follows `next_cursor` until that entire window has loaded.
 
-If unsearched history remains, the button below the block shows the total range that will be available after the next load: **Load 6 months**, then **Load 9 months**, **Load 12 months**, and so on. Each successful click loads one complete preceding three-month window; older windows are never fetched automatically.
+:::note Todoist API limitation
+
+The button shows **Load 6 months**, then **Load 9 months**, **Load 12 months**, and so on. This stepped design exists because Todoist's current completed-task API limits each filtered history request to a three-month window. Each successful click therefore loads one complete preceding window; older windows are never fetched automatically.
+
+We are waiting for Todoist to officially support retrieving all completed tasks matched by a filter without fixed date windows. When that becomes available, Todoist Sync ++ will adopt it with a more seamless implementation.
+
+:::
 
 Completed pages are added to the block's saved query cache. The next time you open the note, the previously loaded history appears immediately while the newest tasks refresh in the background.
 
