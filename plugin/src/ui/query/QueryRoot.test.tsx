@@ -165,14 +165,33 @@ describe("QueryRoot cache-first rendering", () => {
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
 
-  it("uses an ellipsis for an unresolved task count on a cache miss", async () => {
+  it("uses the compact untitled layout without rendering a spacer header", async () => {
     const mock = makePlugin();
-    const query = makeQuery({ name: "Tasks ({task_count})", filter: "today" });
+
+    const { container } = renderQuery(mock.plugin);
+    await waitFor(() => expect(mock.refresh).toHaveBeenCalledOnce());
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Refresh tasks" })).not.toHaveClass(
+        "is-refreshing",
+      ),
+    );
+
+    expect(container.querySelector(".todoist-query")).toHaveClass("is-untitled");
+    expect(container.querySelector(".todoist-query-header")).not.toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("Loading Todoist tasks");
+  });
+
+  it("replaces every unresolved task-count placeholder with an ellipsis", async () => {
+    const mock = makePlugin();
+    const query = makeQuery({
+      name: "Tasks ({task_count}) / {task_count}",
+      filter: "today",
+    });
 
     renderQuery(mock.plugin, query);
     await waitFor(() => expect(mock.refresh).toHaveBeenCalledOnce());
 
-    expect(screen.getByRole("heading", { name: "Tasks (…)" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Tasks (…) / …" })).toBeInTheDocument();
     expect(screen.queryByText("{task_count}", { exact: false })).not.toBeInTheDocument();
   });
 

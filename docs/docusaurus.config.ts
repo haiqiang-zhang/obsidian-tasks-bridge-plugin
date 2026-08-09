@@ -4,7 +4,7 @@ import type * as Preset from "@docusaurus/preset-classic";
 
 const title = "Todoist Sync ++";
 const org = "haiqiang-zhang";
-const project = "obsidian-todoist-plugin";
+const project = "obsidian-todoist-plus-plugin";
 
 const config: Config = {
   title: title,
@@ -28,7 +28,7 @@ const config: Config = {
       {
         docs: {
           sidebarPath: "./sidebars.ts",
-          editUrl: `https://github.com/${org}/${project}/tree/main/docs/`,
+          editUrl: `https://github.com/${org}/${project}/tree/master/docs/`,
         },
         blog: false,
         theme: {
