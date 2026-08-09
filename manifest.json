@@ -1,7 +1,7 @@
 {
-  "id": "todoist-sync-plugin",
+  "id": "todoist-sync-plus",
   "name": "Todoist Sync ++",
-  "version": "2.7.0",
+  "version": "2.7.1",
   "minAppVersion": "1.11.4",
   "description": "Synchronize Todoist tasks with Obsidian.",
   "author": "Jamie Brynes and Haiqiang Zhang",
