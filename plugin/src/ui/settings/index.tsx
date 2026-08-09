@@ -87,7 +87,7 @@ const SettingsRoot: React.FC<Props> = ({ plugin }) => {
           icon="github"
           onClick={() => {
             location.replace(
-              "https://github.com/jamiebrynes7/obsidian-todoist-plugin/issues/new/choose",
+              "https://github.com/haiqiang-zhang/obsidian-todoist-plus-plugin/issues/new/choose",
             );
           }}
         />
