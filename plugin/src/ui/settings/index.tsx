@@ -78,7 +78,7 @@ const SettingsRoot: React.FC<Props> = ({ plugin }) => {
           icon="book-open"
           onClick={() => {
             location.replace(
-              "https://jamiebrynes7.github.io/obsidian-todoist-plugin/docs/overview/",
+              "https://haiqiang-zhang.github.io/obsidian-todoist-plus-plugin/docs/overview/",
             );
           }}
         />
