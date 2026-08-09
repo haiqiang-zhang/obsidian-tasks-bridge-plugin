@@ -46,7 +46,9 @@ const config: Config = {
       },
       items: [
         {
-          type: "docsVersionDropdown",
+          type: "docSidebar",
+          sidebarId: "tutorialSidebar",
+          label: "Docs",
           position: "right",
         },
         {
