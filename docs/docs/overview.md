@@ -4,6 +4,8 @@ sidebar_position: 1
 
 # Overview
 
+![Obsidian Todoist Sync ++ banner](/img/obsidian-todoist-sync-plus-banner.svg)
+
 Todoist Sync ++ is based on the original [Todoist Sync](https://github.com/jamiebrynes7/obsidian-todoist-plugin) plugin created by [Jamie Brynes](https://github.com/jamiebrynes7).
 
 Todoist Sync ++ is an _**unofficial**_ plugin for synchronizing Todoist tasks with Obsidian. It works on desktop and mobile, displays Todoist tasks in notes, and supports selected task updates from Obsidian.

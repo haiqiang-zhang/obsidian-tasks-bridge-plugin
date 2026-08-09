@@ -1,5 +1,7 @@
 # Obsidian Todoist Sync ++
 
+![Obsidian Todoist Sync ++ banner](docs/static/img/obsidian-todoist-sync-plus-banner.svg)
+
 Todoist Sync ++ is based on the original [Todoist Sync](https://github.com/jamiebrynes7/obsidian-todoist-plugin) plugin created by [Jamie Brynes](https://github.com/jamiebrynes7).
 
 ## What is it?
