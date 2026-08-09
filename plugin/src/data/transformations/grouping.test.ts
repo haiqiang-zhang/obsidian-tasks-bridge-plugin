@@ -22,8 +22,11 @@ vi.mock("../../infra/locale.ts", () => {
 type TestCase = {
   description: string;
   input: Task[];
-  expected: GroupedTasks[];
+  expected: Omit<GroupedTasks, "id">[];
 };
+
+const withoutGroupIds = (groups: GroupedTasks[]): Omit<GroupedTasks, "id">[] =>
+  groups.map((group) => ({ header: group.header, tasks: group.tasks }));
 
 describe("group by priority", () => {
   const testcases: TestCase[] = [
@@ -124,7 +127,7 @@ describe("group by priority", () => {
   for (const tc of testcases) {
     it(tc.description, () => {
       const groups = groupBy(tc.input, "priority");
-      expect(groups).toStrictEqual(tc.expected);
+      expect(withoutGroupIds(groups)).toStrictEqual(tc.expected);
     });
   }
 });
@@ -180,7 +183,7 @@ describe("group by project", () => {
   for (const tc of testcases) {
     it(tc.description, () => {
       const groups = groupBy(tc.input, "project");
-      expect(groups).toStrictEqual(tc.expected);
+      expect(withoutGroupIds(groups)).toStrictEqual(tc.expected);
     });
   }
 });
@@ -190,8 +193,8 @@ describe("group by section", () => {
   const projectTwo = makeProject("2", { name: "Project Two", childOrder: 2 });
 
   const sectionOne = makeSection("1", { projectId: "1", name: "Section One", sectionOrder: 1 });
-  const sectionTwo = makeSection("1", { projectId: "2", name: "Section Two", sectionOrder: 2 });
-  const sectionThree = makeSection("2", { projectId: "3", name: "Section Three", sectionOrder: 2 });
+  const sectionTwo = makeSection("2", { projectId: "2", name: "Section Two", sectionOrder: 2 });
+  const sectionThree = makeSection("3", { projectId: "3", name: "Section Three", sectionOrder: 2 });
 
   const testcases: TestCase[] = [
     {
@@ -264,9 +267,42 @@ describe("group by section", () => {
   for (const tc of testcases) {
     it(tc.description, () => {
       const groups = groupBy(tc.input, "section");
-      expect(groups).toStrictEqual(tc.expected);
+      expect(withoutGroupIds(groups)).toStrictEqual(tc.expected);
     });
   }
+
+  it("keeps section group identity stable while metadata is hydrated", () => {
+    const unknownProject = makeProject("1", {
+      name: "Unknown Project",
+      childOrder: Number.MAX_SAFE_INTEGER,
+    });
+    const unknownSection = makeSection("1", {
+      projectId: "unknown-project",
+      name: "Unknown Section",
+      sectionOrder: Number.MAX_SAFE_INTEGER,
+    });
+    const unknownGroups = groupBy(
+      [makeTask("unknown", { project: unknownProject, section: unknownSection })],
+      "section",
+    );
+    const hydratedGroups = groupBy(
+      [makeTask("hydrated", { project: projectOne, section: sectionOne })],
+      "section",
+    );
+    const mixedGroups = groupBy(
+      [
+        makeTask("hydrated", { project: projectOne, section: sectionOne }),
+        makeTask("unknown", { project: unknownProject, section: unknownSection }),
+      ],
+      "section",
+    );
+
+    expect(unknownGroups[0]?.id).toBe(hydratedGroups[0]?.id);
+    expect(unknownGroups[0]?.header).toBe("Unknown Project / Unknown Section");
+    expect(hydratedGroups[0]?.header).toBe("Project One / Section One");
+    expect(mixedGroups).toHaveLength(1);
+    expect(mixedGroups[0]?.id).toBe(hydratedGroups[0]?.id);
+  });
 });
 
 describe("group by date", () => {
@@ -434,7 +470,7 @@ describe("group by date", () => {
   for (const tc of testcases) {
     it(tc.description, () => {
       const groups = groupBy(tc.input, "due");
-      expect(groups).toStrictEqual(tc.expected);
+      expect(withoutGroupIds(groups)).toStrictEqual(tc.expected);
     });
   }
 });
@@ -550,7 +586,7 @@ describe("group by label", () => {
   for (const tc of testcases) {
     it(tc.description, () => {
       const groups = groupBy(tc.input, "label");
-      expect(groups).toStrictEqual(tc.expected);
+      expect(withoutGroupIds(groups)).toStrictEqual(tc.expected);
     });
   }
 });

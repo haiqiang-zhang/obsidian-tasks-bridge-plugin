@@ -10,6 +10,7 @@ import { viewSchema } from "@/query/schema/view";
 const taskQuerySchema = z.object({
   name: z.string().optional(),
   filter: z.string(),
+  completedTasks: z.boolean().default(false),
   autorefresh: z.number().nonnegative().optional(),
   sorting: sortingSchema.optional(),
   show: showSchema.optional(),

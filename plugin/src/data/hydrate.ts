@@ -22,6 +22,7 @@ export function hydrate(apiTask: ApiTask, data: DataAccessor): Task {
   return {
     id: apiTask.id,
     createdAt: apiTask.addedAt,
+    completedAt: apiTask.completedAt,
 
     content: apiTask.content,
     description: apiTask.description,

@@ -11,14 +11,17 @@ import {
   type TaskId,
   taskIdSchema,
 } from "@/api/domain/task";
+import type { CompletedTasksProgress } from "@/data/subscriptions";
 import type { Task } from "@/data/task";
 
 const cacheVersion = 2;
 const maxCacheEntries = 100;
+const TODOIST_SERVICE_LAUNCH_AT = "2007-01-01T00:00:00.000Z";
 
 const cachedTaskSchema = z.object({
   id: taskIdSchema,
   createdAt: z.string(),
+  completedAt: z.string().nullable().optional(),
   content: z.string(),
   description: z.string(),
   project: projectSchema,
@@ -32,9 +35,27 @@ const cachedTaskSchema = z.object({
   order: z.number(),
 });
 
+const completedTasksPageRequestSchema = z.object({
+  since: z.string().refine((value) => !Number.isNaN(Date.parse(value))),
+  until: z.string().refine((value) => !Number.isNaN(Date.parse(value))),
+  historyStart: z.string().refine((value) => !Number.isNaN(Date.parse(value))),
+  cursor: z.string().optional(),
+});
+
+const completedTasksProgressSchema = z.object({
+  latestUntil: z.string().refine((value) => !Number.isNaN(Date.parse(value))),
+  historyStart: z.string().refine((value) => !Number.isNaN(Date.parse(value))),
+  loadedWindowCount: z.number().int().min(1).optional(),
+  frontiers: z.array(completedTasksPageRequestSchema),
+});
+
 const cachedQuerySchema = z.object({
   tasks: z.array(cachedTaskSchema),
   updatedAt: z.string().refine((value) => !Number.isNaN(Date.parse(value))),
+  completedTasksProgress: completedTasksProgressSchema.optional(),
+  // Read the one-frontier format written by development builds before the
+  // progressive coordinator was introduced. New writes use the progress object.
+  completedTasksNextPage: completedTasksPageRequestSchema.nullable().optional(),
 });
 
 const serializedCacheSchema = z.object({
@@ -48,6 +69,7 @@ type SerializedQuery = z.infer<typeof cachedQuerySchema>;
 export type CachedQuery = {
   tasks: Task[];
   updatedAt: Date;
+  completedTasksProgress?: CompletedTasksProgress;
 };
 
 export type SerializedQueryCache = {
@@ -81,20 +103,29 @@ export class QueryCache {
     this.prune();
   }
 
-  public get(filter: string): CachedQuery | undefined {
-    const entry = this.entries[makeCacheKey(filter)];
+  public get(filter: string, completedTasks = false): CachedQuery | undefined {
+    const entry = this.entries[makeCacheKey(filter, completedTasks)];
     if (entry === undefined) {
       return undefined;
     }
 
+    const completedTasksProgress = getCompletedTasksProgress(entry);
+
     return {
       tasks: entry.tasks,
       updatedAt: new Date(entry.updatedAt),
+      ...(completedTasksProgress !== undefined ? { completedTasksProgress } : {}),
     };
   }
 
-  public set(filter: string, tasks: Task[], updatedAt: Date): boolean {
-    const key = makeCacheKey(filter);
+  public set(
+    filter: string,
+    tasks: Task[],
+    updatedAt: Date,
+    completedTasks = false,
+    completedTasksProgress?: CompletedTasksProgress,
+  ): boolean {
+    const key = makeCacheKey(filter, completedTasks);
     const existing = this.entries[key];
     if (existing !== undefined && Date.parse(existing.updatedAt) >= updatedAt.getTime()) {
       return false;
@@ -103,6 +134,7 @@ export class QueryCache {
     this.entries[key] = {
       tasks,
       updatedAt: updatedAt.toISOString(),
+      ...(completedTasksProgress !== undefined ? { completedTasksProgress } : {}),
     };
     this.prune();
     return true;
@@ -121,6 +153,38 @@ export class QueryCache {
         Math.max(Date.parse(existing.updatedAt), updatedAt.getTime()),
       ).toISOString();
       this.entries[key] = {
+        ...existing,
+        tasks,
+        updatedAt: nextUpdatedAt,
+      };
+      changed = true;
+    }
+
+    if (changed) {
+      this.prune();
+    }
+    return changed;
+  }
+
+  public completeTaskInAll(taskId: TaskId, completedAt: Date): boolean {
+    let changed = false;
+    const completedAtIso = completedAt.toISOString();
+
+    for (const [key, existing] of Object.entries(this.entries)) {
+      if (!existing.tasks.some((task) => task.id === taskId)) {
+        continue;
+      }
+
+      const tasks = isCompletedTasksCacheKey(key)
+        ? existing.tasks.map((task) =>
+            task.id === taskId ? { ...task, completedAt: completedAtIso } : task,
+          )
+        : existing.tasks.filter((task) => task.id !== taskId);
+      const nextUpdatedAt = new Date(
+        Math.max(Date.parse(existing.updatedAt), completedAt.getTime()),
+      ).toISOString();
+      this.entries[key] = {
+        ...existing,
         tasks,
         updatedAt: nextUpdatedAt,
       };
@@ -178,4 +242,38 @@ export class QueryCache {
   }
 }
 
-const makeCacheKey = (filter: string): string => JSON.stringify({ filter });
+const makeCacheKey = (filter: string, completedTasks: boolean): string =>
+  completedTasks ? JSON.stringify({ filter, completedTasks: true }) : JSON.stringify({ filter });
+
+const getCompletedTasksProgress = (entry: SerializedQuery): CompletedTasksProgress | undefined => {
+  if (entry.completedTasksProgress !== undefined) {
+    return {
+      ...entry.completedTasksProgress,
+      loadedWindowCount: entry.completedTasksProgress.loadedWindowCount ?? 1,
+    };
+  }
+  if (entry.completedTasksNextPage === undefined) {
+    return undefined;
+  }
+
+  return {
+    latestUntil: entry.updatedAt,
+    historyStart: entry.completedTasksNextPage?.historyStart ?? TODOIST_SERVICE_LAUNCH_AT,
+    loadedWindowCount: 1,
+    frontiers: entry.completedTasksNextPage === null ? [] : [entry.completedTasksNextPage],
+  };
+};
+
+const isCompletedTasksCacheKey = (key: string): boolean => {
+  try {
+    const parsed: unknown = JSON.parse(key);
+    return (
+      typeof parsed === "object" &&
+      parsed !== null &&
+      "completedTasks" in parsed &&
+      parsed.completedTasks === true
+    );
+  } catch {
+    return false;
+  }
+};

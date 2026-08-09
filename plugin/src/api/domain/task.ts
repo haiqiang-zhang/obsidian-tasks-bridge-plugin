@@ -50,7 +50,22 @@ export const taskSchema = z.object({
   deadline: deadlineSchema.nullable(),
   childOrder: z.number(),
 });
-export type Task = z.infer<typeof taskSchema>;
+
+const UNKNOWN_ADDED_AT = "1970-01-01T00:00:00.000Z";
+
+export const completedTaskSchema = taskSchema
+  .extend({
+    addedAt: z.string().nullable(),
+    completedAt: z.string().nullable(),
+  })
+  .transform((task) => ({
+    ...task,
+    addedAt: task.addedAt ?? task.completedAt ?? UNKNOWN_ADDED_AT,
+  }));
+
+export type Task = z.infer<typeof taskSchema> & {
+  completedAt?: string | null;
+};
 
 export const createTaskParamsSchema = z.object({
   priority: prioritySchema,

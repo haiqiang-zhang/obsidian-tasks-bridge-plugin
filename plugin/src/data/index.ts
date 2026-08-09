@@ -1,4 +1,4 @@
-import type { TodoistApiClient } from "@/api";
+import type { CompletedTasksPageRequest, TodoistApiClient } from "@/api";
 import type { Label, LabelId } from "@/api/domain/label";
 import type { Project, ProjectId } from "@/api/domain/project";
 import type { Section, SectionId } from "@/api/domain/section";
@@ -9,6 +9,8 @@ import { mapApiError } from "@/data/errors";
 import { type DataAccessor, hydrate } from "@/data/hydrate";
 import { Repository } from "@/data/repository";
 import {
+  type CompletedTasksProgress,
+  type LoadMoreCompleted,
   type OnSubscriptionChange,
   type Refresh,
   SubscriptionManager,
@@ -19,7 +21,13 @@ import type { Task } from "@/data/task";
 import { Maybe } from "@/utils/maybe";
 
 export { QueryErrorKind } from "@/data/errors";
-export type { OnSubscriptionChange, Refresh, SubscriptionResult } from "@/data/subscriptions";
+export type {
+  CompletedTasksProgress,
+  LoadMoreCompleted,
+  OnSubscriptionChange,
+  Refresh,
+  SubscriptionResult,
+} from "@/data/subscriptions";
 
 type TodoistAdapterOptions = {
   onTaskClosed?: (taskId: TaskId, completedAt: Date) => Promise<void> | void;
@@ -37,6 +45,7 @@ export class TodoistAdapter {
   private readonly sections: Repository<SectionId, Section>;
   private readonly labels: Repository<LabelId, Label>;
   private readonly subscriptions: SubscriptionManager<Subscription>;
+  private readonly completedSubscriptions: Map<string, CompletedSubscriptionEntry>;
 
   private readonly tasksPendingClose: TaskId[];
   private userInfo: UserInfo | undefined;
@@ -51,6 +60,7 @@ export class TodoistAdapter {
     this.sections = new Repository<SectionId, Section>();
     this.labels = new Repository<LabelId, Label>();
     this.subscriptions = new SubscriptionManager<Subscription>();
+    this.completedSubscriptions = new Map();
     this.tasksPendingClose = [];
     this.onTaskClosed = options.onTaskClosed;
   }
@@ -138,15 +148,70 @@ export class TodoistAdapter {
     query: string,
     callback: OnSubscriptionChange,
     initialTasks: Task[] = [],
-  ): [UnsubscribeCallback, Refresh] {
-    const fetcher = this.buildQueryFetcher(query);
+    completedTasks = false,
+    completedTasksProgress?: CompletedTasksProgress,
+  ): [UnsubscribeCallback, Refresh, LoadMoreCompleted] {
+    const fetcher = this.buildQueryFetcher(query, completedTasks);
+    const completedTasksFetcher = completedTasks
+      ? this.buildCompletedTasksFetcher(query)
+      : undefined;
+
+    if (completedTasks) {
+      let entry = this.completedSubscriptions.get(query);
+      const isExisting = entry !== undefined;
+      if (entry === undefined) {
+        entry = {
+          subscription: new Subscription(
+            fetcher,
+            completedTasksFetcher,
+            (task) => !this.tasksPendingClose.includes(task.id),
+            initialTasks,
+            true,
+            completedTasksProgress,
+          ),
+        };
+        this.completedSubscriptions.set(query, entry);
+      }
+
+      const unsubscribeCallback = entry.subscription.subscribe(callback, isExisting);
+      if (entry.unsubscribeFromManager === undefined) {
+        entry.unsubscribeFromManager = this.subscriptions.subscribe(entry.subscription);
+      }
+
+      let isSubscribed = true;
+      const unsubscribe = () => {
+        if (!isSubscribed) {
+          return;
+        }
+        isSubscribed = false;
+        unsubscribeCallback();
+        if (!entry.subscription.hasSubscribers()) {
+          entry.unsubscribeFromManager?.();
+          entry.unsubscribeFromManager = undefined;
+        }
+      };
+
+      return [unsubscribe, entry.subscription.update, entry.subscription.loadMoreCompleted];
+    }
+
     const subscription = new Subscription(
-      callback,
       fetcher,
+      completedTasksFetcher,
       (task) => !this.tasksPendingClose.includes(task.id),
       initialTasks,
+      false,
+      undefined,
     );
-    return [this.subscriptions.subscribe(subscription), subscription.update];
+    const unsubscribeCallback = subscription.subscribe(callback);
+    const unsubscribeFromManager = this.subscriptions.subscribe(subscription);
+    return [
+      () => {
+        unsubscribeCallback();
+        unsubscribeFromManager();
+      },
+      subscription.update,
+      subscription.loadMoreCompleted,
+    ];
   }
 
   public reset(): void {
@@ -159,19 +224,60 @@ export class TodoistAdapter {
     this.labels.clear();
     this.tasksPendingClose.length = 0;
 
-    for (const subscription of this.subscriptions.list()) {
+    for (const subscription of this.allSubscriptions()) {
       subscription.reset();
     }
   }
 
-  private buildQueryFetcher(query: string): SubscriptionFetcher {
+  private buildQueryFetcher(query: string, completedTasks: boolean): SubscriptionFetcher {
     return async () => {
       if (!this.api.hasValue()) {
         return undefined;
       }
-      const data = await this.api.withInner((api) => api.getTasks(query));
-      const hydrated = data.map((t) => hydrate(t, this.data()));
-      return hydrated;
+      return await this.api.withInner(async (api) => {
+        const activeTasksPromise = api.getTasks(query);
+        if (!completedTasks) {
+          const activeTasks = await activeTasksPromise;
+          return {
+            activeTasks: activeTasks.map((task) => hydrate(task, this.data())),
+          };
+        }
+
+        const completedTasksPagePromise = api.getCompletedTasksPage(
+          query,
+          undefined,
+          this.userInfo?.joinedAt ?? undefined,
+        );
+        const [activeTasks, completedTasksPage] = await Promise.all([
+          activeTasksPromise,
+          completedTasksPagePromise,
+        ]);
+        return {
+          activeTasks: activeTasks.map((task) => hydrate(task, this.data())),
+          completedTasksPage: {
+            tasks: completedTasksPage.tasks.map((task) => hydrate(task, this.data())),
+            request: completedTasksPage.request,
+            nextPage: completedTasksPage.nextPage,
+          },
+        };
+      });
+    };
+  }
+
+  private buildCompletedTasksFetcher(query: string): CompletedTasksFetcher {
+    return async (request) => {
+      if (!this.api.hasValue()) {
+        return undefined;
+      }
+
+      return await this.api.withInner(async (api) => {
+        const page = await api.getCompletedTasksPage(query, request);
+        return {
+          tasks: page.tasks.map((task) => hydrate(task, this.data())),
+          request: page.request,
+          nextPage: page.nextPage,
+        };
+      });
     };
   }
 
@@ -179,7 +285,7 @@ export class TodoistAdapter {
     const accountGeneration = this.accountGeneration;
     this.tasksPendingClose.push(id);
 
-    for (const subscription of this.subscriptions.list()) {
+    for (const subscription of this.allSubscriptions()) {
       subscription.localCallback();
     }
 
@@ -191,7 +297,7 @@ export class TodoistAdapter {
       }
       this.tasksPendingClose.remove(id);
 
-      for (const subscription of this.subscriptions.list()) {
+      for (const subscription of this.allSubscriptions()) {
         subscription.localCallback();
       }
 
@@ -206,8 +312,8 @@ export class TodoistAdapter {
     const completedAt = new Date();
     const cacheUpdate = this.notifyTaskClosed(id, completedAt);
 
-    for (const subscription of this.subscriptions.list()) {
-      subscription.remove(id);
+    for (const subscription of this.allSubscriptions()) {
+      subscription.complete(id, completedAt);
     }
 
     await cacheUpdate;
@@ -220,49 +326,141 @@ export class TodoistAdapter {
       console.error("Failed to update Todoist query cache after closing a task:", error);
     }
   }
+
+  private *allSubscriptions(): IterableIterator<Subscription> {
+    const seen = new Set<Subscription>();
+
+    for (const subscription of this.subscriptions.list()) {
+      seen.add(subscription);
+      yield subscription;
+    }
+
+    for (const { subscription } of this.completedSubscriptions.values()) {
+      if (!seen.has(subscription)) {
+        yield subscription;
+      }
+    }
+  }
 }
 
-type SubscriptionFetcher = () => Promise<Task[] | undefined>;
+type CompletedTasksPage = {
+  tasks: Task[];
+  request: CompletedTasksPageRequest;
+  nextPage: CompletedTasksPageRequest | null;
+};
+
+type CompletedSubscriptionEntry = {
+  subscription: Subscription;
+  unsubscribeFromManager?: UnsubscribeCallback;
+};
+
+type QueryFetchResult = {
+  activeTasks: Task[];
+  completedTasksPage?: CompletedTasksPage;
+};
+
+type SubscriptionFetcher = () => Promise<QueryFetchResult | undefined>;
+type CompletedTasksFetcher = (
+  request: CompletedTasksPageRequest,
+) => Promise<CompletedTasksPage | undefined>;
 
 class Subscription {
-  private readonly userCallback: OnSubscriptionChange;
+  private readonly userCallbacks = new Set<OnSubscriptionChange>();
   private readonly fetch: SubscriptionFetcher;
+  private readonly fetchCompletedTasksPage: CompletedTasksFetcher | undefined;
   private readonly filter: (task: Task) => boolean;
+  private readonly completedTasks: boolean;
 
   private result: SubscriptionResult;
   private lastSuccessfulTasks: Task[];
+  private completedTasksProgress: CompletedTasksProgress | undefined;
   private updateGeneration = 0;
+  private resetGeneration = 0;
+  private refreshInFlight: Promise<void> | undefined;
+  private loadMoreInFlight: Promise<void> | undefined;
 
   constructor(
-    userCallback: OnSubscriptionChange,
     fetch: SubscriptionFetcher,
+    fetchCompletedTasksPage: CompletedTasksFetcher | undefined,
     filter: (task: Task) => boolean,
     initialTasks: Task[],
+    completedTasks: boolean,
+    completedTasksProgress: CompletedTasksProgress | undefined,
   ) {
-    this.userCallback = userCallback;
     this.fetch = fetch;
+    this.fetchCompletedTasksPage = fetchCompletedTasksPage;
     this.filter = filter;
-    this.result = { type: "success", tasks: initialTasks, cacheEffect: { type: "none" } };
+    this.completedTasks = completedTasks;
+    this.completedTasksProgress = cloneCompletedTasksProgress(completedTasksProgress);
+    this.result = this.makeSuccessResult(initialTasks, { type: "none" });
     this.lastSuccessfulTasks = initialTasks;
   }
 
-  public update = async () => {
+  public subscribe(callback: OnSubscriptionChange, emitCurrent = false): UnsubscribeCallback {
+    this.userCallbacks.add(callback);
+    if (emitCurrent) {
+      this.emitResultTo(callback, false);
+    }
+    return () => this.userCallbacks.delete(callback);
+  }
+
+  public hasSubscribers(): boolean {
+    return this.userCallbacks.size > 0;
+  }
+
+  public update = async (): Promise<void> => {
+    if (!this.completedTasks) {
+      await this.performUpdate();
+      return;
+    }
+
+    if (this.refreshInFlight !== undefined) {
+      await this.refreshInFlight;
+      return;
+    }
+
+    const refresh = this.performUpdate();
+    this.refreshInFlight = refresh;
+    try {
+      await refresh;
+    } finally {
+      if (this.refreshInFlight === refresh) {
+        this.refreshInFlight = undefined;
+      }
+    }
+  };
+
+  private async performUpdate(): Promise<void> {
     const generation = ++this.updateGeneration;
-    const requestedAt = new Date();
     let nextResult: SubscriptionResult;
 
     try {
       const data = await this.fetch();
+      if (generation !== this.updateGeneration) {
+        return;
+      }
       if (data === undefined) {
         nextResult = {
           type: "not-ready",
         };
       } else {
-        nextResult = {
-          type: "success",
-          tasks: data,
-          cacheEffect: { type: "replace", requestedAt },
-        };
+        let tasks = data.activeTasks;
+        if (this.completedTasks && data.completedTasksPage !== undefined) {
+          const cachedCompletedTasks = this.lastSuccessfulTasks.filter(isCompletedTask);
+          tasks = mergeActiveAndCompletedTasks(
+            data.activeTasks,
+            data.completedTasksPage.tasks,
+            cachedCompletedTasks,
+          );
+          this.completedTasksProgress = mergeCompletedTasksRefresh(
+            this.completedTasksProgress,
+            data.completedTasksPage,
+          );
+        }
+        nextResult = this.makeSuccessResult(tasks, {
+          type: "replace",
+          requestedAt: new Date(),
+        });
       }
     } catch (error: unknown) {
       console.error(`Failed to refresh task query: ${error}`);
@@ -282,7 +480,7 @@ class Subscription {
       this.lastSuccessfulTasks = nextResult.tasks;
     }
     this.callback();
-  };
+  }
 
   public callback = () => {
     this.emitResult(true);
@@ -294,14 +492,21 @@ class Subscription {
       return;
     }
 
-    this.userCallback({
-      type: "success",
-      tasks: this.lastSuccessfulTasks.filter(this.filter),
-      cacheEffect: { type: "none" },
+    const result = this.makeSuccessResult(this.lastSuccessfulTasks.filter(this.filter), {
+      type: "none",
     });
+    for (const callback of this.userCallbacks) {
+      callback(result);
+    }
   };
 
   private emitResult(includePersistenceMetadata: boolean): void {
+    for (const callback of this.userCallbacks) {
+      this.emitResultTo(callback, includePersistenceMetadata);
+    }
+  }
+
+  private emitResultTo(callback: OnSubscriptionChange, includePersistenceMetadata: boolean): void {
     // Apply filtering, without mutating the actual state of the result.
     const result = { ...this.result };
     if (result.type === "success") {
@@ -310,24 +515,251 @@ class Subscription {
         result.cacheEffect = { type: "none" };
       }
     }
-    this.userCallback(result);
+    callback(result);
   }
 
-  public remove(id: TaskId) {
+  public complete(id: TaskId, completedAt: Date) {
     this.updateGeneration++;
-    this.lastSuccessfulTasks = this.lastSuccessfulTasks.filter((task) => task.id !== id);
-    this.result = {
-      type: "success",
-      tasks: this.lastSuccessfulTasks,
-      cacheEffect: { type: "none" },
-    };
+    if (this.completedTasks) {
+      const completedAtIso = completedAt.toISOString();
+      this.lastSuccessfulTasks = this.lastSuccessfulTasks.map((task) =>
+        task.id === id ? { ...task, completedAt: completedAtIso } : task,
+      );
+    } else {
+      this.lastSuccessfulTasks = this.lastSuccessfulTasks.filter((task) => task.id !== id);
+    }
+    this.result = this.makeSuccessResult(this.lastSuccessfulTasks, { type: "none" });
     this.callback();
+  }
+
+  public loadMoreCompleted = async (): Promise<void> => {
+    if (this.loadMoreInFlight !== undefined) {
+      await this.loadMoreInFlight;
+      return;
+    }
+
+    const loadMore = this.performLoadMoreCompleted();
+    this.loadMoreInFlight = loadMore;
+    try {
+      await loadMore;
+    } finally {
+      if (this.loadMoreInFlight === loadMore) {
+        this.loadMoreInFlight = undefined;
+      }
+    }
+  };
+
+  private async performLoadMoreCompleted(): Promise<void> {
+    const request = this.completedTasksProgress?.frontiers[0];
+    if (
+      !this.completedTasks ||
+      request === undefined ||
+      this.fetchCompletedTasksPage === undefined
+    ) {
+      return;
+    }
+
+    const generation = this.resetGeneration;
+    const page = await this.fetchCompletedTasksPage(request);
+    if (page === undefined || generation !== this.resetGeneration) {
+      return;
+    }
+
+    this.completedTasksProgress = advanceCompletedTasksProgress(this.completedTasksProgress, page);
+    this.lastSuccessfulTasks = mergeActiveAndCompletedTasks(
+      this.lastSuccessfulTasks.filter((task) => !isCompletedTask(task)),
+      page.tasks,
+      this.lastSuccessfulTasks.filter(isCompletedTask),
+    );
+    this.result = this.makeSuccessResult(this.lastSuccessfulTasks, {
+      type: "replace",
+      requestedAt: new Date(),
+    });
+    this.callback();
+  }
+
+  private makeSuccessResult(
+    tasks: Task[],
+    cacheEffect: Extract<SubscriptionResult, { type: "success" }>["cacheEffect"],
+  ): Extract<SubscriptionResult, { type: "success" }> {
+    return {
+      type: "success",
+      tasks,
+      ...(this.completedTasks
+        ? { completedTasksProgress: cloneCompletedTasksProgress(this.completedTasksProgress) }
+        : {}),
+      cacheEffect,
+    };
   }
 
   public reset(): void {
     this.updateGeneration++;
+    this.resetGeneration++;
+    this.refreshInFlight = undefined;
+    this.loadMoreInFlight = undefined;
     this.lastSuccessfulTasks = [];
+    this.completedTasksProgress = undefined;
     this.result = { type: "not-ready" };
     this.callback();
   }
 }
+
+const cloneCompletedTasksProgress = (
+  progress: CompletedTasksProgress | undefined,
+): CompletedTasksProgress | undefined => {
+  if (progress === undefined) {
+    return undefined;
+  }
+
+  return {
+    ...progress,
+    frontiers: progress.frontiers.map((frontier) => ({ ...frontier })),
+  };
+};
+
+const mergeCompletedTasksRefresh = (
+  progress: CompletedTasksProgress | undefined,
+  page: CompletedTasksPage,
+): CompletedTasksProgress => {
+  if (progress === undefined) {
+    return {
+      latestUntil: page.request.until,
+      historyStart: page.request.historyStart,
+      loadedWindowCount: 1,
+      frontiers: page.nextPage === null ? [] : [{ ...page.nextPage }],
+    };
+  }
+
+  const latestUntil = laterTimestamp(progress.latestUntil, page.request.until);
+  const hasGap = Date.parse(page.request.since) > Date.parse(progress.latestUntil);
+  const hasCurrentWindowCursor = page.nextPage?.cursor !== undefined;
+
+  // A complete newest window that overlaps the already cached newest range does not
+  // change the older history frontier. Only its upper coverage bound advances.
+  if (!hasGap && !hasCurrentWindowCursor) {
+    return {
+      ...progress,
+      latestUntil,
+      frontiers: progress.frontiers.map((frontier) => ({ ...frontier })),
+    };
+  }
+
+  if (page.nextPage === null) {
+    return {
+      ...progress,
+      latestUntil,
+      frontiers: progress.frontiers.map((frontier) => ({ ...frontier })),
+    };
+  }
+
+  const catchUpHistoryStart = getCatchUpHistoryStart(progress);
+  const boundedCatchUp = boundCatchUpFrontier(page.nextPage, catchUpHistoryStart);
+  const globalHistoryFrontiers = progress.frontiers.filter(
+    (frontier) => frontier.historyStart === progress.historyStart,
+  );
+
+  return {
+    latestUntil,
+    historyStart: progress.historyStart,
+    loadedWindowCount: progress.loadedWindowCount,
+    frontiers: deduplicateFrontiers([boundedCatchUp, ...globalHistoryFrontiers]),
+  };
+};
+
+const getCatchUpHistoryStart = (progress: CompletedTasksProgress): string => {
+  let historyStart = progress.latestUntil;
+
+  for (const frontier of progress.frontiers) {
+    if (
+      frontier.historyStart !== progress.historyStart &&
+      Date.parse(frontier.historyStart) < Date.parse(historyStart)
+    ) {
+      historyStart = frontier.historyStart;
+    }
+  }
+
+  return historyStart;
+};
+
+const boundCatchUpFrontier = (
+  frontier: CompletedTasksPageRequest,
+  historyStart: string,
+): CompletedTasksPageRequest => {
+  if (frontier.cursor !== undefined) {
+    return { ...frontier, historyStart };
+  }
+
+  return {
+    ...frontier,
+    since: laterTimestamp(frontier.since, historyStart),
+    historyStart,
+  };
+};
+
+const advanceCompletedTasksProgress = (
+  progress: CompletedTasksProgress | undefined,
+  page: CompletedTasksPage,
+): CompletedTasksProgress | undefined => {
+  if (progress === undefined) {
+    return undefined;
+  }
+
+  const claimedIndex = progress.frontiers.findIndex(
+    (frontier) => completedTasksRequestKey(frontier) === completedTasksRequestKey(page.request),
+  );
+  if (claimedIndex === -1) {
+    return cloneCompletedTasksProgress(progress);
+  }
+
+  const frontiers = [...progress.frontiers];
+  if (page.nextPage === null) {
+    frontiers.splice(claimedIndex, 1);
+  } else {
+    frontiers.splice(claimedIndex, 1, { ...page.nextPage });
+  }
+
+  return {
+    ...progress,
+    loadedWindowCount: progress.loadedWindowCount + 1,
+    frontiers: deduplicateFrontiers(frontiers),
+  };
+};
+
+const deduplicateFrontiers = (
+  frontiers: CompletedTasksPageRequest[],
+): CompletedTasksPageRequest[] => {
+  const seen = new Set<string>();
+  return frontiers.filter((frontier) => {
+    const key = completedTasksRequestKey(frontier);
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+};
+
+const completedTasksRequestKey = (request: CompletedTasksPageRequest): string =>
+  JSON.stringify([request.since, request.until, request.historyStart, request.cursor ?? null]);
+
+const laterTimestamp = (left: string, right: string): string =>
+  Date.parse(left) >= Date.parse(right) ? left : right;
+
+const isCompletedTask = (task: Task): boolean => task.completedAt !== undefined;
+
+const mergeActiveAndCompletedTasks = (
+  activeTasks: Task[],
+  freshCompletedTasks: Task[],
+  cachedCompletedTasks: Task[],
+): Task[] => {
+  const activeIds = new Set(activeTasks.map((task) => task.id));
+  const completedById = new Map<TaskId, Task>();
+
+  for (const task of [...freshCompletedTasks, ...cachedCompletedTasks]) {
+    if (!activeIds.has(task.id) && !completedById.has(task.id)) {
+      completedById.set(task.id, task);
+    }
+  }
+
+  return [...activeTasks, ...completedById.values()];
+};

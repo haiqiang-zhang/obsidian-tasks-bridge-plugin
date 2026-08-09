@@ -54,6 +54,12 @@ describe("hydrate", () => {
     expect(task.deadline).toEqual({ date: "2024-06-25" });
   });
 
+  it("should preserve completed task identity", () => {
+    const task = hydrate(makeApiTask({ completedAt: "2024-06-16T11:45:00Z" }), makeDataAccessor());
+
+    expect(task.completedAt).toBe("2024-06-16T11:45:00Z");
+  });
+
   it("should resolve project from repository by projectId", () => {
     const project = makeProject("project-1", { name: "My Project" });
     const data = makeDataAccessor({ projects: [project] });

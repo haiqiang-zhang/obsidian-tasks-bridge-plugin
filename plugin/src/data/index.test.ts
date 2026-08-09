@@ -1,8 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { TodoistApiClient } from "@/api";
+import type { CompletedTasksPageRequest, TodoistApiClient } from "@/api";
 import type { SyncResponse } from "@/api/domain/sync";
-import { type OnSubscriptionChange, type SubscriptionResult, TodoistAdapter } from "@/data/index";
+import {
+  type CompletedTasksProgress,
+  type OnSubscriptionChange,
+  type SubscriptionResult,
+  TodoistAdapter,
+} from "@/data/index";
 import { makeApiTask, makeTask } from "@/factories/data";
 
 const makeSyncResponse = (overrides?: Partial<SyncResponse>): SyncResponse => ({
@@ -13,9 +18,32 @@ const makeSyncResponse = (overrides?: Partial<SyncResponse>): SyncResponse => ({
   ...overrides,
 });
 
+const newestCompletedRequest: CompletedTasksPageRequest = {
+  since: "2026-05-11T06:00:00.000Z",
+  until: "2026-08-09T06:00:00.000Z",
+  historyStart: "2024-01-01T00:00:00.000Z",
+};
+
+const makeCompletedProgress = (
+  frontiers: CompletedTasksPageRequest[],
+  latestUntil = newestCompletedRequest.until,
+  historyStart = newestCompletedRequest.historyStart,
+  loadedWindowCount = 1,
+): CompletedTasksProgress => ({
+  latestUntil,
+  historyStart,
+  loadedWindowCount,
+  frontiers,
+});
+
 const makeMockApi = (): TodoistApiClient => {
   return {
     getTasks: vi.fn().mockResolvedValue([]),
+    getCompletedTasksPage: vi.fn().mockResolvedValue({
+      tasks: [],
+      request: newestCompletedRequest,
+      nextPage: null,
+    }),
     createTask: vi.fn(),
     closeTask: vi.fn(),
     getUser: vi.fn().mockResolvedValue({ isPremium: false }),
@@ -113,6 +141,474 @@ describe("TodoistAdapter", () => {
       expect(result2.tasks).toHaveLength(1);
       expect(result2.tasks[0].id).toBe("task-2");
       expect(result2.cacheEffect).toEqual({ type: "none" });
+    });
+
+    it("should retain a closed task for completed-enabled subscriptions", async () => {
+      await adapter.initialize(mockApi);
+      vi.mocked(mockApi.closeTask).mockResolvedValue(undefined);
+
+      let captured: SubscriptionResult = { type: "not-ready" };
+      const activeTask = makeTask("task-1");
+      adapter.subscribe(
+        "#test",
+        (result) => {
+          captured = result;
+        },
+        [activeTask],
+        true,
+      );
+
+      await adapter.actions.closeTask("task-1");
+
+      const result = captured as SubscriptionResult;
+      expect(result.type).toBe("success");
+      if (result.type !== "success") {
+        return;
+      }
+      expect(result.tasks).toEqual([
+        {
+          ...activeTask,
+          completedAt: expect.any(String),
+        },
+      ]);
+      expect(result.cacheEffect).toEqual({ type: "none" });
+    });
+
+    it("should fetch one newest completed-task window for completed-enabled subscriptions", async () => {
+      await adapter.initialize(mockApi);
+
+      const [, refresh] = adapter.subscribe("#test", vi.fn(), [], true);
+      await refresh();
+
+      expect(mockApi.getTasks).toHaveBeenCalledWith("#test");
+      expect(mockApi.getCompletedTasksPage).toHaveBeenCalledOnce();
+      expect(mockApi.getCompletedTasksPage).toHaveBeenCalledWith("#test", undefined, undefined);
+    });
+
+    it("should bound completed-task history by the Todoist account join time", async () => {
+      vi.mocked(mockApi.getUser).mockResolvedValue({
+        isPremium: true,
+        joinedAt: "2018-04-03T02:01:00.000Z",
+      });
+      await adapter.initialize(mockApi);
+
+      const [, refresh] = adapter.subscribe("#test", vi.fn(), [], true);
+      await refresh();
+
+      expect(mockApi.getTasks).toHaveBeenCalledWith("#test");
+      expect(mockApi.getCompletedTasksPage).toHaveBeenCalledWith(
+        "#test",
+        undefined,
+        "2018-04-03T02:01:00.000Z",
+      );
+    });
+
+    it("loads exactly one cached completed-history window per explicit request", async () => {
+      const nextPage = {
+        since: "2026-05-11T06:00:00.000Z",
+        until: "2026-08-09T06:00:00.000Z",
+        historyStart: "2024-01-01T00:00:00.000Z",
+      };
+      const followingPage = {
+        since: "2026-02-10T06:00:00.000Z",
+        until: "2026-05-11T06:00:00.000Z",
+        historyStart: "2024-01-01T00:00:00.000Z",
+      };
+      vi.mocked(mockApi.getCompletedTasksPage).mockResolvedValueOnce({
+        tasks: [
+          makeApiTask({
+            id: "older-completed",
+            completedAt: "2026-05-01T06:00:00.000Z",
+          }),
+        ],
+        request: nextPage,
+        nextPage: followingPage,
+      });
+      await adapter.initialize(mockApi);
+
+      let captured: SubscriptionResult = { type: "not-ready" };
+      const cachedCompleted = makeTask("cached-completed", {
+        completedAt: "2026-08-01T06:00:00.000Z",
+      });
+      const [, , loadMoreCompleted] = adapter.subscribe(
+        "#test",
+        (result) => {
+          captured = result;
+        },
+        [cachedCompleted],
+        true,
+        makeCompletedProgress([nextPage]),
+      );
+
+      await loadMoreCompleted();
+
+      expect(mockApi.getCompletedTasksPage).toHaveBeenCalledOnce();
+      expect(mockApi.getCompletedTasksPage).toHaveBeenCalledWith("#test", nextPage);
+      const result = captured as SubscriptionResult;
+      expect(result.type).toBe("success");
+      if (result.type !== "success") {
+        return;
+      }
+      expect(result.tasks.map((task) => task.id)).toEqual(["older-completed", "cached-completed"]);
+      expect(result.completedTasksProgress).toEqual(
+        makeCompletedProgress(
+          [followingPage],
+          newestCompletedRequest.until,
+          newestCompletedRequest.historyStart,
+          2,
+        ),
+      );
+      expect(result.cacheEffect).toEqual({ type: "replace", requestedAt: expect.any(Date) });
+    });
+
+    it("advances the loaded-window count when an earlier window has no matching tasks", async () => {
+      const nextWindow = {
+        since: "2026-02-10T06:00:00.000Z",
+        until: "2026-05-11T06:00:00.000Z",
+        historyStart: "2024-01-01T00:00:00.000Z",
+      };
+      const followingWindow = {
+        since: "2025-11-12T06:00:00.000Z",
+        until: nextWindow.since,
+        historyStart: nextWindow.historyStart,
+      };
+      vi.mocked(mockApi.getCompletedTasksPage).mockResolvedValueOnce({
+        tasks: [],
+        request: nextWindow,
+        nextPage: followingWindow,
+      });
+      await adapter.initialize(mockApi);
+
+      let captured: SubscriptionResult = { type: "not-ready" };
+      const cachedCompleted = makeTask("cached-completed", {
+        completedAt: "2026-08-01T06:00:00.000Z",
+      });
+      const [, , loadMoreCompleted] = adapter.subscribe(
+        "#test",
+        (result) => {
+          captured = result;
+        },
+        [cachedCompleted],
+        true,
+        makeCompletedProgress([nextWindow]),
+      );
+
+      await loadMoreCompleted();
+
+      const result = captured as SubscriptionResult;
+      expect(result.type).toBe("success");
+      if (result.type !== "success") {
+        return;
+      }
+      expect(result.tasks).toEqual([cachedCompleted]);
+      expect(result.completedTasksProgress).toEqual(
+        makeCompletedProgress(
+          [followingWindow],
+          newestCompletedRequest.until,
+          newestCompletedRequest.historyStart,
+          2,
+        ),
+      );
+    });
+
+    it("keeps completed-history progress unchanged when an explicit request fails", async () => {
+      const nextPage = {
+        since: "2026-05-11T06:00:00.000Z",
+        until: "2026-08-09T06:00:00.000Z",
+        historyStart: "2024-01-01T00:00:00.000Z",
+      };
+      vi.mocked(mockApi.getCompletedTasksPage).mockRejectedValueOnce(new Error("rate limited"));
+      await adapter.initialize(mockApi);
+
+      const callback = vi.fn();
+      const [, , loadMoreCompleted] = adapter.subscribe(
+        "#test",
+        callback,
+        [makeTask("cached", { completedAt: "2026-08-01T06:00:00.000Z" })],
+        true,
+        makeCompletedProgress([nextPage]),
+      );
+
+      await expect(loadMoreCompleted()).rejects.toThrow("rate limited");
+      expect(callback).not.toHaveBeenCalled();
+      expect(mockApi.getCompletedTasksPage).toHaveBeenCalledWith("#test", nextPage);
+    });
+
+    it("adds a bounded catch-up frontier after a long reopen without losing global history", async () => {
+      const globalFrontier: CompletedTasksPageRequest = {
+        since: "2026-02-10T06:00:00.000Z",
+        until: "2026-05-11T06:00:00.000Z",
+        historyStart: "2024-01-01T00:00:00.000Z",
+      };
+      const refreshedRequest: CompletedTasksPageRequest = {
+        since: "2026-11-10T06:00:00.000Z",
+        until: "2027-02-08T06:00:00.000Z",
+        historyStart: globalFrontier.historyStart,
+      };
+      const unboundedOlderPage: CompletedTasksPageRequest = {
+        since: "2026-08-12T06:00:00.000Z",
+        until: refreshedRequest.since,
+        historyStart: globalFrontier.historyStart,
+      };
+      vi.mocked(mockApi.getCompletedTasksPage).mockResolvedValueOnce({
+        tasks: [],
+        request: refreshedRequest,
+        nextPage: unboundedOlderPage,
+      });
+      await adapter.initialize(mockApi);
+
+      let captured: SubscriptionResult = { type: "not-ready" };
+      const [, refresh] = adapter.subscribe(
+        "#test",
+        (result) => {
+          captured = result;
+        },
+        [],
+        true,
+        makeCompletedProgress([globalFrontier]),
+      );
+
+      await refresh();
+
+      expect(mockApi.getCompletedTasksPage).toHaveBeenCalledOnce();
+      const result = captured as SubscriptionResult;
+      expect(result.type).toBe("success");
+      if (result.type !== "success") {
+        return;
+      }
+      expect(result.completedTasksProgress).toEqual({
+        latestUntil: refreshedRequest.until,
+        historyStart: globalFrontier.historyStart,
+        loadedWindowCount: 1,
+        frontiers: [
+          {
+            since: unboundedOlderPage.since,
+            until: refreshedRequest.since,
+            historyStart: newestCompletedRequest.until,
+          },
+          globalFrontier,
+        ],
+      });
+    });
+
+    it("retains a newest-window cursor when cached completed history was exhausted", async () => {
+      const refreshedRequest: CompletedTasksPageRequest = {
+        since: "2026-06-03T06:00:00.000Z",
+        until: "2026-09-01T06:00:00.000Z",
+        historyStart: newestCompletedRequest.historyStart,
+      };
+      const cursorPage: CompletedTasksPageRequest = {
+        ...refreshedRequest,
+        cursor: "latest-window-cursor",
+      };
+      vi.mocked(mockApi.getCompletedTasksPage).mockResolvedValueOnce({
+        tasks: [],
+        request: refreshedRequest,
+        nextPage: cursorPage,
+      });
+      await adapter.initialize(mockApi);
+
+      let captured: SubscriptionResult = { type: "not-ready" };
+      const [, refresh] = adapter.subscribe(
+        "#test",
+        (result) => {
+          captured = result;
+        },
+        [],
+        true,
+        makeCompletedProgress([]),
+      );
+
+      await refresh();
+
+      const result = captured as SubscriptionResult;
+      expect(result.type).toBe("success");
+      if (result.type !== "success") {
+        return;
+      }
+      expect(result.completedTasksProgress).toEqual({
+        latestUntil: refreshedRequest.until,
+        historyStart: newestCompletedRequest.historyStart,
+        loadedWindowCount: 1,
+        frontiers: [
+          {
+            ...cursorPage,
+            historyStart: newestCompletedRequest.until,
+          },
+        ],
+      });
+    });
+
+    it("merges an overlapping refresh and history load regardless of completion order", async () => {
+      const claimedFrontier: CompletedTasksPageRequest = {
+        since: "2026-02-10T06:00:00.000Z",
+        until: "2026-05-11T06:00:00.000Z",
+        historyStart: newestCompletedRequest.historyStart,
+      };
+      const followingFrontier: CompletedTasksPageRequest = {
+        since: "2024-01-01T00:00:00.000Z",
+        until: claimedFrontier.since,
+        historyStart: newestCompletedRequest.historyStart,
+      };
+      const refreshedRequest: CompletedTasksPageRequest = {
+        since: "2026-05-12T06:00:00.000Z",
+        until: "2026-08-10T06:00:00.000Z",
+        historyStart: newestCompletedRequest.historyStart,
+      };
+      let resolveHistoryLoad: (page: {
+        tasks: ReturnType<typeof makeApiTask>[];
+        request: CompletedTasksPageRequest;
+        nextPage: CompletedTasksPageRequest;
+      }) => void = () => {};
+      vi.mocked(mockApi.getCompletedTasksPage)
+        .mockImplementationOnce(
+          () =>
+            new Promise((resolve) => {
+              resolveHistoryLoad = resolve;
+            }),
+        )
+        .mockResolvedValueOnce({
+          tasks: [
+            makeApiTask({
+              id: "refreshed-completed",
+              completedAt: "2026-08-09T06:00:00.000Z",
+            }),
+          ],
+          request: refreshedRequest,
+          nextPage: {
+            since: "2026-02-11T06:00:00.000Z",
+            until: refreshedRequest.since,
+            historyStart: refreshedRequest.historyStart,
+          },
+        });
+      await adapter.initialize(mockApi);
+
+      let captured: SubscriptionResult = { type: "not-ready" };
+      const [, refresh, loadMoreCompleted] = adapter.subscribe(
+        "#test",
+        (result) => {
+          captured = result;
+        },
+        [],
+        true,
+        makeCompletedProgress([claimedFrontier]),
+      );
+
+      const loadingHistory = loadMoreCompleted();
+      await refresh();
+      resolveHistoryLoad({
+        tasks: [
+          makeApiTask({
+            id: "older-completed",
+            completedAt: "2026-02-09T06:00:00.000Z",
+          }),
+        ],
+        request: claimedFrontier,
+        nextPage: followingFrontier,
+      });
+      await loadingHistory;
+
+      expect(mockApi.getCompletedTasksPage).toHaveBeenCalledTimes(2);
+      const result = captured as SubscriptionResult;
+      expect(result.type).toBe("success");
+      if (result.type !== "success") {
+        return;
+      }
+      expect(result.tasks.map((task) => task.id)).toEqual([
+        "older-completed",
+        "refreshed-completed",
+      ]);
+      expect(result.completedTasksProgress).toEqual(
+        makeCompletedProgress(
+          [followingFrontier],
+          refreshedRequest.until,
+          newestCompletedRequest.historyStart,
+          2,
+        ),
+      );
+    });
+
+    it("shares completed tasks, progress, and in-flight requests between same-filter blocks", async () => {
+      const claimedFrontier: CompletedTasksPageRequest = {
+        since: "2026-02-10T06:00:00.000Z",
+        until: "2026-05-11T06:00:00.000Z",
+        historyStart: newestCompletedRequest.historyStart,
+      };
+      const followingFrontier: CompletedTasksPageRequest = {
+        since: newestCompletedRequest.historyStart,
+        until: claimedFrontier.since,
+        historyStart: newestCompletedRequest.historyStart,
+      };
+      vi.mocked(mockApi.getCompletedTasksPage).mockImplementation(async (_filter, request) => {
+        if (request === undefined) {
+          return {
+            tasks: [
+              makeApiTask({
+                id: "refreshed-completed",
+                completedAt: "2026-08-08T06:00:00.000Z",
+              }),
+            ],
+            request: newestCompletedRequest,
+            nextPage: claimedFrontier,
+          };
+        }
+
+        return {
+          tasks: [
+            makeApiTask({
+              id: "loaded-completed",
+              completedAt: "2026-02-09T06:00:00.000Z",
+            }),
+          ],
+          request,
+          nextPage: followingFrontier,
+        };
+      });
+      await adapter.initialize(mockApi);
+
+      const firstResults: SubscriptionResult[] = [];
+      const secondResults: SubscriptionResult[] = [];
+      const [, firstRefresh, firstLoad] = adapter.subscribe(
+        "#test",
+        (result) => firstResults.push(result),
+        [],
+        true,
+        makeCompletedProgress([claimedFrontier]),
+      );
+      const staleFrontier = { ...claimedFrontier, cursor: "stale-cursor" };
+      const [, secondRefresh, secondLoad] = adapter.subscribe(
+        "#test",
+        (result) => secondResults.push(result),
+        [],
+        true,
+        makeCompletedProgress([staleFrontier]),
+      );
+
+      await Promise.all([firstRefresh(), secondRefresh()]);
+      expect(mockApi.getCompletedTasksPage).toHaveBeenCalledTimes(1);
+      await Promise.all([firstLoad(), secondLoad()]);
+
+      expect(mockApi.getCompletedTasksPage).toHaveBeenCalledTimes(2);
+      expect(mockApi.getCompletedTasksPage).toHaveBeenLastCalledWith("#test", claimedFrontier);
+      const firstResult = firstResults[firstResults.length - 1];
+      const secondResult = secondResults[secondResults.length - 1];
+      expect(firstResult).toEqual(secondResult);
+      expect(firstResult?.type).toBe("success");
+      if (firstResult?.type !== "success") {
+        return;
+      }
+      expect(firstResult.tasks.map((task) => task.id)).toEqual([
+        "loaded-completed",
+        "refreshed-completed",
+      ]);
+      expect(firstResult.completedTasksProgress).toEqual(
+        makeCompletedProgress(
+          [followingFrontier],
+          newestCompletedRequest.until,
+          newestCompletedRequest.historyStart,
+          2,
+        ),
+      );
     });
 
     it("keeps divergent local subscription snapshots cache-neutral", async () => {
@@ -282,6 +778,32 @@ describe("TodoistAdapter", () => {
       expect(result.tasks).toEqual([cachedTask]);
       expect(result.cacheEffect).toEqual({ type: "none" });
       expect(onTaskClosed).not.toHaveBeenCalled();
+    });
+
+    it("should leave a completed-enabled subscription unchanged when closing fails", async () => {
+      await adapter.initialize(mockApi);
+      vi.mocked(mockApi.closeTask).mockRejectedValue(new Error("close failed"));
+
+      let captured: SubscriptionResult = { type: "not-ready" };
+      const cachedTask = makeTask("cached-task", { content: "Cached task" });
+      adapter.subscribe(
+        "#test",
+        (result) => {
+          captured = result;
+        },
+        [cachedTask],
+        true,
+      );
+
+      await expect(adapter.actions.closeTask("cached-task")).rejects.toThrow("close failed");
+
+      const result = captured as SubscriptionResult;
+      expect(result.type).toBe("success");
+      if (result.type !== "success") {
+        return;
+      }
+      expect(result.tasks).toEqual([cachedTask]);
+      expect(result.cacheEffect).toEqual({ type: "none" });
     });
 
     it("should invalidate an in-flight refresh when the adapter resets", async () => {

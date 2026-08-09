@@ -7,6 +7,7 @@ import { t } from "@/i18n";
 import type { GroupingKey } from "@/query/schema/grouping";
 
 export type GroupedTasks = {
+  id: string;
   header: string;
   tasks: Task[];
 };
@@ -37,6 +38,7 @@ function groupByPriority(tasks: Task[]): GroupedTasks[] {
 
   return groups.map(([priority, tasks]) => {
     return {
+      id: makeGroupId("priority", priority),
       header: priorityHeaderLookup[priority],
       tasks,
     };
@@ -51,17 +53,19 @@ const priorityHeaderLookup: Record<Priority, string> = {
 };
 
 function groupByProject(tasks: Task[]): GroupedTasks[] {
-  const projects = partitionBy(tasks, (task: Task) => task.project);
+  const projects = partitionBy(tasks, (task: Task) => task.project.id);
   const groups = Array.from(projects.entries());
   groups.sort((a, b) => {
-    const aProject = a[0];
-    const bProject = b[0];
+    const aProject = firstTask(a[1]).project;
+    const bProject = firstTask(b[1]).project;
     return aProject.childOrder - bProject.childOrder;
   });
 
-  return groups.map(([project, tasks]) => {
+  return groups.map(([projectId, tasks]) => {
+    const project = firstTask(tasks).project;
     return {
-      header: project?.name ?? "Unknown Project",
+      id: makeGroupId("project", projectId),
+      header: project.name,
       tasks,
     };
   });
@@ -84,17 +88,15 @@ function groupBySection(tasks: Task[]): GroupedTasks[] {
     return `${project} / ${section}`;
   };
 
-  const sections = partitionBy<string>(tasks, (task: Task) => {
-    const key: SectionPartitionKey = {
-      project: task.project,
-      section: task.section,
-    };
-    return JSON.stringify(key);
-  });
+  const sections = partitionBy<string>(tasks, (task: Task) =>
+    JSON.stringify([task.project.id, task.section?.id ?? null]),
+  );
   const groups = Array.from(sections.entries());
   groups.sort((a, b) => {
-    const aKey: SectionPartitionKey = JSON.parse(a[0]);
-    const bKey: SectionPartitionKey = JSON.parse(b[0]);
+    const aTask = firstTask(a[1]);
+    const bTask = firstTask(b[1]);
+    const aKey: SectionPartitionKey = { project: aTask.project, section: aTask.section };
+    const bKey: SectionPartitionKey = { project: bTask.project, section: bTask.section };
 
     // First compare by project
     const projectOrderDiff = aKey.project.childOrder - bKey.project.childOrder;
@@ -118,9 +120,11 @@ function groupBySection(tasks: Task[]): GroupedTasks[] {
     return aKey.section.sectionOrder - bKey.section.sectionOrder;
   });
 
-  return groups.map(([key, tasks]) => {
+  return groups.map(([id, tasks]) => {
+    const task = firstTask(tasks);
     return {
-      header: makeHeader(JSON.parse(key)),
+      id: makeGroupId("section", id),
+      header: makeHeader({ project: task.project, section: task.section }),
       tasks,
     };
   });
@@ -190,6 +194,7 @@ function groupByDate(tasks: Task[]): GroupedTasks[] {
   });
   return groups.map(([date, tasks]) => {
     return {
+      id: makeGroupId("due", date ?? null),
       header: makeHeader(date),
       tasks,
     };
@@ -197,11 +202,11 @@ function groupByDate(tasks: Task[]): GroupedTasks[] {
 }
 
 function groupByLabel(tasks: Task[]): GroupedTasks[] {
-  const labels = partitionByMany(tasks, (task: Task) => task.labels);
+  const labels = partitionByMany(tasks, (task: Task) => task.labels.map((label) => label.id));
   const groups = Array.from(labels.entries());
   groups.sort((a, b) => {
-    const aLabel = a[0];
-    const bLabel = b[0];
+    const aLabel = findLabel(a[0], a[1]);
+    const bLabel = findLabel(b[0], b[1]);
 
     if (aLabel === undefined && bLabel === undefined) {
       return 0;
@@ -217,12 +222,41 @@ function groupByLabel(tasks: Task[]): GroupedTasks[] {
 
     return aLabel.name.localeCompare(bLabel.name);
   });
-  return groups.map(([label, tasks]) => {
+  return groups.map(([labelId, tasks]) => {
+    const label = findLabel(labelId, tasks);
     return {
+      id: makeGroupId("label", labelId ?? null),
       header: label?.name ?? "No label",
       tasks,
     };
   });
+}
+
+function makeGroupId(kind: GroupingKey, value: unknown): string {
+  return `${kind}:${JSON.stringify(value)}`;
+}
+
+function firstTask(tasks: Task[]): Task {
+  const task = tasks[0];
+  if (task === undefined) {
+    throw new Error("Cannot create an empty task group");
+  }
+  return task;
+}
+
+function findLabel(labelId: string | undefined, tasks: Task[]) {
+  if (labelId === undefined) {
+    return undefined;
+  }
+
+  for (const task of tasks) {
+    const label = task.labels.find((candidate) => candidate.id === labelId);
+    if (label !== undefined) {
+      return label;
+    }
+  }
+
+  return undefined;
 }
 
 function partitionBy<T>(tasks: Task[], selector: (task: Task) => T): Map<T, Task[]> {

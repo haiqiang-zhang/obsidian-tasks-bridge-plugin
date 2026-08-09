@@ -40,6 +40,13 @@ describe("parseQuery - rejections", () => {
       },
     },
     {
+      description: "completedTasks must be a boolean",
+      input: {
+        filter: "bar",
+        completedTasks: "true",
+      },
+    },
+    {
       description: "autorefresh must be a positive number",
       input: {
         name: "foo",
@@ -171,6 +178,17 @@ describe("parseQuery", () => {
       expectedOutput: makeQuery({
         filter: "bar",
         autorefresh: 120,
+      }),
+    },
+    {
+      description: "with completed tasks",
+      input: {
+        filter: "bar",
+        completedTasks: true,
+      },
+      expectedOutput: makeQuery({
+        filter: "bar",
+        completedTasks: true,
       }),
     },
     {

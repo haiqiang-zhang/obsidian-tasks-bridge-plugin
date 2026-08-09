@@ -53,6 +53,7 @@ describe("applyReplacements", () => {
       it(tc.description, () => {
         const query: TaskQuery = {
           filter: tc.filter,
+          completedTasks: false,
         };
 
         applyReplacements(query, new FakeContext(tc.filePath ?? ""));
@@ -90,6 +91,7 @@ describe("applyReplacements", () => {
       it(tc.description, () => {
         const query: TaskQuery = {
           filter: tc.filter,
+          completedTasks: false,
         };
 
         applyReplacements(query, new FakeContext(tc.filePath ?? ""));

@@ -23,13 +23,13 @@ export const GroupedDisplay: React.FC<Props> = ({ tasks }) => {
 
   const groups = groupBy(tasks, query.groupBy);
 
-  const toggleGroup = (groupHeader: string) => {
+  const toggleGroup = (groupId: string) => {
     setCollapsedGroups((prev) => {
       const newState = { ...prev };
-      if (newState[groupHeader]) {
-        delete newState[groupHeader];
+      if (newState[groupId]) {
+        delete newState[groupId];
       } else {
-        newState[groupHeader] = true;
+        newState[groupId] = true;
       }
       return newState;
     });
@@ -38,17 +38,17 @@ export const GroupedDisplay: React.FC<Props> = ({ tasks }) => {
   return (
     <>
       {groups.map((group) => {
-        const isCollapsed = group.header in collapsedGroups;
+        const isCollapsed = group.id in collapsedGroups;
         return (
-          <div className="todoist-group" key={group.header}>
+          <div className="todoist-group" key={group.id}>
             {/* biome-ignore lint/a11y/useSemanticElements: Keeping as div to preserve CSS styling */}
             <div
               className={`todoist-group-title ${isCollapsed ? "collapsed" : ""}`}
-              onClick={() => toggleGroup(group.header)}
+              onClick={() => toggleGroup(group.id)}
               onKeyDown={(e) => {
                 if (e.key === "Enter" || e.key === " ") {
                   e.preventDefault();
-                  toggleGroup(group.header);
+                  toggleGroup(group.id);
                 }
               }}
               role="button"

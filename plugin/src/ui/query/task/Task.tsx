@@ -8,6 +8,7 @@ import type { TaskTree } from "@/data/transformations/relationships";
 import { t } from "@/i18n";
 import { useSettingsStore } from "@/settings";
 import { Markdown } from "@/ui/components/markdown";
+import { ObsidianIcon } from "@/ui/components/obsidian-icon";
 import { PluginContext, QueryContext } from "@/ui/context";
 import { showTaskContext } from "@/ui/query/task/contextMenu";
 import { TaskList } from "@/ui/query/task/TaskList";
@@ -23,6 +24,7 @@ export const Task: React.FC<Props> = ({ tree }) => {
   const plugin = PluginContext.use();
   const query = QueryContext.use();
   const settings = useSettingsStore();
+  const isCompleted = tree.completedAt !== undefined;
 
   const onContextMenu = (ev: MouseEvent) => {
     ev.preventDefault();
@@ -37,6 +39,10 @@ export const Task: React.FC<Props> = ({ tree }) => {
   };
 
   const onClickTask = async () => {
+    if (isCompleted) {
+      return;
+    }
+
     try {
       await plugin.services.todoist.actions.closeTask(tree.id);
     } catch (error: unknown) {
@@ -45,7 +51,8 @@ export const Task: React.FC<Props> = ({ tree }) => {
     }
   };
 
-  const isDisabled = tree.content.startsWith("*");
+  const isDisabled = tree.content.startsWith("*") || isCompleted;
+  const checkboxLabel = getCheckboxLabel(tree.content, isCompleted);
 
   const shouldRenderDescription =
     (query.show?.has("description") ?? true) && tree.description !== "";
@@ -58,6 +65,7 @@ export const Task: React.FC<Props> = ({ tree }) => {
         className="todoist-task-container"
         onContextMenu={onContextMenu}
         data-priority={tree.priority}
+        data-completed={isCompleted || undefined}
         data-due-metadata={getDueMetadataInfo(tree)}
         data-has-time={getTimeMetadataInfo(tree)}
         initial={{
@@ -74,12 +82,22 @@ export const Task: React.FC<Props> = ({ tree }) => {
         }}
       >
         <Checkbox
+          aria-label={checkboxLabel}
           className="todoist-task-checkbox"
           isDisabled={isDisabled}
-          isSelected={false}
+          isSelected={isCompleted}
           onChange={onClickTask}
         >
-          <div />
+          <div>
+            {isCompleted && (
+              <ObsidianIcon
+                aria-hidden="true"
+                size="xs"
+                id="check-small"
+                className="todoist-task-check-icon"
+              />
+            )}
+          </div>
         </Checkbox>
         <div className="todoist-task">
           <Markdown
@@ -130,6 +148,20 @@ const sanitizeContent = (content: string): string => {
   }
 
   return content;
+};
+
+const getCheckboxLabel = (content: string, isCompleted: boolean): string => {
+  const accessibleContent = content.startsWith("*") ? content.substring(1).trimStart() : content;
+
+  if (isCompleted) {
+    return `Completed task: ${accessibleContent}`;
+  }
+
+  if (content.startsWith("*")) {
+    return `Task cannot be completed: ${accessibleContent}`;
+  }
+
+  return `Complete task: ${accessibleContent}`;
 };
 
 type DescriptionRendererProps = {

@@ -40,6 +40,19 @@ function makePaginatedResponse(
   };
 }
 
+function makeCompletedPaginatedResponse(
+  tasks: Record<string, unknown>[],
+  nextCursor: string | null = null,
+): WebResponse {
+  return {
+    statusCode: 200,
+    body: JSON.stringify({
+      items: tasks,
+      next_cursor: nextCursor,
+    }),
+  };
+}
+
 function makeFetcher(): WebFetcher & {
   fetch: ReturnType<typeof vi.fn<(params: RequestParams) => Promise<WebResponse>>>;
 } {
@@ -74,6 +87,398 @@ describe("TodoistApiClient", () => {
       const { pathname, params } = parseUrl(call.url);
       expect(pathname).toBe("/api/v1/tasks/filter");
       expect(params.get("query")).toBe("today");
+      expect(fetcher.fetch).toHaveBeenCalledTimes(1);
+    });
+
+    it("coalesces identical active task queries while a refresh is in flight", async () => {
+      const fetcher = makeFetcher();
+      let resolveActive: (response: WebResponse) => void = () => {};
+      fetcher.fetch.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            resolveActive = resolve;
+          }),
+      );
+
+      const client = new TodoistApiClient("test-token", fetcher);
+      const first = client.getTasks("today");
+      const second = client.getTasks("today");
+
+      expect(fetcher.fetch).toHaveBeenCalledTimes(1);
+      resolveActive(makePaginatedResponse([makeTask({ id: "active" })]));
+
+      await expect(Promise.all([first, second])).resolves.toMatchObject([
+        [{ id: "active" }],
+        [{ id: "active" }],
+      ]);
+      expect(fetcher.fetch).toHaveBeenCalledTimes(1);
+    });
+
+    it("clears a failed active request so it can be retried", async () => {
+      const fetcher = makeFetcher();
+      fetcher.fetch
+        .mockRejectedValueOnce(new Error("network error"))
+        .mockResolvedValueOnce(makePaginatedResponse([makeTask({ id: "retried" })]));
+      const client = new TodoistApiClient("test-token", fetcher);
+
+      await expect(client.getTasks("today")).rejects.toThrow("network error");
+      await expect(client.getTasks("today")).resolves.toMatchObject([{ id: "retried" }]);
+      expect(fetcher.fetch).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe("getCompletedTasksPage", () => {
+    it("loads every page in the newest 90-day window with a limit of 200", async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-08-09T06:00:00.000Z"));
+
+      try {
+        const fetcher = makeFetcher();
+        fetcher.fetch
+          .mockResolvedValueOnce(
+            makeCompletedPaginatedResponse(
+              [
+                makeTask({
+                  id: "completed-1",
+                  added_at: null,
+                  completed_at: "2026-08-08T12:00:00.000Z",
+                }),
+              ],
+              "newest-window-cursor",
+            ),
+          )
+          .mockResolvedValueOnce(
+            makeCompletedPaginatedResponse([
+              makeTask({
+                id: "completed-2",
+                completed_at: "2026-08-08T13:00:00.000Z",
+              }),
+            ]),
+          );
+        const client = new TodoistApiClient("test-token", fetcher);
+
+        const page = await client.getCompletedTasksPage(
+          "##Computer Networking",
+          undefined,
+          "2026-02-10T06:00:00.000Z",
+        );
+
+        expect(page.tasks).toMatchObject([
+          {
+            id: "completed-1",
+            addedAt: "2026-08-08T12:00:00.000Z",
+            completedAt: "2026-08-08T12:00:00.000Z",
+          },
+          {
+            id: "completed-2",
+            completedAt: "2026-08-08T13:00:00.000Z",
+          },
+        ]);
+        expect(page.request).toEqual({
+          since: "2026-05-11T06:00:00.000Z",
+          until: "2026-08-09T06:00:00.000Z",
+          historyStart: "2026-02-10T06:00:00.000Z",
+        });
+        expect(page.nextPage).toEqual({
+          since: "2026-02-10T06:00:00.000Z",
+          until: "2026-05-11T06:00:00.000Z",
+          historyStart: "2026-02-10T06:00:00.000Z",
+        });
+        expect(fetcher.fetch).toHaveBeenCalledTimes(2);
+
+        const { pathname, params } = parseUrl(fetcher.fetch.mock.calls[0][0].url);
+        const nextParams = parseUrl(fetcher.fetch.mock.calls[1][0].url).params;
+        expect(pathname).toBe("/api/v1/tasks/completed/by_completion_date");
+        expect(params.get("since")).toBe("2026-05-11T06:00:00.000Z");
+        expect(params.get("until")).toBe("2026-08-09T06:00:00.000Z");
+        expect(params.get("filter_query")).toBe("##Computer Networking");
+        expect(params.get("limit")).toBe("200");
+        expect(params.has("cursor")).toBe(false);
+        expect(nextParams.get("since")).toBe(params.get("since"));
+        expect(nextParams.get("until")).toBe(params.get("until"));
+        expect(nextParams.get("filter_query")).toBe(params.get("filter_query"));
+        expect(nextParams.get("limit")).toBe("200");
+        expect(nextParams.get("cursor")).toBe("newest-window-cursor");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("exhausts the current window cursor before returning the adjacent older window", async () => {
+      const fetcher = makeFetcher();
+      fetcher.fetch
+        .mockResolvedValueOnce(
+          makeCompletedPaginatedResponse(
+            [makeTask({ id: "first", completed_at: "2026-08-08T12:00:00.000Z" })],
+            "same-window-cursor",
+          ),
+        )
+        .mockResolvedValueOnce(
+          makeCompletedPaginatedResponse([
+            makeTask({ id: "second", completed_at: "2026-08-08T13:00:00.000Z" }),
+          ]),
+        );
+      const client = new TodoistApiClient("test-token", fetcher);
+      const request = {
+        since: "2026-05-11T06:00:00.000Z",
+        until: "2026-08-09T06:00:00.000Z",
+        historyStart: "2026-02-10T06:00:00.000Z",
+      };
+
+      const page = await client.getCompletedTasksPage("today", request);
+
+      expect(fetcher.fetch).toHaveBeenCalledTimes(2);
+      expect(parseUrl(fetcher.fetch.mock.calls[1][0].url).params.get("cursor")).toBe(
+        "same-window-cursor",
+      );
+      expect(page.tasks.map((task) => task.id)).toEqual(["first", "second"]);
+      expect(page.request).toEqual(request);
+      expect(page.nextPage).toEqual({
+        since: "2026-02-10T06:00:00.000Z",
+        until: request.since,
+        historyStart: request.historyStart,
+      });
+    });
+
+    it("rejects a repeated completed-task cursor instead of looping forever", async () => {
+      const fetcher = makeFetcher();
+      fetcher.fetch.mockResolvedValue(makeCompletedPaginatedResponse([], "repeated-window-cursor"));
+      const client = new TodoistApiClient("test-token", fetcher);
+      const request = {
+        since: "2026-05-11T06:00:00.000Z",
+        until: "2026-08-09T06:00:00.000Z",
+        historyStart: "2024-01-01T00:00:00.000Z",
+      };
+
+      await expect(client.getCompletedTasksPage("today", request)).rejects.toThrow(
+        "repeated cursor",
+      );
+      expect(fetcher.fetch).toHaveBeenCalledTimes(2);
+    });
+
+    it("clamps adjacent older windows to historyStart and then stops", async () => {
+      const fetcher = makeFetcher();
+      fetcher.fetch.mockResolvedValue(makeCompletedPaginatedResponse([]));
+      const client = new TodoistApiClient("test-token", fetcher);
+      const newest = {
+        since: "2026-05-11T06:00:00.000Z",
+        until: "2026-08-09T06:00:00.000Z",
+        historyStart: "2026-04-01T00:00:00.000Z",
+      };
+
+      const firstPage = await client.getCompletedTasksPage(undefined, newest);
+      expect(firstPage.nextPage).toEqual({
+        since: newest.historyStart,
+        until: newest.since,
+        historyStart: newest.historyStart,
+      });
+
+      const secondPage = await client.getCompletedTasksPage(
+        undefined,
+        firstPage.nextPage ?? undefined,
+      );
+      expect(secondPage.nextPage).toBeNull();
+      expect(fetcher.fetch).toHaveBeenCalledTimes(2);
+
+      const firstParams = parseUrl(fetcher.fetch.mock.calls[0][0].url).params;
+      const secondParams = parseUrl(fetcher.fetch.mock.calls[1][0].url).params;
+      expect(secondParams.get("until")).toBe(firstParams.get("since"));
+      expect(secondParams.get("since")).toBe(newest.historyStart);
+    });
+
+    it("uses a recent account join time as the initial history boundary", async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-08-09T06:00:00.000Z"));
+
+      try {
+        const fetcher = makeFetcher();
+        fetcher.fetch.mockResolvedValueOnce(makeCompletedPaginatedResponse([]));
+        const client = new TodoistApiClient("test-token", fetcher);
+
+        const page = await client.getCompletedTasksPage(
+          undefined,
+          undefined,
+          "2026-08-01T12:00:00.000Z",
+        );
+
+        const params = parseUrl(fetcher.fetch.mock.calls[0][0].url).params;
+        expect(params.get("since")).toBe("2026-08-01T12:00:00.000Z");
+        expect(params.get("until")).toBe("2026-08-09T06:00:00.000Z");
+        expect(page.nextPage).toBeNull();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("falls back to and clamps at Todoist's launch epoch", async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2007-04-02T00:00:00.000Z"));
+
+      try {
+        const fetcher = makeFetcher();
+        fetcher.fetch.mockResolvedValue(makeCompletedPaginatedResponse([]));
+        const client = new TodoistApiClient("test-token", fetcher);
+
+        const fallbackPage = await client.getCompletedTasksPage();
+        expect(fallbackPage.nextPage).toEqual({
+          since: "2007-01-01T00:00:00.000Z",
+          until: "2007-01-02T00:00:00.000Z",
+          historyStart: "2007-01-01T00:00:00.000Z",
+        });
+        const clampedPage = await client.getCompletedTasksPage(
+          undefined,
+          undefined,
+          "2000-01-01T00:00:00.000Z",
+        );
+        expect(clampedPage.nextPage).toEqual(fallbackPage.nextPage);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("treats a missing next_cursor as the end of the current window", async () => {
+      const fetcher = makeFetcher();
+      fetcher.fetch.mockResolvedValueOnce({
+        statusCode: 200,
+        body: JSON.stringify({
+          items: [makeTask({ id: "completed", completed_at: "2026-08-09T05:00:00.000Z" })],
+        }),
+      });
+      const client = new TodoistApiClient("test-token", fetcher);
+      const request = {
+        since: "2026-08-01T00:00:00.000Z",
+        until: "2026-08-09T00:00:00.000Z",
+        historyStart: "2026-08-01T00:00:00.000Z",
+      };
+
+      await expect(client.getCompletedTasksPage(undefined, request)).resolves.toMatchObject({
+        tasks: [{ id: "completed" }],
+        nextPage: null,
+      });
+      expect(fetcher.fetch).toHaveBeenCalledTimes(1);
+      expect(parseUrl(fetcher.fetch.mock.calls[0][0].url).params.has("filter_query")).toBe(false);
+    });
+
+    it("coalesces identical completed page requests", async () => {
+      const fetcher = makeFetcher();
+      let resolvePage: (response: WebResponse) => void = () => {};
+      fetcher.fetch.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            resolvePage = resolve;
+          }),
+      );
+      const client = new TodoistApiClient("test-token", fetcher);
+      const request = {
+        since: "2026-08-01T00:00:00.000Z",
+        until: "2026-08-09T00:00:00.000Z",
+        historyStart: "2026-08-01T00:00:00.000Z",
+      };
+
+      const first = client.getCompletedTasksPage("today", request);
+      const second = client.getCompletedTasksPage("today", request);
+
+      expect(fetcher.fetch).toHaveBeenCalledTimes(1);
+      resolvePage(makeCompletedPaginatedResponse([]));
+      await expect(Promise.all([first, second])).resolves.toEqual([
+        { tasks: [], request, nextPage: null },
+        { tasks: [], request, nextPage: null },
+      ]);
+      expect(fetcher.fetch).toHaveBeenCalledTimes(1);
+    });
+
+    it("clears a failed completed page request so it can be retried", async () => {
+      const fetcher = makeFetcher();
+      fetcher.fetch
+        .mockRejectedValueOnce(new Error("network error"))
+        .mockResolvedValueOnce(makeCompletedPaginatedResponse([]));
+      const client = new TodoistApiClient("test-token", fetcher);
+      const request = {
+        since: "2026-08-01T00:00:00.000Z",
+        until: "2026-08-09T00:00:00.000Z",
+        historyStart: "2026-08-01T00:00:00.000Z",
+      };
+
+      await expect(client.getCompletedTasksPage("today", request)).rejects.toThrow("network error");
+      await expect(client.getCompletedTasksPage("today", request)).resolves.toEqual({
+        tasks: [],
+        request,
+        nextPage: null,
+      });
+      expect(fetcher.fetch).toHaveBeenCalledTimes(2);
+    });
+
+    it("restarts an atomic window after a cursor page fails", async () => {
+      const firstPage = makeCompletedPaginatedResponse(
+        [makeTask({ id: "first", completed_at: "2026-08-08T12:00:00.000Z" })],
+        "second-page-cursor",
+      );
+      const finalPage = makeCompletedPaginatedResponse([
+        makeTask({ id: "second", completed_at: "2026-08-08T13:00:00.000Z" }),
+      ]);
+      const fetcher = makeFetcher();
+      fetcher.fetch
+        .mockResolvedValueOnce(firstPage)
+        .mockRejectedValueOnce(new Error("second page failed"))
+        .mockResolvedValueOnce(firstPage)
+        .mockResolvedValueOnce(finalPage);
+      const client = new TodoistApiClient("test-token", fetcher);
+      const request = {
+        since: "2026-05-11T06:00:00.000Z",
+        until: "2026-08-09T06:00:00.000Z",
+        historyStart: "2024-01-01T00:00:00.000Z",
+      };
+
+      await expect(client.getCompletedTasksPage("today", request)).rejects.toThrow(
+        "second page failed",
+      );
+
+      await expect(client.getCompletedTasksPage("today", request)).resolves.toMatchObject({
+        tasks: [{ id: "first" }, { id: "second" }],
+        request,
+      });
+      expect(fetcher.fetch).toHaveBeenCalledTimes(4);
+      expect(parseUrl(fetcher.fetch.mock.calls[2][0].url).params.has("cursor")).toBe(false);
+      expect(parseUrl(fetcher.fetch.mock.calls[3][0].url).params.get("cursor")).toBe(
+        "second-page-cursor",
+      );
+    });
+
+    it("preserves nullable completion identity and normalizes missing addedAt", async () => {
+      const fetcher = makeFetcher();
+      fetcher.fetch.mockResolvedValueOnce(
+        makeCompletedPaginatedResponse([
+          makeTask({ id: "completed", added_at: null, completed_at: null }),
+        ]),
+      );
+      const client = new TodoistApiClient("test-token", fetcher);
+      const request = {
+        since: "2026-08-01T00:00:00.000Z",
+        until: "2026-08-09T00:00:00.000Z",
+        historyStart: "2026-08-01T00:00:00.000Z",
+      };
+
+      const page = await client.getCompletedTasksPage(undefined, request);
+
+      expect(page.tasks[0]).toHaveProperty("completedAt", null);
+      expect(page.tasks[0].addedAt).toBe("1970-01-01T00:00:00.000Z");
+    });
+
+    it("rejects completed responses that omit completed_at", async () => {
+      const fetcher = makeFetcher();
+      const completedTask = makeTask();
+      delete completedTask.completed_at;
+      fetcher.fetch.mockResolvedValueOnce(makeCompletedPaginatedResponse([completedTask]));
+      const client = new TodoistApiClient("test-token", fetcher);
+      const request = {
+        since: "2026-08-01T00:00:00.000Z",
+        until: "2026-08-09T00:00:00.000Z",
+        historyStart: "2026-08-01T00:00:00.000Z",
+      };
+
+      await expect(client.getCompletedTasksPage(undefined, request)).rejects.toThrow(
+        "Todoist API validation failed",
+      );
     });
   });
 
@@ -207,18 +612,37 @@ describe("TodoistApiClient", () => {
       const fetcher = makeFetcher();
       fetcher.fetch.mockResolvedValueOnce({
         statusCode: 200,
-        body: JSON.stringify({ is_premium: true }),
+        body: JSON.stringify({
+          is_premium: true,
+          joined_at: "2018-04-12T09:30:00.000Z",
+        }),
       });
 
       const client = new TodoistApiClient("test-token", fetcher);
       const user = await client.getUser();
 
       expect(user.isPremium).toBe(true);
+      expect(user.joinedAt).toBe("2018-04-12T09:30:00.000Z");
 
       const call = fetcher.fetch.mock.calls[0][0];
       expect(call.method).toBe("GET");
       const { pathname } = parseUrl(call.url);
       expect(pathname).toBe("/api/v1/user");
+    });
+
+    it("accepts a nullable account join time", async () => {
+      const fetcher = makeFetcher();
+      fetcher.fetch.mockResolvedValueOnce({
+        statusCode: 200,
+        body: JSON.stringify({ is_premium: false, joined_at: null }),
+      });
+
+      const client = new TodoistApiClient("test-token", fetcher);
+
+      await expect(client.getUser()).resolves.toEqual({
+        isPremium: false,
+        joinedAt: null,
+      });
     });
   });
 

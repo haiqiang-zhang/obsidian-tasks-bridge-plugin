@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { MarkdownRenderChild, Notice } from "obsidian";
+import { MarkdownRenderChild, Menu, Notice } from "obsidian";
 import type React from "react";
 import { describe, expect, it, vi } from "vitest";
 
@@ -155,6 +155,7 @@ describe("Task", () => {
 
       const checkbox = container.querySelector("input[type='checkbox']");
       expect(checkbox).not.toBeDisabled();
+      expect(checkbox).toHaveAccessibleName("Complete task: Normal task");
     });
 
     it("should be disabled for tasks starting with '*'", () => {
@@ -168,6 +169,7 @@ describe("Task", () => {
 
       const checkbox = container.querySelector("input[type='checkbox']");
       expect(checkbox).toBeDisabled();
+      expect(checkbox).toHaveAccessibleName("Task cannot be completed: Section header");
     });
 
     it("should call closeTask on click", async () => {
@@ -187,6 +189,32 @@ describe("Task", () => {
       await waitFor(() => {
         expect(mockCloseTask).toHaveBeenCalledWith("1");
       });
+    });
+
+    it("should render completed tasks as checked and read-only", () => {
+      mockCloseTask.mockClear();
+      const tree = makeTree("1", {
+        content: "Completed task",
+        completedAt: "2026-08-09T04:00:00.000Z",
+      });
+
+      const { container } = render(
+        <TaskWrapper>
+          <Task tree={tree} />
+        </TaskWrapper>,
+      );
+
+      const checkbox = container.querySelector("input[type='checkbox']");
+      expect(checkbox).toBeChecked();
+      expect(checkbox).toBeDisabled();
+      expect(checkbox).toHaveAccessibleName("Completed task: Completed task");
+      expect(container.querySelector(".todoist-task-container")).toHaveAttribute(
+        "data-completed",
+        "true",
+      );
+
+      fireEvent.click(checkbox as HTMLElement);
+      expect(mockCloseTask).not.toHaveBeenCalled();
     });
 
     it("should show notice on closeTask failure", async () => {
@@ -209,6 +237,27 @@ describe("Task", () => {
       });
 
       vi.restoreAllMocks();
+    });
+  });
+
+  describe("context menu", () => {
+    it("should omit the complete action for completed tasks", () => {
+      const addItem = vi.spyOn(Menu.prototype, "addItem");
+      const tree = makeTree("1", {
+        content: "Completed task",
+        completedAt: "2026-08-09T04:00:00.000Z",
+      });
+
+      const { container } = render(
+        <TaskWrapper>
+          <Task tree={tree} />
+        </TaskWrapper>,
+      );
+
+      fireEvent.contextMenu(container.querySelector(".todoist-task-container") as HTMLElement);
+
+      expect(addItem).toHaveBeenCalledTimes(2);
+      addItem.mockRestore();
     });
   });
 

@@ -3,13 +3,21 @@ import { domAnimation, LazyMotion } from "motion/react";
 import type React from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import type { OnSubscriptionChange, Refresh, SubscriptionResult } from "@/data";
+import { COMPLETED_TASKS_WINDOW_MONTHS } from "@/api";
+import type {
+  CompletedTasksProgress,
+  LoadMoreCompleted,
+  OnSubscriptionChange,
+  Refresh,
+  SubscriptionResult,
+} from "@/data";
 import type { Task } from "@/data/task";
 import { t } from "@/i18n";
 import type TodoistPlugin from "@/index";
 import type { QueryWarning } from "@/query/parser";
 import type { TaskQuery } from "@/query/schema/tasks";
 import { type Settings, useSettingsStore } from "@/settings";
+import { ObsidianIcon } from "@/ui/components/obsidian-icon";
 import { PluginContext } from "@/ui/context";
 import { Displays } from "@/ui/query/displays";
 import { QueryHeader } from "@/ui/query/QueryHeader";
@@ -24,10 +32,17 @@ const useSubscription = (
   query: TaskQuery,
   callback: OnSubscriptionChange,
   initialTasks: Task[],
-): [Refresh, boolean] => {
+  initialCompletedTasksProgress: CompletedTasksProgress | undefined,
+): [Refresh, boolean, LoadMoreCompleted, boolean, boolean] => {
   const [refresher, setRefresher] = useState<Refresh | undefined>(undefined);
+  const [completedTasksLoader, setCompletedTasksLoader] = useState<LoadMoreCompleted | undefined>(
+    undefined,
+  );
   const [isFetching, setIsFetching] = useState(false);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [loadMoreError, setLoadMoreError] = useState(false);
   const refreshGeneration = useRef(0);
+  const loadMoreGeneration = useRef(0);
   const isMounted = useRef(true);
 
   useEffect(() => {
@@ -39,7 +54,7 @@ const useSubscription = (
 
   useEffect(() => {
     let isSubscribed = true;
-    const [unsub, refresh] = plugin.services.todoist.subscribe(
+    const [unsub, refresh, loadMoreCompleted] = plugin.services.todoist.subscribe(
       query.filter,
       (results) => {
         if (isSubscribed) {
@@ -47,15 +62,19 @@ const useSubscription = (
         }
       },
       initialTasks,
+      query.completedTasks,
+      initialCompletedTasksProgress,
     );
     setRefresher(() => {
       return refresh;
     });
+    setCompletedTasksLoader(() => loadMoreCompleted);
+    setLoadMoreError(false);
     return () => {
       isSubscribed = false;
       unsub();
     };
-  }, [query, plugin, callback, initialTasks]);
+  }, [query, plugin, callback, initialTasks, initialCompletedTasksProgress]);
 
   const forceRefresh = useCallback(async () => {
     if (refresher === undefined) {
@@ -79,7 +98,31 @@ const useSubscription = (
     forceRefresh();
   }, [forceRefresh]);
 
-  return [forceRefresh, isFetching];
+  const loadMoreCompleted = useCallback(async () => {
+    if (completedTasksLoader === undefined) {
+      return;
+    }
+
+    const generation = ++loadMoreGeneration.current;
+    if (isMounted.current) {
+      setIsLoadingMore(true);
+      setLoadMoreError(false);
+    }
+    try {
+      await completedTasksLoader();
+    } catch (error: unknown) {
+      console.error("Failed to load earlier completed tasks:", error);
+      if (isMounted.current && generation === loadMoreGeneration.current) {
+        setLoadMoreError(true);
+      }
+    } finally {
+      if (isMounted.current && generation === loadMoreGeneration.current) {
+        setIsLoadingMore(false);
+      }
+    }
+  }, [completedTasksLoader]);
+
+  return [forceRefresh, isFetching, loadMoreCompleted, isLoadingMore, loadMoreError];
 };
 
 type Props = {
@@ -90,14 +133,22 @@ type Props = {
 export const QueryRoot: React.FC<Props> = ({ query, warnings }) => {
   const plugin = PluginContext.use();
   const settings = useSettingsStore();
-  const [cachedQuery] = useState(() => plugin.queryCache.get(query.filter));
+  const [cachedQuery] = useState(() => plugin.queryCache.get(query.filter, query.completedTasks));
   const [initialTasks] = useState(() => cachedQuery?.tasks ?? []);
+  const [initialCompletedTasksProgress] = useState(() => cachedQuery?.completedTasksProgress);
   const [result, setResult] = useState<SubscriptionResult | undefined>(() => {
     if (cachedQuery === undefined) {
       return undefined;
     }
 
-    return { type: "success", tasks: cachedQuery.tasks, cacheEffect: { type: "none" } };
+    return {
+      type: "success",
+      tasks: cachedQuery.tasks,
+      ...(query.completedTasks
+        ? { completedTasksProgress: cachedQuery.completedTasksProgress }
+        : {}),
+      cacheEffect: { type: "none" },
+    };
   });
   const [refreshedTimestamp, setRefreshedTimestamp] = useState<Date | undefined>(
     cachedQuery?.updatedAt,
@@ -129,16 +180,28 @@ export const QueryRoot: React.FC<Props> = ({ query, warnings }) => {
         const { requestedAt } = nextResult.cacheEffect;
         setRefreshedTimestamp(requestedAt);
         plugin
-          .writeQueryCache(query.filter, nextResult.tasks, requestedAt)
+          .writeQueryCache(
+            query.filter,
+            nextResult.tasks,
+            requestedAt,
+            query.completedTasks,
+            nextResult.completedTasksProgress,
+          )
           .catch((error: unknown) => {
             console.error("Failed to save Todoist query cache:", error);
           });
       }
     },
-    [plugin, query.filter],
+    [plugin, query.filter, query.completedTasks],
   );
 
-  const [refresh, isFetching] = useSubscription(plugin, query, onSubscriptionChange, initialTasks);
+  const [refresh, isFetching, loadMoreCompleted, isLoadingMore, loadMoreError] = useSubscription(
+    plugin,
+    query,
+    onSubscriptionChange,
+    initialTasks,
+    initialCompletedTasksProgress,
+  );
 
   useEffect(() => {
     const interval = getAutorefreshInterval(query, settings);
@@ -156,6 +219,16 @@ export const QueryRoot: React.FC<Props> = ({ query, warnings }) => {
 
   const title = getTitle(query, result ?? { type: "not-ready" });
   const isLoading = result === undefined;
+  const canLoadEarlierCompletedTasks =
+    query.completedTasks &&
+    result?.type === "success" &&
+    (result.completedTasksProgress?.frontiers.length ?? 0) > 0;
+  const loadedCompletedWindowCount =
+    (result?.type === "success" ? result.completedTasksProgress?.loadedWindowCount : undefined) ??
+    1;
+  const nextCompletedHistoryMonths =
+    (loadedCompletedWindowCount + 1) * COMPLETED_TASKS_WINDOW_MONTHS;
+  const completedHistoryText = t().query.completedHistory;
 
   return (
     <LazyMotion features={domAnimation}>
@@ -174,6 +247,32 @@ export const QueryRoot: React.FC<Props> = ({ query, warnings }) => {
           <QueryWarnings warnings={warnings} />
           {isLoading && <Displays.NotReady />}
           {result !== undefined && <QueryResponseHandler result={result} query={query} />}
+          {canLoadEarlierCompletedTasks && (
+            <div className="todoist-completed-history-controls">
+              <button
+                type="button"
+                className="todoist-load-earlier-completed"
+                disabled={isLoadingMore}
+                onClick={loadMoreCompleted}
+              >
+                <ObsidianIcon
+                  id={isLoadingMore ? "loader-2" : "history"}
+                  size="s"
+                  className={isLoadingMore ? "is-loading" : undefined}
+                />
+                <span>
+                  {isLoadingMore
+                    ? completedHistoryText.loadingEarlier(nextCompletedHistoryMonths)
+                    : completedHistoryText.loadEarlier(nextCompletedHistoryMonths)}
+                </span>
+              </button>
+              {loadMoreError && (
+                <div className="todoist-completed-history-error" role="alert">
+                  {completedHistoryText.loadError}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </LazyMotion>

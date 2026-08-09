@@ -9,6 +9,7 @@ export function makeTask(id: string, opts?: Partial<Task>): Task {
   return {
     id,
     createdAt: opts?.createdAt ?? "1970-01-01",
+    completedAt: opts?.completedAt,
     parentId: opts?.parentId,
     content: opts?.content ?? "",
     description: "",

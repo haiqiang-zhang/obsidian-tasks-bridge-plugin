@@ -253,6 +253,11 @@ export const en: Translations = {
       openTaskInBrowserLabel: "Open task in Todoist (web)",
     },
     failedCloseMessage: "Failed to close task",
+    completedHistory: {
+      loadEarlier: (months: number) => `Load ${months} months`,
+      loadingEarlier: (months: number) => `Loading ${months} months…`,
+      loadError: "Could not load earlier completed tasks. Try again.",
+    },
     header: {
       errorPostfix: "(Error)",
       refreshTooltip: {

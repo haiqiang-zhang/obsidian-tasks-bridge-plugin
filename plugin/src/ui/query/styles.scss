@@ -117,9 +117,33 @@
   }
 }
 
+.todoist-completed-history-controls {
+  display: flex;
+  align-items: center;
+  flex-direction: column;
+  gap: var(--size-4-2);
+  margin-block-start: var(--size-4-3);
+
+  .todoist-load-earlier-completed {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--size-4-2);
+
+    .obsidian-icon.is-loading {
+      animation: todoist-query-spin 1s linear infinite;
+    }
+  }
+
+  .todoist-completed-history-error {
+    color: var(--text-error);
+    font-size: var(--font-ui-small);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .todoist-query-loading-icon,
-  .todoist-query-control-button.refresh-query.is-refreshing > .obsidian-icon {
+  .todoist-query-control-button.refresh-query.is-refreshing > .obsidian-icon,
+  .todoist-load-earlier-completed .obsidian-icon.is-loading {
     animation: none;
   }
 }
@@ -182,9 +206,12 @@
   .todoist-task-checkbox {
     margin-top: 3px;
 
-    div {
+    > div {
       height: 16px;
       width: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
       border-radius: 50%;
       border: 1px solid var(--todoist-checkbox-border);
       background-color: var(--todoist-checkbox-background);
@@ -192,6 +219,23 @@
       &:hover {
         border: 1px solid var(--todoist-checkbox-border-hover);
       }
+    }
+  }
+
+  &[data-completed="true"] {
+    .todoist-task-checkbox > div {
+      border-color: var(--checkbox-color);
+      background-color: var(--checkbox-color);
+      color: var(--checkbox-marker-color);
+    }
+
+    .todoist-task-check-icon {
+      color: var(--checkbox-marker-color);
+    }
+
+    .todoist-task-content {
+      color: var(--checklist-done-color);
+      text-decoration: var(--checklist-done-decoration);
     }
   }
 

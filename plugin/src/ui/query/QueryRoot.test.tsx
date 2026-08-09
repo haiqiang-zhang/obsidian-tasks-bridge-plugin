@@ -3,7 +3,7 @@ import { MarkdownRenderChild } from "obsidian";
 import type React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { QueryErrorKind, type SubscriptionResult } from "@/data";
+import { type CompletedTasksProgress, QueryErrorKind, type SubscriptionResult } from "@/data";
 import { makeTask } from "@/factories/data";
 import { makeQuery } from "@/factories/query";
 import { makeSettings } from "@/factories/settings";
@@ -37,19 +37,36 @@ vi.mock("@/ui/query/QueryResponseHandler", () => ({
 }));
 
 type SubscriptionCallback = (result: SubscriptionResult) => void;
+type CompletedPageRequest = CompletedTasksProgress["frontiers"][number];
 
-const makePlugin = (cachedTasks?: ReturnType<typeof makeTask>[]) => {
+const cachedAt = "2026-08-09T05:00:00.000Z";
+const makeProgress = (
+  nextPage: CompletedPageRequest | null,
+  loadedWindowCount = 1,
+): CompletedTasksProgress => ({
+  latestUntil: cachedAt,
+  historyStart: nextPage?.historyStart ?? "2007-01-01T00:00:00.000Z",
+  loadedWindowCount,
+  frontiers: nextPage === null ? [] : [nextPage],
+});
+
+const makePlugin = (
+  cachedTasks?: ReturnType<typeof makeTask>[],
+  cachedCompletedTasksNextPage?: CompletedPageRequest | null,
+  loadedCompletedWindowCount = 1,
+) => {
   let subscriptionCallback: SubscriptionCallback | undefined;
   let cacheClearCallback: (() => void) | undefined;
   const refresh = vi.fn().mockResolvedValue(undefined);
+  const loadMoreCompleted = vi.fn().mockResolvedValue(undefined);
   const unsubscribe = vi.fn();
   const unsubscribeCache = vi.fn();
   const subscribe = vi.fn((_filter: string, callback: SubscriptionCallback) => {
     subscriptionCallback = callback;
-    return [unsubscribe, refresh] as const;
+    return [unsubscribe, refresh, loadMoreCompleted] as const;
   });
   const writeQueryCache = vi.fn().mockResolvedValue(undefined);
-  const updatedAt = new Date("2026-08-09T05:00:00.000Z");
+  const updatedAt = new Date(cachedAt);
 
   const plugin = {
     queryCache: {
@@ -59,6 +76,14 @@ const makePlugin = (cachedTasks?: ReturnType<typeof makeTask>[]) => {
           : {
               tasks: cachedTasks,
               updatedAt,
+              ...(cachedCompletedTasksNextPage !== undefined
+                ? {
+                    completedTasksProgress: makeProgress(
+                      cachedCompletedTasksNextPage,
+                      loadedCompletedWindowCount,
+                    ),
+                  }
+                : {}),
             },
       ),
       onClear: vi.fn((callback: () => void) => {
@@ -81,6 +106,7 @@ const makePlugin = (cachedTasks?: ReturnType<typeof makeTask>[]) => {
     plugin,
     refresh,
     subscribe,
+    loadMoreCompleted,
     unsubscribe,
     unsubscribeCache,
     writeQueryCache,
@@ -129,7 +155,13 @@ describe("QueryRoot cache-first rendering", () => {
     expect(await screen.findByText("Cached task")).toBeInTheDocument();
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
     await waitFor(() => expect(mock.refresh).toHaveBeenCalledOnce());
-    expect(mock.subscribe).toHaveBeenCalledWith("today", expect.any(Function), [cachedTask]);
+    expect(mock.subscribe).toHaveBeenCalledWith(
+      "today",
+      expect.any(Function),
+      [cachedTask],
+      false,
+      undefined,
+    );
 
     act(() => {
       mock.callback()({
@@ -141,7 +173,13 @@ describe("QueryRoot cache-first rendering", () => {
 
     expect(await screen.findByText("Fresh task")).toBeInTheDocument();
     expect(screen.queryByText("Cached task")).not.toBeInTheDocument();
-    expect(mock.writeQueryCache).toHaveBeenCalledWith("today", [freshTask], expect.any(Date));
+    expect(mock.writeQueryCache).toHaveBeenCalledWith(
+      "today",
+      [freshTask],
+      expect.any(Date),
+      false,
+      undefined,
+    );
   });
 
   it("shows a loading indicator on a cache miss until fresh tasks arrive", async () => {
@@ -258,7 +296,13 @@ describe("QueryRoot cache-first rendering", () => {
 
     expect(await screen.findByText("The query returned no tasks")).toBeInTheDocument();
     expect(screen.queryByText("Cached task")).not.toBeInTheDocument();
-    expect(mock.writeQueryCache).toHaveBeenCalledWith("today", [], expect.any(Date));
+    expect(mock.writeQueryCache).toHaveBeenCalledWith(
+      "today",
+      [],
+      expect.any(Date),
+      false,
+      undefined,
+    );
   });
 
   it("shows a refresh error when no cached result exists", async () => {
@@ -352,5 +396,144 @@ describe("QueryRoot cache-first rendering", () => {
 
     expect(screen.getByText("The query returned no tasks")).toBeInTheDocument();
     expect(mock.writeQueryCache).not.toHaveBeenCalled();
+  });
+
+  it("uses a separate completed-inclusive subscription and cache identity", async () => {
+    const completedTask = makeTask("completed", {
+      content: "Completed task",
+      completedAt: "2026-08-09T04:00:00.000Z",
+    });
+    const completedTasksNextPage = {
+      since: "2026-02-10T06:00:00.000Z",
+      until: "2026-05-11T06:00:00.000Z",
+      historyStart: "2024-01-01T00:00:00.000Z",
+    };
+    const completedTasksProgress = makeProgress(completedTasksNextPage);
+    const mock = makePlugin([completedTask], completedTasksNextPage);
+    const query = makeQuery({ filter: "today", completedTasks: true });
+
+    renderQuery(mock.plugin, query);
+
+    expect(await screen.findByText("Completed task")).toBeInTheDocument();
+    expect(mock.plugin.queryCache.get).toHaveBeenCalledWith("today", true);
+    expect(mock.subscribe).toHaveBeenCalledWith(
+      "today",
+      expect.any(Function),
+      [completedTask],
+      true,
+      completedTasksProgress,
+    );
+
+    act(() => {
+      mock.callback()({
+        type: "success",
+        tasks: [completedTask],
+        completedTasksProgress: { ...completedTasksProgress, frontiers: [] },
+        cacheEffect: { type: "replace", requestedAt: new Date() },
+      });
+    });
+
+    expect(mock.writeQueryCache).toHaveBeenCalledWith(
+      "today",
+      [completedTask],
+      expect.any(Date),
+      true,
+      { ...completedTasksProgress, frontiers: [] },
+    );
+  });
+
+  it("advances the completed-history month label after each loaded window", async () => {
+    const completedTask = makeTask("completed", {
+      content: "Completed task",
+      completedAt: "2026-08-09T04:00:00.000Z",
+    });
+    const nextPage = {
+      since: "2026-05-11T06:00:00.000Z",
+      until: "2026-08-09T06:00:00.000Z",
+      historyStart: "2024-01-01T00:00:00.000Z",
+    };
+    const completedTasksProgress = makeProgress(nextPage);
+    const mock = makePlugin([completedTask], nextPage);
+    const followingPage = {
+      since: "2026-02-10T06:00:00.000Z",
+      until: nextPage.since,
+      historyStart: nextPage.historyStart,
+    };
+
+    renderQuery(mock.plugin, makeQuery({ filter: "today", completedTasks: true }));
+
+    const button = await screen.findByRole("button", {
+      name: "Load 6 months",
+    });
+    fireEvent.click(button);
+    await waitFor(() => expect(mock.loadMoreCompleted).toHaveBeenCalledOnce());
+
+    act(() => {
+      mock.callback()({
+        type: "success",
+        tasks: [completedTask],
+        completedTasksProgress: {
+          ...completedTasksProgress,
+          loadedWindowCount: 2,
+          frontiers: [followingPage],
+        },
+        cacheEffect: { type: "replace", requestedAt: new Date() },
+      });
+    });
+
+    expect(screen.getByRole("button", { name: "Load 9 months" })).toBeInTheDocument();
+
+    act(() => {
+      mock.callback()({
+        type: "success",
+        tasks: [completedTask],
+        completedTasksProgress: {
+          ...completedTasksProgress,
+          loadedWindowCount: 2,
+          frontiers: [],
+        },
+        cacheEffect: { type: "replace", requestedAt: new Date() },
+      });
+    });
+
+    expect(screen.queryByRole("button", { name: "Load 9 months" })).not.toBeInTheDocument();
+  });
+
+  it("restores the next completed-history month label from cache", async () => {
+    const nextPage = {
+      since: "2026-02-10T06:00:00.000Z",
+      until: "2026-05-11T06:00:00.000Z",
+      historyStart: "2024-01-01T00:00:00.000Z",
+    };
+    const mock = makePlugin(
+      [makeTask("completed", { completedAt: "2026-08-09T04:00:00.000Z" })],
+      nextPage,
+      2,
+    );
+
+    renderQuery(mock.plugin, makeQuery({ filter: "today", completedTasks: true }));
+
+    expect(await screen.findByRole("button", { name: "Load 9 months" })).toBeInTheDocument();
+  });
+
+  it("keeps the earlier-history control available after a failed request", async () => {
+    const nextPage = {
+      since: "2026-05-11T06:00:00.000Z",
+      until: "2026-08-09T06:00:00.000Z",
+      historyStart: "2024-01-01T00:00:00.000Z",
+    };
+    const mock = makePlugin(
+      [makeTask("completed", { completedAt: "2026-08-09T04:00:00.000Z" })],
+      nextPage,
+    );
+    mock.loadMoreCompleted.mockRejectedValueOnce(new Error("rate limited"));
+
+    renderQuery(mock.plugin, makeQuery({ filter: "today", completedTasks: true }));
+    fireEvent.click(await screen.findByRole("button", { name: "Load 6 months" }));
+
+    expect(
+      await screen.findByText("Could not load earlier completed tasks. Try again."),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Load 6 months" })).toBeEnabled();
   });
 });

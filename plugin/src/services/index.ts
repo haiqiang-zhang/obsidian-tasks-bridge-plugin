@@ -15,7 +15,7 @@ export const makeServices = (plugin: TodoistPlugin): Services => {
     token: new VaultTokenAccessor(plugin.app.vault, plugin.app.secretStorage),
     todoist: new TodoistAdapter({
       onTaskClosed: async (taskId, completedAt) => {
-        await plugin.removeTaskFromAllQueryCaches(taskId, completedAt);
+        await plugin.completeTaskInAllQueryCaches(taskId, completedAt);
       },
     }),
   };

@@ -32,6 +32,30 @@ This field also supports replacements:
 
 - `{{filename}}` will be replaced with the current note's name, without the `.md` extension.
 
+### `completedTasks`
+
+Set `completedTasks` to `true` to include completed tasks alongside active tasks. It defaults to `false`, so existing query blocks continue to show active tasks only.
+
+The initial refresh loads the newest three-month window. Each Todoist request asks for up to 200 completed tasks, and the plugin follows `next_cursor` until that entire window has loaded.
+
+If unsearched history remains, the button below the block shows the total range that will be available after the next load: **Load 6 months**, then **Load 9 months**, **Load 12 months**, and so on. Each successful click loads one complete preceding three-month window; older windows are never fetched automatically.
+
+Completed pages are added to the block's saved query cache. The next time you open the note, the previously loaded history appears immediately while the newest tasks refresh in the background.
+
+Completed tasks use the same filter as active tasks. Todoist supports many, but not all, filter expressions for completed tasks; an unsupported expression will produce the same invalid-filter error as other Todoist queries.
+
+Completed tasks are rendered with a checked, read-only checkbox. They continue to support the query's grouping, sorting, and metadata options.
+
+For example:
+
+````
+```todoist
+filter: "##计算机网络"
+groupBy: "section"
+completedTasks: true
+```
+````
+
 ### `name`
 
 If you want to have an embedded header rendered with your query, you can use the `name` option. This will render a `<h4>` element above your tasks.

@@ -7,6 +7,7 @@ import type { Deadline, Duration, Priority, TaskId } from "@/api/domain/task";
 export type Task = {
   id: TaskId;
   createdAt: string;
+  completedAt?: string | null;
 
   content: string;
   description: string;

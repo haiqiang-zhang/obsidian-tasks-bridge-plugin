@@ -2,13 +2,13 @@ import { themes as prismThemes } from "prism-react-renderer";
 import type { Config } from "@docusaurus/types";
 import type * as Preset from "@docusaurus/preset-classic";
 
-const title = "Todoist Sync ++";
+const title = "Obsidian Todoist Sync ++";
 const org = "haiqiang-zhang";
 const project = "obsidian-todoist-plus-plugin";
 
 const config: Config = {
   title: title,
-  favicon: "img/favicon.ico",
+  favicon: "img/logo.svg",
 
   url: `https://${org}.github.io`,
   baseUrl: `/${project}/`,
@@ -40,6 +40,10 @@ const config: Config = {
   themeConfig: {
     navbar: {
       title: title,
+      logo: {
+        alt: "Todoist Sync ++ logo",
+        src: "img/logo.svg",
+      },
       items: [
         {
           type: "docsVersionDropdown",

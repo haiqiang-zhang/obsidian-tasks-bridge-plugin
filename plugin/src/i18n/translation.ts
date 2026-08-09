@@ -229,6 +229,11 @@ export type Translations = {
       openTaskInBrowserLabel: string;
     };
     failedCloseMessage: string;
+    completedHistory: {
+      loadEarlier: (months: number) => string;
+      loadingEarlier: (months: number) => string;
+      loadError: string;
+    };
     header: {
       errorPostfix: string;
       refreshTooltip: {

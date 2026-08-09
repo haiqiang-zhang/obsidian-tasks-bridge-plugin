@@ -8,6 +8,7 @@ import type { TaskId } from "@/api/domain/task";
 import { ObsidianFetcher } from "@/api/fetcher";
 import { registerCommands } from "@/commands";
 import { QueryCache } from "@/data/queryCache";
+import type { CompletedTasksProgress } from "@/data/subscriptions";
 import type { Task } from "@/data/task";
 import { secondsToMillis } from "@/infra/time";
 import { QueryInjector } from "@/query/injector";
@@ -100,8 +101,21 @@ export default class TodoistPlugin extends Plugin {
     await this.persistData();
   }
 
-  async writeQueryCache(filter: string, tasks: Task[], updatedAt: Date): Promise<void> {
-    if (!this.queryCache.set(filter, tasks, updatedAt)) {
+  async writeQueryCache(
+    filter: string,
+    tasks: Task[],
+    updatedAt: Date,
+    completedTasks = false,
+    completedTasksProgress?: CompletedTasksProgress,
+  ): Promise<void> {
+    if (!this.queryCache.set(filter, tasks, updatedAt, completedTasks, completedTasksProgress)) {
+      return;
+    }
+    await this.persistData();
+  }
+
+  async completeTaskInAllQueryCaches(taskId: TaskId, completedAt: Date): Promise<void> {
+    if (!this.queryCache.completeTaskInAll(taskId, completedAt)) {
       return;
     }
     await this.persistData();

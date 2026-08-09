@@ -8,7 +8,7 @@ Todoist Sync ++ is based on the original [Todoist Sync](https://github.com/jamie
 
 This project is not created by, affiliated with, endorsed by, or supported by Doist.
 
-The [original documentation](https://jamiebrynes7.github.io/obsidian-todoist-plugin/docs/overview) remains the reference for installation, query syntax, and general usage.
+Read the [Todoist Sync ++ documentation](https://haiqiang-zhang.github.io/obsidian-todoist-plus-plugin/) for installation, query syntax, and general usage.
 
 ## Improvements in Todoist Sync ++
 
@@ -21,6 +21,7 @@ Compared with the upstream Todoist Sync codebase, this fork adds:
 - Block actions that no longer overlap Obsidian's built-in **Edit this block** button.
 - Compact, consistent layouts for both titled and untitled Todoist blocks.
 - Time-zone-correct same-day due-date handling.
+- Optional completed-task display with complete cursor pagination and user-controlled three-month history expansion.
 - Symlink-safe production builds that preserve the plugin's existing `data.json`.
 
 ## Acknowledgements

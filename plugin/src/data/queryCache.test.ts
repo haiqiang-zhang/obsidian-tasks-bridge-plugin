@@ -84,6 +84,113 @@ describe("QueryCache", () => {
     });
   });
 
+  it("isolates completed-enabled entries while preserving the legacy active-only key", () => {
+    const cache = new QueryCache();
+    const updatedAt = new Date("2026-08-09T06:00:00.000Z");
+    const activeTask = makeTask("active");
+    const completedTask = makeTask("completed", {
+      completedAt: "2026-08-09T05:30:00.000Z",
+    });
+
+    cache.set("today", [activeTask], updatedAt);
+    cache.set("today", [activeTask, completedTask], updatedAt, true);
+
+    expect(cache.get("today")?.tasks).toEqual([activeTask]);
+    expect(cache.get("today", true)?.tasks).toEqual([activeTask, completedTask]);
+    expect(cache.serialize().entries).toEqual({
+      '{"filter":"today"}': {
+        tasks: [activeTask],
+        updatedAt: updatedAt.toISOString(),
+      },
+      '{"filter":"today","completedTasks":true}': {
+        tasks: [activeTask, completedTask],
+        updatedAt: updatedAt.toISOString(),
+      },
+    });
+  });
+
+  it("loads nullable completion identity without changing cache version", () => {
+    const cache = new QueryCache();
+    const completedTask = makeTask("completed", { completedAt: null });
+
+    cache.load({
+      version: 2,
+      credentialFingerprint: "credential-a",
+      entries: {
+        '{"filter":"today","completedTasks":true}': {
+          tasks: [completedTask],
+          updatedAt: "2026-08-09T05:00:00.000Z",
+        },
+      },
+    });
+
+    expect(cache.get("today", true)?.tasks).toEqual([completedTask]);
+  });
+
+  it("round-trips completed-history progress and preserves it during local task updates", () => {
+    const cache = new QueryCache();
+    const updatedAt = new Date("2026-08-09T06:00:00.000Z");
+    const nextPage = {
+      since: "2026-05-11T06:00:00.000Z",
+      until: "2026-08-09T06:00:00.000Z",
+      historyStart: "2024-01-01T00:00:00.000Z",
+      cursor: "next-cursor",
+    };
+    const progress = {
+      latestUntil: updatedAt.toISOString(),
+      historyStart: nextPage.historyStart,
+      loadedWindowCount: 2,
+      frontiers: [nextPage],
+    };
+    const task = makeTask("task-1");
+
+    cache.set("today", [task], updatedAt, true, progress);
+
+    expect(cache.get("today", true)).toEqual({
+      tasks: [task],
+      updatedAt,
+      completedTasksProgress: progress,
+    });
+    expect(cache.serialize().entries['{"filter":"today","completedTasks":true}']).toEqual({
+      tasks: [task],
+      updatedAt: updatedAt.toISOString(),
+      completedTasksProgress: progress,
+    });
+
+    const completedAt = new Date("2026-08-09T07:00:00.000Z");
+    cache.completeTaskInAll("task-1", completedAt);
+    expect(cache.get("today", true)?.completedTasksProgress).toEqual(progress);
+  });
+
+  it("migrates the one-frontier completed-history cache without discarding progress", () => {
+    const cache = new QueryCache();
+    const nextPage = {
+      since: "2026-05-11T06:00:00.000Z",
+      until: "2026-08-09T06:00:00.000Z",
+      historyStart: "2024-01-01T00:00:00.000Z",
+      cursor: "next-cursor",
+    };
+
+    cache.load({
+      version: 2,
+      credentialFingerprint: "credential-a",
+      entries: {
+        '{"filter":"today","completedTasks":true}': {
+          tasks: [],
+          updatedAt: "2026-08-09T06:00:00.000Z",
+          completedTasksNextPage: nextPage,
+        },
+      },
+    });
+
+    expect(cache.get("today", true)?.completedTasksProgress).toEqual({
+      latestUntil: "2026-08-09T06:00:00.000Z",
+      historyStart: nextPage.historyStart,
+      loadedWindowCount: 1,
+      frontiers: [nextPage],
+    });
+  });
+
   it("clears entries when the Todoist credential changes", () => {
     const cache = new QueryCache();
     const onClear = vi.fn();
@@ -130,5 +237,23 @@ describe("QueryCache", () => {
       updatedAt: newerTimestamp,
     });
     expect(cache.removeTaskFromAll("completed", removalTimestamp)).toBe(false);
+  });
+
+  it("removes a closed task from active caches and marks it completed in enabled caches", () => {
+    const cache = new QueryCache();
+    const olderTimestamp = new Date("2026-08-09T05:00:00.000Z");
+    const completedAt = new Date("2026-08-09T06:00:00.000Z");
+    const task = makeTask("task-1");
+    const retainedTask = makeTask("retained");
+    cache.set("today", [task, retainedTask], olderTimestamp);
+    cache.set("today", [task, retainedTask], olderTimestamp, true);
+
+    expect(cache.completeTaskInAll("task-1", completedAt)).toBe(true);
+    expect(cache.get("today")).toEqual({ tasks: [retainedTask], updatedAt: completedAt });
+    expect(cache.get("today", true)).toEqual({
+      tasks: [{ ...task, completedAt: completedAt.toISOString() }, retainedTask],
+      updatedAt: completedAt,
+    });
+    expect(cache.completeTaskInAll("missing-task", completedAt)).toBe(false);
   });
 });

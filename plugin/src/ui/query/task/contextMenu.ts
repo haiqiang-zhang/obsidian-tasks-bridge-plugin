@@ -12,13 +12,18 @@ type TaskContext = {
 
 export function showTaskContext(ctx: TaskContext, position: Point) {
   const i18n = t().query.contextMenu;
-  new Menu()
-    .addItem((menuItem) =>
+  const menu = new Menu();
+
+  if (ctx.task.completedAt === undefined) {
+    menu.addItem((menuItem) =>
       menuItem
         .setTitle(i18n.completeTaskLabel)
         .setIcon("check-small")
         .onClick(async () => await ctx.plugin.services.todoist.actions.closeTask(ctx.task.id)),
-    )
+    );
+  }
+
+  menu
     .addItem((menuItem) =>
       menuItem
         .setTitle(i18n.openTaskInAppLabel)

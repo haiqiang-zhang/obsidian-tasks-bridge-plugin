@@ -38,6 +38,10 @@ export class MenuItem {
     return this;
   }
   // biome-ignore lint/correctness/noUnusedFunctionParameters: mocks with empty impl
+  setIcon(icon: string | null): this {
+    return this;
+  }
+  // biome-ignore lint/correctness/noUnusedFunctionParameters: mocks with empty impl
   onClick(cb: (evt: MouseEvent | KeyboardEvent) => void): this {
     return this;
   }

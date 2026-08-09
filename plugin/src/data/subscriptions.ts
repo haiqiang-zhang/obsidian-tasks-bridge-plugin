@@ -1,5 +1,13 @@
+import type { CompletedTasksPageRequest } from "@/api";
 import type { QueryErrorKind } from "@/data/errors";
 import type { Task } from "@/data/task";
+
+export type CompletedTasksProgress = {
+  latestUntil: string;
+  historyStart: string;
+  loadedWindowCount: number;
+  frontiers: CompletedTasksPageRequest[];
+};
 
 export type SubscriptionCacheEffect = { type: "none" } | { type: "replace"; requestedAt: Date };
 
@@ -7,6 +15,7 @@ export type SubscriptionResult =
   | {
       type: "success";
       tasks: Task[];
+      completedTasksProgress?: CompletedTasksProgress;
       cacheEffect: SubscriptionCacheEffect;
     }
   | { type: "error"; kind: QueryErrorKind }
@@ -14,6 +23,7 @@ export type SubscriptionResult =
 
 export type OnSubscriptionChange = (result: SubscriptionResult) => void;
 export type Refresh = () => Promise<void>;
+export type LoadMoreCompleted = () => Promise<void>;
 
 type SubscriptionId = number;
 export type UnsubscribeCallback = () => void;
