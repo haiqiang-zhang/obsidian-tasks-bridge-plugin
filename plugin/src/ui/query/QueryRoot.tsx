@@ -208,12 +208,16 @@ const getTitle = (query: TaskQuery, result: SubscriptionResult): string => {
       return `${query.name} ${postfix}`;
     }
     case "success":
-      return name.replace("{task_count}", result.tasks.length.toString());
+      return replaceTaskCountPlaceholder(name, result.tasks.length.toString());
     case "not-ready":
-      return name.replace("{task_count}", "…");
+      return replaceTaskCountPlaceholder(name, "…");
     default: {
       const _: never = result;
       throw new Error("Unknown result type");
     }
   }
+};
+
+const replaceTaskCountPlaceholder = (name: string, replacement: string): string => {
+  return name.split("{task_count}").join(replacement);
 };

@@ -7,6 +7,10 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -18,14 +22,22 @@ jobs:
         run: npm run build
         working-directory: ./plugin
 
+      - name: Generate artifact attestation
+        uses: actions/attest@v4
+        with:
+          subject-path: |
+            plugin/dist/main.js
+            plugin/dist/manifest.json
+            plugin/dist/styles.css
+
       - name: Release
         id: create_release
         uses: softprops/action-gh-release@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: ${{ github.ref }}
-          name: Todoist Sync ++ - v${{ github.ref }}
+          tag_name: ${{ github.ref_name }}
+          name: Todoist Sync ++ - v${{ github.ref_name }}
           draft: true
           files: |
             plugin/dist/main.js
