@@ -10,6 +10,7 @@ import { execSync } from "node:child_process";
 import path, { resolve } from "node:path";
 
 const { version } = require("./package.json");
+const { id: pluginId } = require("../manifest.json");
 
 function getOutDir(): string | undefined {
   const env = loadEnv("prod", process.cwd());
@@ -22,7 +23,7 @@ function getOutDir(): string | undefined {
     return vaultDir;
   }
 
-  return path.join(vaultDir, ".obsidian", "plugins", "todoist-sync-plugin");
+  return path.join(vaultDir, ".obsidian", "plugins", pluginId);
 }
 
 function getBuildStamp(): string {
