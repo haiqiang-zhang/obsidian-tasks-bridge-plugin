@@ -1,8 +1,10 @@
 # Obsidian Todoist Sync ++
 
+Todoist Sync ++ is based on the original [Todoist Sync](https://github.com/jamiebrynes7/obsidian-todoist-plugin) plugin created by [Jamie Brynes](https://github.com/jamiebrynes7).
+
 ## What is it?
 
-**Todoist Sync ++** is an unofficial Obsidian plugin that displays Todoist tasks in Obsidian notes and supports selected updates from Obsidian. It builds on the original [Todoist Sync](https://github.com/jamiebrynes7/obsidian-todoist-plugin) plugin created by Jamie Brynes.
+**Todoist Sync ++** is an unofficial Obsidian plugin that displays Todoist tasks in Obsidian notes and supports selected updates from Obsidian.
 
 This project is not created by, affiliated with, endorsed by, or supported by Doist.
 
@@ -20,11 +22,6 @@ Compared with the upstream Todoist Sync codebase, this fork adds:
 - Compact, consistent layouts for both titled and untitled Todoist blocks.
 - Time-zone-correct same-day due-date handling.
 - Symlink-safe production builds that preserve the plugin's existing `data.json`.
-
-## Authors
-
-- [Haiqiang Zhang](https://github.com/haiqiang-zhang) — Todoist Sync ++ author and maintainer
-- [Jamie Brynes](https://github.com/jamiebrynes7) — original Todoist Sync author
 
 ## Acknowledgements
 
