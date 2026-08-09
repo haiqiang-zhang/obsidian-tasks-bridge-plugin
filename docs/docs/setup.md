@@ -15,7 +15,7 @@ If you prefer to do it manually:
 1. Open the settings in Obsidian
 2. Select 'Community Plugins' in the sidebar
 3. If necessary, turn on community plugins. Make sure you are comfortable with the warnings given to you on this page
-4. Select 'Browse' and search for "Todoist Sync"
+4. Select 'Browse' and search for "Todoist Sync ++"
 5. Install the plugin
 
 ## 2. Setup API token

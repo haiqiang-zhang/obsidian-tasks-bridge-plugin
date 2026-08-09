@@ -4,8 +4,11 @@ import type { PluginManifest } from "obsidian";
 import { type App, Notice, Plugin } from "obsidian";
 
 import { TodoistApiClient } from "@/api";
+import type { TaskId } from "@/api/domain/task";
 import { ObsidianFetcher } from "@/api/fetcher";
 import { registerCommands } from "@/commands";
+import { QueryCache } from "@/data/queryCache";
+import type { Task } from "@/data/task";
 import { secondsToMillis } from "@/infra/time";
 import { QueryInjector } from "@/query/injector";
 import { makeServices, type Services } from "@/services";
@@ -14,10 +17,15 @@ import { SettingsTab } from "@/ui/settings";
 
 // biome-ignore lint/style/noMagicNumbers: 600 seconds is easily recognizable as 10 minutes
 const metadataSyncIntervalMs = secondsToMillis(600);
+const hexadecimalRadix = 16;
+const byteHexWidth = 2;
 
 // biome-ignore lint/style/noDefaultExport: We must use default export for Obsidian plugins
 export default class TodoistPlugin extends Plugin {
   public readonly services: Services;
+  public readonly queryCache = new QueryCache();
+
+  private saveQueue: Promise<void> = Promise.resolve();
 
   constructor(app: App, pluginManifest: PluginManifest) {
     super(app, pluginManifest);
@@ -25,6 +33,10 @@ export default class TodoistPlugin extends Plugin {
   }
 
   async onload() {
+    setLanguage(document.documentElement.lang);
+    await this.loadOptions();
+    await this.bindQueryCacheToCurrentCredential();
+
     const queryInjector = new QueryInjector(this);
     this.registerMarkdownCodeBlockProcessor(
       "todoist",
@@ -33,9 +45,6 @@ export default class TodoistPlugin extends Plugin {
     this.addSettingTab(new SettingsTab(this.app, this));
 
     registerCommands(this);
-    setLanguage(document.documentElement.lang);
-
-    await this.loadOptions();
 
     this.app.workspace.onLayoutReady(async () => {
       try {
@@ -65,28 +74,87 @@ export default class TodoistPlugin extends Plugin {
 
     this.services.modals.onboarding({
       onTokenSubmit: async (token) => {
-        await accessor.write(token);
-        await this.services.todoist.initialize(new TodoistApiClient(token, new ObsidianFetcher()));
+        await this.updateApiToken(token);
       },
     });
   }
 
   async loadOptions(): Promise<void> {
-    const options = await this.loadData();
+    const storedData: unknown = await this.loadData();
+    const { queryCache, ...options } = isRecord(storedData) ? storedData : {};
+
+    this.queryCache.load(queryCache);
 
     useSettingsStore.setState((old) => {
       return {
         ...old,
-        ...options,
+        ...(options as Partial<Settings>),
       };
     }, true);
 
-    await this.saveData(useSettingsStore.getState());
+    await this.persistData();
   }
 
   async writeOptions(update: Partial<Settings>): Promise<void> {
     useSettingsStore.setState(update);
-    await this.saveData(useSettingsStore.getState());
+    await this.persistData();
+  }
+
+  async writeQueryCache(filter: string, tasks: Task[], updatedAt: Date): Promise<void> {
+    if (!this.queryCache.set(filter, tasks, updatedAt)) {
+      return;
+    }
+    await this.persistData();
+  }
+
+  async removeTaskFromAllQueryCaches(taskId: TaskId, updatedAt: Date): Promise<void> {
+    if (!this.queryCache.removeTaskFromAll(taskId, updatedAt)) {
+      return;
+    }
+    await this.persistData();
+  }
+
+  async updateApiToken(token: string): Promise<void> {
+    await this.services.token.write(token);
+    const fingerprint = await fingerprintCredential(token);
+    const credentialChanged = this.queryCache.bindCredential(fingerprint);
+
+    if (credentialChanged) {
+      this.services.todoist.reset();
+    }
+
+    const initialization = this.services.todoist.initialize(
+      new TodoistApiClient(token, new ObsidianFetcher()),
+    );
+
+    if (credentialChanged) {
+      await this.persistData();
+    }
+
+    await initialization;
+  }
+
+  private async bindQueryCacheToCurrentCredential(): Promise<void> {
+    const token = await this.services.token.read();
+    const fingerprint = token === null ? null : await fingerprintCredential(token);
+
+    if (this.queryCache.bindCredential(fingerprint)) {
+      await this.persistData();
+    }
+  }
+
+  private persistData(): Promise<void> {
+    const pendingWrite = this.saveQueue
+      .catch(() => undefined)
+      .then(async () => {
+        await this.saveData({
+          ...useSettingsStore.getState(),
+          queryCache: this.queryCache.serialize(),
+        });
+      });
+
+    this.saveQueue = pendingWrite;
+    return pendingWrite;
   }
 
   private static readonly settingsVersion = 1;
@@ -116,3 +184,15 @@ export default class TodoistPlugin extends Plugin {
     }
   }
 }
+
+const isRecord = (value: unknown): value is Record<string, unknown> => {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+};
+
+const fingerprintCredential = async (token: string): Promise<string> => {
+  const tokenBytes = new TextEncoder().encode(token);
+  const digest = await globalThis.crypto.subtle.digest("SHA-256", tokenBytes);
+  return Array.from(new Uint8Array(digest), (byte) =>
+    byte.toString(hexadecimalRadix).padStart(byteHexWidth, "0"),
+  ).join("");
+};

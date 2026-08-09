@@ -1,57 +1,131 @@
 @use "../../styles/colors.scss";
 
+@keyframes todoist-query-spin {
+  100% {
+    transform: rotate(360deg);
+  }
+}
+
+.todoist-query {
+  --todoist-query-actions-width: calc(var(--size-4-18) + var(--size-4-6));
+
+  position: relative;
+
+  &.is-untitled .todoist-query-content > .todoist-tasks-list:first-child,
+  &.is-untitled .todoist-query-content > .todoist-callout:first-child,
+  &.is-untitled
+    .todoist-query-content
+    > .todoist-group:first-child
+    > .todoist-group-title:first-child {
+    margin-block-start: var(--size-4-1);
+  }
+
+  &.is-untitled
+    .todoist-query-content
+    > .todoist-tasks-list:first-child
+    > .todoist-task-container:first-child,
+  &.is-untitled
+    .todoist-query-content
+    > .todoist-group:first-child
+    > .todoist-group-title:first-child {
+    padding-inline-end: var(--todoist-query-actions-width);
+  }
+
+  &.is-untitled .todoist-query-content > .todoist-callout:first-child {
+    margin-inline-end: var(--todoist-query-actions-width);
+  }
+}
+
 .todoist-query-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: var(--size-4-2);
+  min-height: var(--size-4-8);
+  padding-block: var(--size-4-1);
+
+  &.has-actions {
+    padding-inline-end: var(--todoist-query-actions-width);
+  }
 
   .todoist-query-title {
-    font-size: 1.25em;
+    min-width: 0;
+    margin: 0;
+    overflow-wrap: anywhere;
   }
+}
 
-  .todoist-query-controls {
-    display: flex;
-    align-items: center;
-    justify-content: end;
+.todoist-query-fallback-actions {
+  position: absolute;
+  z-index: 1;
+  top: var(--size-2-2);
+  inset-inline-end: var(--size-2-2);
+  opacity: 0;
+  transition: opacity var(--anim-duration-fast) ease-in-out;
 
-    * + * {
-      margin-left: 0.5em;
-    }
-
-    .todoist-query-control-button {
-      padding: var(--size-2-2) var(--size-2-3);
-      color: var(--text-muted);
-      border-radius: var(--radius-s);
-      border: 1px solid var(--color-base-40);
-      box-shadow: none;
-
-      transition: opacity 0.33s;
-      opacity: 0;
-
-      .block-language-todoist:hover & {
-        opacity: 1;
-      }
-
-      &:hover {
-        background-color: inherit;
-        border: 1px solid var(--interactive-accent);
-      }
-
-      .markdown-reading-view &.edit-query {
-        display: none;
-      }
-
-      &.refresh-query.is-refreshing > .obsidian-icon {
-        @-webkit-keyframes spin {
-          100% {
-            -webkit-transform: rotate(360deg);
-          }
-        }
-
-        animation: spin 1s linear infinite reverse;
-      }
-    }
+  .todoist-query:hover &,
+  &:focus-within {
+    opacity: 1;
   }
+}
+
+@media (hover: none) {
+  .todoist-query-fallback-actions {
+    opacity: 1;
+  }
+}
+
+.cm-lang-todoist .todoist-query-fallback-actions {
+  inset-inline-end: calc(var(--size-4-9) + var(--size-2-2));
+}
+
+.todoist-query-controls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--size-2-1);
+}
+
+.embed-actions > .todoist-query-controls {
+  order: -1;
+}
+
+.todoist-query-control-button {
+  flex: none;
+  border: 0;
+  box-shadow: none;
+
+  &.refresh-query.is-refreshing > .obsidian-icon {
+    animation: todoist-query-spin 1s linear infinite reverse;
+  }
+}
+
+.todoist-query-loading {
+  display: flex;
+  min-height: var(--size-4-16);
+  align-items: center;
+  justify-content: center;
+  gap: var(--size-4-2);
+  padding-block: var(--size-4-4);
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+
+  .todoist-query-loading-icon {
+    flex: none;
+    color: var(--interactive-accent);
+    animation: todoist-query-spin 1s linear infinite;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .todoist-query-loading-icon,
+  .todoist-query-control-button.refresh-query.is-refreshing > .obsidian-icon {
+    animation: none;
+  }
+}
+
+.cm-lang-todoist .embed-actions:focus-within {
+  opacity: 1;
 }
 
 .todoist-query-warnings {

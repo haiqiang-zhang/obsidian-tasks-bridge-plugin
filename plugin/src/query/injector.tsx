@@ -2,19 +2,13 @@ import type { MarkdownPostProcessorContext } from "obsidian";
 import { MarkdownRenderChild } from "obsidian";
 import type React from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { create, type StoreApi, type UseBoundStore } from "zustand";
 
 import type TodoistPlugin from "@/index";
 import { debug } from "@/log";
 import { parseQuery } from "@/query/parser";
 import { applyReplacements } from "@/query/replacements";
 import { taskQueryDefinition } from "@/query/schema/tasks";
-import {
-  type MarkdownEditButton,
-  MarkdownEditButtonContext,
-  PluginContext,
-  RenderChildContext,
-} from "@/ui/context";
+import { PluginContext, RenderChildContext } from "@/ui/context";
 import { QueryError } from "@/ui/query/QueryError";
 import { QueryRoot } from "@/ui/query/QueryRoot";
 
@@ -36,27 +30,15 @@ export class QueryInjector {
         context: query,
       });
 
-      child = new ReactRenderer(
-        el,
-        this.plugin,
-        QueryRoot,
-        {
-          query,
-          warnings,
-        },
-        true,
-      );
+      child = new ReactRenderer(el, this.plugin, QueryRoot, {
+        query,
+        warnings,
+      });
     } catch (e) {
       console.error(e);
-      child = new ReactRenderer(
-        el,
-        this.plugin,
-        QueryError,
-        {
-          error: e,
-        },
-        false,
-      );
+      child = new ReactRenderer(el, this.plugin, QueryError, {
+        error: e,
+      });
     }
 
     ctx.addChild(child);
@@ -69,72 +51,26 @@ class ReactRenderer<T extends {}> extends MarkdownRenderChild {
   private readonly component: React.FC<T>;
   private readonly reactRoot: Root;
 
-  private readonly observer: MutationObserver;
-
-  private readonly store: UseBoundStore<StoreApi<MarkdownEditButton>>;
-
-  constructor(
-    container: HTMLElement,
-    plugin: TodoistPlugin,
-    component: React.FC<T>,
-    props: T,
-    interceptEditButton: boolean,
-  ) {
+  constructor(container: HTMLElement, plugin: TodoistPlugin, component: React.FC<T>, props: T) {
     super(container);
     this.plugin = plugin;
     this.component = component;
     this.props = props;
     this.reactRoot = createRoot(this.containerEl);
-    this.store = create(() => {
-      return { click: () => {} };
-    });
-
-    this.observer = new MutationObserver((mutations) => {
-      if (!interceptEditButton) {
-        return;
-      }
-
-      for (const mutation of mutations) {
-        for (const addedNode of mutation.addedNodes) {
-          if (!(addedNode instanceof HTMLElement)) {
-            continue;
-          }
-
-          if (!addedNode.classList.contains("edit-block-button")) {
-            continue;
-          }
-
-          addedNode.hide();
-          this.store.setState({
-            click: () => addedNode.click(),
-          });
-          return;
-        }
-      }
-    });
   }
 
   onload(): void {
-    if (this.containerEl.parentElement !== null) {
-      this.observer.observe(this.containerEl.parentElement, {
-        childList: true,
-      });
-    }
-
     const Component = this.component;
     this.reactRoot.render(
-      <MarkdownEditButtonContext.Provider value={this.store}>
-        <RenderChildContext.Provider value={this}>
-          <PluginContext.Provider value={this.plugin}>
-            <Component {...this.props} />
-          </PluginContext.Provider>
-        </RenderChildContext.Provider>
-      </MarkdownEditButtonContext.Provider>,
+      <RenderChildContext.Provider value={this}>
+        <PluginContext.Provider value={this.plugin}>
+          <Component {...this.props} />
+        </PluginContext.Provider>
+      </RenderChildContext.Provider>,
     );
   }
 
   onunload(): void {
     this.reactRoot.unmount();
-    this.observer.disconnect();
   }
 }

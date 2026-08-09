@@ -1,7 +1,7 @@
 {
   "name": "@obsidian-todoist/plugin",
   "version": "2.6.0",
-  "description": "A Todoist plugin for Obsidian",
+  "description": "Synchronize Todoist tasks with Obsidian.",
   "scripts": {
     "check": "tsgo --noEmit",
     "dev": "npm run check && VITE_ENV=dev vite build",
@@ -11,7 +11,7 @@
     "lint:check": "biome check ./src",
     "lint:fix": "biome check --write ./src"
   },
-  "author": "Jamie Brynes",
+  "author": "Jamie Brynes and Haiqiang Zhang",
   "license": "ISC",
   "dependencies": {
     "@internationalized/date": "3.10.0",

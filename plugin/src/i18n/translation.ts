@@ -205,6 +205,9 @@ export type Translations = {
   };
   query: {
     displays: {
+      loading: {
+        label: string;
+      };
       empty: {
         label: string;
       };
@@ -229,6 +232,7 @@ export type Translations = {
     header: {
       errorPostfix: string;
       refreshTooltip: {
+        label: string;
         lastRefreshed: (datetime: string) => string;
         notRefreshed: string;
       };

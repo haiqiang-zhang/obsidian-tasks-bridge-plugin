@@ -11,6 +11,7 @@ describe("QueryResponseHandler - no tasks rendering", () => {
   const emptyResult: SubscriptionResult = {
     type: "success",
     tasks: [],
+    cacheEffect: { type: "none" },
   };
 
   it("should render empty display when there are no tasks", () => {
@@ -120,8 +121,8 @@ describe("QueryResponseHandler - not ready rendering", () => {
     const result: SubscriptionResult = { type: "not-ready" };
     const query = makeQuery({ filter: "today" });
 
-    const { container } = render(<QueryResponseHandler result={result} query={query} />);
+    render(<QueryResponseHandler result={result} query={query} />);
 
-    expect(container).toBeEmptyDOMElement();
+    expect(screen.getByRole("status")).toHaveTextContent("Loading Todoist tasks");
   });
 });

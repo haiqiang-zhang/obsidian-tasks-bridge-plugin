@@ -1,6 +1,7 @@
 import {
   CalendarDate,
   fromDate,
+  isSameDay as isSameCalendarDay,
   parseAbsolute,
   parseDate,
   parseDateTime,
@@ -233,9 +234,6 @@ export const DueDate = {
 };
 
 function isSameDay(a: Date, b: Date): boolean {
-  return (
-    a.getFullYear() === b.getFullYear() &&
-    a.getMonth() === b.getMonth() &&
-    a.getDate() === b.getDate()
-  );
+  const timeZone = timezone();
+  return isSameCalendarDay(fromDate(a, timeZone), fromDate(b, timeZone));
 }

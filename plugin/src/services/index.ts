@@ -13,6 +13,10 @@ export const makeServices = (plugin: TodoistPlugin): Services => {
   return {
     modals: new ModalHandler(plugin),
     token: new VaultTokenAccessor(plugin.app.vault, plugin.app.secretStorage),
-    todoist: new TodoistAdapter(),
+    todoist: new TodoistAdapter({
+      onTaskClosed: async (taskId, completedAt) => {
+        await plugin.removeTaskFromAllQueryCaches(taskId, completedAt);
+      },
+    }),
   };
 };

@@ -15,6 +15,7 @@ export interface RepositoryReader<T, U> {
 
 export interface RepositoryWriter<U> {
   applyDiff(changed: U[]): void;
+  clear(): void;
 }
 
 export class Repository<T, U extends RepositoryItem<T>>
@@ -30,6 +31,10 @@ export class Repository<T, U extends RepositoryItem<T>>
       }
       this.data.set(item.id, item);
     }
+  }
+
+  public clear(): void {
+    this.data.clear();
   }
 
   public byId(id: T): U | undefined {

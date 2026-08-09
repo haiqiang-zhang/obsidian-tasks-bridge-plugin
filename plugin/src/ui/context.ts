@@ -1,6 +1,5 @@
 import type { MarkdownRenderChild } from "obsidian";
 import { createContext, type Provider, useContext } from "react";
-import type { StoreApi, UseBoundStore } from "zustand";
 
 import type TodoistPlugin from "@/index";
 import type { TaskQuery } from "@/query/schema/tasks";
@@ -36,9 +35,3 @@ export type ModalInfo = {
 export const ModalContext = makeContext<ModalInfo>();
 
 export const RenderChildContext = makeContext<MarkdownRenderChild>();
-
-export type MarkdownEditButton = {
-  click: () => void;
-};
-
-export const MarkdownEditButtonContext = makeContext<UseBoundStore<StoreApi<MarkdownEditButton>>>();

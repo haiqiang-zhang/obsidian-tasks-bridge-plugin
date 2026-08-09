@@ -224,6 +224,9 @@ export const en: Translations = {
   },
   query: {
     displays: {
+      loading: {
+        label: "Loading Todoist tasks",
+      },
       empty: {
         label: "The query returned no tasks",
       },
@@ -253,6 +256,7 @@ export const en: Translations = {
     header: {
       errorPostfix: "(Error)",
       refreshTooltip: {
+        label: "Refresh tasks",
         lastRefreshed: (datetime: string) => `Last refreshed at: ${datetime}`,
         notRefreshed: "Not queried yet",
       },

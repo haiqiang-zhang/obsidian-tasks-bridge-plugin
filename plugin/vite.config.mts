@@ -71,6 +71,8 @@ export default defineConfig({
     dedupe: ["react", "react-dom"],
   },
   build: {
+    // The output directory may be symlinked into a live Vault. Preserve Obsidian's data.json.
+    emptyOutDir: false,
     // We aren't building a website, so we build in library mode
     // and bundle the output using our index.ts as the entrypoint.
     minify: getShouldMinify(),

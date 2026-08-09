@@ -168,6 +168,7 @@ export const nl: DeepPartial<Translations> = {
     header: {
       errorPostfix: "(Fout)",
       refreshTooltip: {
+        label: "Taken vernieuwen",
         lastRefreshed: (datetime: string) => `Laatst ververst op: ${datetime}`,
         notRefreshed: "Nog niet opgehaald",
       },

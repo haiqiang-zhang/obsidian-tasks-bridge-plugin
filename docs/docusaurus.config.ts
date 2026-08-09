@@ -2,8 +2,8 @@ import { themes as prismThemes } from "prism-react-renderer";
 import type { Config } from "@docusaurus/types";
 import type * as Preset from "@docusaurus/preset-classic";
 
-const title = "Sync with Todoist Plugin";
-const org = "jamiebrynes7";
+const title = "Todoist Sync ++";
+const org = "haiqiang-zhang";
 const project = "obsidian-todoist-plugin";
 
 const config: Config = {
@@ -38,7 +38,6 @@ const config: Config = {
     ],
   ],
   themeConfig: {
-    image: "img/social-card.jpg",
     navbar: {
       title: title,
       items: [

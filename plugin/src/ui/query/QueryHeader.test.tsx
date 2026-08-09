@@ -1,9 +1,9 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
+import { MarkdownRenderChild } from "obsidian";
 import type React from "react";
 import { describe, expect, it, vi } from "vitest";
-import { create } from "zustand";
 
-import { type MarkdownEditButton, MarkdownEditButtonContext, PluginContext } from "@/ui/context";
+import { PluginContext, RenderChildContext } from "@/ui/context";
 
 import { QueryHeader } from "./QueryHeader";
 
@@ -17,17 +17,18 @@ const mockPlugin = {
   },
 } as unknown as ReturnType<typeof PluginContext.use>;
 
-const mockEditClick = vi.fn();
-const mockEditButtonStore = create<MarkdownEditButton>(() => ({
-  click: mockEditClick,
-}));
+const makeWrapper = (embedActions?: HTMLElement): React.FC<{ children: React.ReactNode }> => {
+  const host = document.createElement("div");
+  const renderContainer = document.createElement("div");
+  host.append(renderContainer);
+  if (embedActions !== undefined) {
+    host.append(embedActions);
+  }
+  const renderChild = new MarkdownRenderChild(renderContainer);
 
-const Wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  return (
+  return ({ children }) => (
     <PluginContext.Provider value={mockPlugin}>
-      <MarkdownEditButtonContext.Provider value={mockEditButtonStore}>
-        {children}
-      </MarkdownEditButtonContext.Provider>
+      <RenderChildContext.Provider value={renderChild}>{children}</RenderChildContext.Provider>
     </PluginContext.Provider>
   );
 };
@@ -41,13 +42,13 @@ describe("QueryHeader", () => {
         refresh={vi.fn()}
         refreshedTimestamp={undefined}
       />,
-      { wrapper: Wrapper },
+      { wrapper: makeWrapper() },
     );
 
-    expect(screen.getByText("My Tasks")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 4, name: "My Tasks" })).toBeInTheDocument();
   });
 
-  it("should render three control buttons", () => {
+  it("should render two plugin control buttons", () => {
     const { container } = render(
       <QueryHeader
         title="Tasks"
@@ -55,12 +56,44 @@ describe("QueryHeader", () => {
         refresh={vi.fn()}
         refreshedTimestamp={undefined}
       />,
-      { wrapper: Wrapper },
+      { wrapper: makeWrapper() },
     );
 
     expect(container.querySelector(".add-task")).toBeInTheDocument();
     expect(container.querySelector(".refresh-query")).toBeInTheDocument();
-    expect(container.querySelector(".edit-query")).toBeInTheDocument();
+    expect(container.querySelector(".edit-query")).not.toBeInTheDocument();
+    expect(container.querySelector(".todoist-query-controls")).toHaveClass("interactive-child");
+    expect(screen.getByRole("button", { name: "Add task" })).toHaveClass("clickable-icon");
+    expect(screen.getByRole("button", { name: "Refresh tasks" })).toHaveClass("clickable-icon");
+  });
+
+  it("should not render an empty title header when native block actions are available", () => {
+    const embedActions = document.createElement("div");
+    embedActions.className = "embed-actions";
+    const { container } = render(
+      <QueryHeader title="" isFetching={false} refresh={vi.fn()} refreshedTimestamp={undefined} />,
+      { wrapper: makeWrapper(embedActions) },
+    );
+
+    expect(container.querySelector(".todoist-query-header")).not.toBeInTheDocument();
+    expect(within(embedActions).getByRole("button", { name: "Add task" })).toHaveClass(
+      "todoist-query-control-button",
+    );
+    expect(within(embedActions).getByRole("button", { name: "Refresh tasks" })).toHaveClass(
+      "todoist-query-control-button",
+    );
+  });
+
+  it("should use an out-of-flow fallback toolbar without an empty title header", () => {
+    const { container } = render(
+      <QueryHeader title="" isFetching={false} refresh={vi.fn()} refreshedTimestamp={undefined} />,
+      { wrapper: makeWrapper() },
+    );
+
+    expect(container.querySelector(".todoist-query-header")).not.toBeInTheDocument();
+    expect(container.querySelector(".todoist-query-fallback-actions")).toContainElement(
+      screen.getByRole("button", { name: "Add task" }),
+    );
   });
 
   it("should show 'is-refreshing' class during fetch", () => {
@@ -71,7 +104,7 @@ describe("QueryHeader", () => {
         refresh={vi.fn()}
         refreshedTimestamp={undefined}
       />,
-      { wrapper: Wrapper },
+      { wrapper: makeWrapper() },
     );
 
     expect(container.querySelector(".refresh-query.is-refreshing")).toBeInTheDocument();
@@ -85,7 +118,7 @@ describe("QueryHeader", () => {
         refresh={vi.fn()}
         refreshedTimestamp={undefined}
       />,
-      { wrapper: Wrapper },
+      { wrapper: makeWrapper() },
     );
 
     expect(container.querySelector(".refresh-query.is-refreshing")).not.toBeInTheDocument();

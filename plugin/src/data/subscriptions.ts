@@ -1,8 +1,14 @@
 import type { QueryErrorKind } from "@/data/errors";
 import type { Task } from "@/data/task";
 
+export type SubscriptionCacheEffect = { type: "none" } | { type: "replace"; requestedAt: Date };
+
 export type SubscriptionResult =
-  | { type: "success"; tasks: Task[] }
+  | {
+      type: "success";
+      tasks: Task[];
+      cacheEffect: SubscriptionCacheEffect;
+    }
   | { type: "error"; kind: QueryErrorKind }
   | { type: "not-ready" };
 

@@ -71,7 +71,7 @@ export class ModalHandler {
 
   public onboarding(props: React.ComponentProps<typeof OnboardingModal>) {
     new ReactModal(this.plugin, OnboardingModal, props, {
-      title: "Sync with Todoist Setup",
+      title: "Todoist Sync ++ Setup",
     }).open();
   }
 

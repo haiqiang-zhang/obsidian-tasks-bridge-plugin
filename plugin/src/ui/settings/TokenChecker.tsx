@@ -4,8 +4,6 @@ import { useEffect, useState } from "react";
 import { t } from "@/i18n";
 import { PluginContext } from "@/ui/context";
 
-import { TodoistApiClient } from "../../api";
-import { ObsidianFetcher } from "../../api/fetcher";
 import { TokenValidation } from "../../token";
 import { TokenValidationIcon } from "../components/token-validation-icon";
 import { Setting } from "./SettingItem";
@@ -16,7 +14,7 @@ type Props = {
 
 export const TokenChecker: React.FC<Props> = ({ tester }) => {
   const plugin = PluginContext.use();
-  const { token: tokenAccessor, todoist, modals } = plugin.services;
+  const { token: tokenAccessor, modals } = plugin.services;
 
   const [tokenState, setTokenState] = useState<TokenValidation.Result>({
     kind: "in-progress",
@@ -45,8 +43,7 @@ export const TokenChecker: React.FC<Props> = ({ tester }) => {
       onTokenSubmit: async (token) => {
         setTokenValidationCount((old) => old + 1);
 
-        await tokenAccessor.write(token);
-        await todoist.initialize(new TodoistApiClient(token, new ObsidianFetcher()));
+        await plugin.updateApiToken(token);
       },
     });
   };

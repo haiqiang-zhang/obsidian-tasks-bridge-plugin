@@ -383,7 +383,7 @@ async function updateAndPublishRelease(version: string): Promise<void> {
 
   logStarted("Publishing release...");
   exec(
-    `gh release edit ${version} --title "Sync with Todoist Plugin - v${version}" --notes ${JSON.stringify(changelogContent)} --draft=false`,
+    `gh release edit ${version} --title "Todoist Sync ++ - v${version}" --notes ${JSON.stringify(changelogContent)} --draft=false`,
   );
 
   logCompleted(`Release v${version} published successfully! 🎉`);
