@@ -21,14 +21,10 @@
       <stop offset=".48" stop-color="#9b78f6"/>
       <stop offset="1" stop-color="#7452d6"/>
     </linearGradient>
-    <filter id="material-elevation" x="-25%" y="-25%" width="150%" height="160%" color-interpolation-filters="sRGB">
-      <feDropShadow dx="-.16" dy="-.16" stdDeviation=".12" flood-color="#ffffff" flood-opacity=".24"/>
-      <feDropShadow dx="0" dy=".48" stdDeviation=".34" flood-color="#32121c" flood-opacity=".32"/>
-    </filter>
   </defs>
   <g fill="none" stroke-linecap="round" stroke-linejoin="round">
-    <rect x="2" y="2" width="20" height="20" rx="4" fill="url(#surface)" stroke="url(#todoist-frame)" stroke-width="2" filter="url(#material-elevation)"/>
-    <path d="M10.5 9v8M6.5 13h8" stroke="url(#todoist-plus)" stroke-width="2" filter="url(#material-elevation)"/>
-    <path d="M17.25 5.5V9M15.5 7.25H19" stroke="url(#obsidian-plus)" stroke-width="1.75" filter="url(#material-elevation)"/>
+    <rect x="2" y="2" width="20" height="20" rx="4" fill="url(#surface)" stroke="url(#todoist-frame)" stroke-width="2"/>
+    <path d="M10.5 9v8M6.5 13h8" stroke="url(#todoist-plus)" stroke-width="2"/>
+    <path d="M17.25 5.5V9M15.5 7.25H19" stroke="url(#obsidian-plus)" stroke-width="1.75"/>
   </g>
 </svg>
