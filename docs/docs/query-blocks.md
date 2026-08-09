@@ -56,7 +56,7 @@ For example:
 
 ````
 ```todoist
-filter: "##计算机网络"
+filter: "##Computer Networks"
 groupBy: "section"
 completedTasks: true
 ```
