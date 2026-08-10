@@ -153,7 +153,7 @@ function updateChangelog(version: string): void {
 
   // Find the "Unreleased" section and replace with version + date
   const today = new Date().toISOString().split("T")[0];
-  const updated = changelog.replace(/## Unreleased/, `## v${version} (${today})`);
+  const updated = changelog.replace(/## Unreleased/, `## Unreleased\n\n## v${version} (${today})`);
 
   if (updated === changelog) {
     error(
@@ -163,12 +163,6 @@ function updateChangelog(version: string): void {
 
   writeFileSync(changelogPath, updated);
   logCompleted("Updated changelog with version and date");
-}
-
-function bumpDocsVersion(version: string): void {
-  logStarted("Creating versioned documentation...");
-  exec(`npm run bump-version -- ${version}`, { cwd: join(REPO_ROOT, "docs") });
-  logCompleted("Created versioned documentation");
 }
 
 function updateVersionFiles(version: string): void {
@@ -383,7 +377,7 @@ async function updateAndPublishRelease(version: string): Promise<void> {
 
   logStarted("Publishing release...");
   exec(
-    `gh release edit ${version} --title "Todoist Sync ++ - v${version}" --notes ${JSON.stringify(changelogContent)} --draft=false`,
+    `gh release edit ${version} --title "Tasks Bridge - v${version}" --notes ${JSON.stringify(changelogContent)} --draft=false`,
   );
 
   logCompleted(`Release v${version} published successfully! 🎉`);
@@ -409,7 +403,6 @@ async function main(): Promise<void> {
   ensureOnMaster();
   createReleaseBranch(version);
   updateChangelog(version);
-  bumpDocsVersion(version);
   updateVersionFiles(version);
   const prUrl = createAndPushPR(version);
   await waitForChecksAndMerge(prUrl);

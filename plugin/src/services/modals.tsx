@@ -72,7 +72,7 @@ export class ModalHandler {
 
   public onboarding(props: React.ComponentProps<typeof OnboardingModal>) {
     new ReactModal(this.plugin, OnboardingModal, props, {
-      title: "Todoist Sync ++ Setup",
+      title: "Tasks Bridge Setup",
     }).open();
   }
 

@@ -10,7 +10,6 @@ All commands run from this `docs/` directory:
 - `npm run build` - Build documentation site for production
 - `npm run serve` - Serve built site locally
 - `npm run clear` - Clear Docusaurus cache
-- `npm run bump-version -- ${VERSION}` - Create new versioned docs (e.g., `npm run bump-version -- 2.2.0`)
 - `npm run write-translations` - Extract translatable strings
 - `npm run write-heading-ids` - Add heading IDs to markdown files
 - `npm run typecheck` - TypeScript type checking
@@ -22,13 +21,9 @@ All commands run from this `docs/` directory:
 - `docs/contributing/` - Developer and contributor guides
 - `sidebars.ts` - Navigation structure (update when adding new pages)
 
-## Versioned Documentation
+## Documentation Publishing
 
-The site supports versioned documentation with past versions stored in:
-
-- `versioned_docs/version-X.Y.Z/` - Snapshot of docs for each version
-- `versioned_sidebars/` - Sidebar configuration for each version
-- `versions.json` - List of available versions
+The site publishes `docs/` as its single current documentation set. Do not create Docusaurus version snapshots or add `versioned_docs`, `versioned_sidebars`, or a docs-level `versions.json`.
 
 ## Site Configuration
 
@@ -54,10 +49,10 @@ The site supports versioned documentation with past versions stored in:
 2. Update `sidebars.ts` to include new pages in navigation
 3. Use MDX format for pages requiring React components
 
-### Managing Versions
+### Managing Releases
 
-- Only cut new documentation versions for minor/major releases
-- Version bumping copies current docs to versioned storage
+- Keep the documentation current in place.
+- Record released versions in `docs/changelog.md`; do not create frozen documentation snapshots.
 
 ### Translation Support
 
