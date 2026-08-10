@@ -15,12 +15,37 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Validate release version
+        env:
+          RELEASE_VERSION: ${{ github.ref_name }}
+        run: |
+          node -e '
+            const fs = require("node:fs");
+            const tag = process.env.RELEASE_VERSION;
+            const manifest = JSON.parse(fs.readFileSync("manifest.json", "utf8"));
+            const packageJson = JSON.parse(fs.readFileSync("plugin/package.json", "utf8"));
+            if (!/^\d+\.\d+\.\d+$/.test(tag)) throw new Error(`Invalid release tag: ${tag}`);
+            if (manifest.version !== tag) throw new Error(`manifest.json is ${manifest.version}, expected ${tag}`);
+            if (packageJson.version !== tag) throw new Error(`plugin/package.json is ${packageJson.version}, expected ${tag}`);
+          '
+
       - name: Setup
         uses: ./.github/actions/setup
 
       - name: Build
         run: npm run build
         working-directory: ./plugin
+
+      - name: Validate built manifest
+        env:
+          RELEASE_VERSION: ${{ github.ref_name }}
+        run: |
+          node -e '
+            const fs = require("node:fs");
+            const tag = process.env.RELEASE_VERSION;
+            const manifest = JSON.parse(fs.readFileSync("plugin/dist/manifest.json", "utf8"));
+            if (manifest.version !== tag) throw new Error(`Built manifest is ${manifest.version}, expected ${tag}`);
+          '
 
       - name: Generate artifact attestation
         uses: actions/attest@v4
@@ -37,7 +62,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: ${{ github.ref_name }}
-          name: Todoist Sync ++ - v${{ github.ref_name }}
+          name: Tasks Bridge - v${{ github.ref_name }}
           draft: true
           files: |
             plugin/dist/main.js

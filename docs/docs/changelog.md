@@ -12,17 +12,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
-### Features
+## v2.8.0 (2026-08-10)
 
-- Added a collapsible **Project overview** to **Tasks List** with completion progress, status totals, project counts, last-sync time, and a nested project breakdown. Its statistics use the latest complete Project Sync snapshot for the selected root and every synchronized descendant, including zero-task child projects, while task rows and toolbar counts continue to respect Base filters.
+### ✨ Features
 
-### Changes
+- Added `completedTasks: true` to query blocks. The newest three months load automatically with 200-task cursor pagination; **Load 6 months**, **Load 9 months**, **Load 12 months**, and later steps fetch older three-month windows.
+- Cached completed-task history and progress for immediate display. Completed tasks remain checked, read-only, and compatible with filtering, grouping, sorting, and metadata options.
+- Added one-way **Project Sync** with multiple validated Todoist-project-to-Vault-folder mappings, optional descendant folders, complete available active and completed history, and Bases-friendly `todoist_*` Markdown properties.
+- Added safe, resumable projections that preserve user content, defer open notes and conflicts, retain stale or out-of-scope tasks, and preserve notes during folder or cross-mapping moves.
+- Added hierarchical project selection, Obsidian's folder selector, inline validation, **Sync now**, the **Sync Todoist projects** command, startup sync, and shared periodic refresh.
+- Added the **Tasks List** Bases view with Project → Section → Task → Subtask hierarchy, arbitrary roots, native Base controls, note navigation, and Todoist-backed edit, complete, and reopen actions.
+- Added a collapsible **Project overview** with complete selected-root, descendant, zero-task-project, and multi-mapping statistics independent of Base-filtered rows.
 
-- Renamed the plugin to **Tasks Bridge** with the plugin ID `tasks-bridge`.
-- Repositioned the project as a bridge between Obsidian and external task-management services: those services remain the task backends and systems of record, while Obsidian provides the interaction and presentation layer.
-- Kept Todoist as the first supported backend and retained the original Todoist Sync acknowledgement.
-- Renamed the custom Bases view to **Tasks List** and changed its internal view type to `tasks-list`.
-- Existing installations must preserve `data.json`, rename the local plugin folder from `todoist-sync-plus` to `tasks-bridge`, restart Obsidian, and enable the new plugin ID.
+### 🔁 Changes
+
+- Rebranded **Todoist Sync ++** as **Tasks Bridge** with plugin ID `tasks-bridge`, positioning Todoist as the first supported task backend while retaining the acknowledgement of the original Todoist Sync project.
+- Extended global **Auto-refresh** to both query blocks and Project Sync while retaining per-block interval overrides.
+- Project task notes now use human-readable filenames without Todoist ID suffixes while retaining stable identifiers in their properties.
+- Unified Tasks List typography and responsive styling with Obsidian's interface font, theme variables, native controls, and reduced-motion support.
+- Reworked the documentation with a Project Sync guide, Tasks List Base template, completed-history API explanation, migration instructions, updated branding and links, and current-version-only publishing.
+- Updated release tooling to publish GitHub Releases under the **Tasks Bridge** name without generating duplicate versioned documentation.
+- Existing users must preserve `data.json`, rename the local plugin folder from `todoist-sync-plus` to `tasks-bridge`, restart Obsidian, enable the new plugin ID, and update full command-ID prefixes.
+
+### 🐛 Bug Fixes
+
+- Fixed Tasks List complete and reopen actions remaining stuck or reporting false failures after Todoist accepted the change.
+- Fixed completion-state and account-change races during Project Sync, including reopened recurring tasks and responses from obsolete credentials.
+- Prevented completed-history pagination loops; failed windows remain retryable, and same-filter blocks share requests and progress.
+- Stabilized grouped-query headers during metadata hydration and synchronized completion changes across active-only and completed-enabled caches.
+- Prevented failed or interrupted Project Sync refreshes from replacing the last complete Project overview snapshot with partial statistics.
+- Tasks List now reports disabled, unconfigured, syncing, unavailable-root, and failed overview states without an indefinite spinner.
 
 ## v2.7.1 (2026-08-09)
 
