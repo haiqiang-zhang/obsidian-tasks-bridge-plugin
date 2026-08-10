@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Features
+
+- Added a collapsible **Project overview** to **Tasks List** with completion progress, status totals, project counts, last-sync time, and a nested project breakdown. Its statistics use the latest complete Project Sync snapshot for the selected root and every synchronized descendant, including zero-task child projects, while task rows and toolbar counts continue to respect Base filters.
+
 ### Changes
 
 - Renamed the plugin to **Tasks Bridge** with the plugin ID `tasks-bridge`.

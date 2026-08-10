@@ -1,6 +1,8 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import type { ProjectSyncStatisticsSnapshot, ProjectSyncStatus } from "@/project-sync";
+
 import { TodoistList } from "./TodoistList";
 import type {
   TodoistListActions,
@@ -132,21 +134,68 @@ const makeNavigation = (): TodoistListNavigation => ({
   hoverFile: vi.fn(),
 });
 
+type ProjectStatistics = ProjectSyncStatisticsSnapshot["scopes"][number]["projects"][number];
+
+const makeProjectStatistics = (
+  id: string,
+  parentId: string | null,
+  childOrder: number,
+  active: number,
+  completed: number,
+  name = id,
+): ProjectStatistics => ({
+  id,
+  parentId,
+  name,
+  childOrder,
+  directCounts: { active, completed },
+});
+
+const makeStatisticsSnapshot = (
+  projects: ProjectStatistics[],
+  syncedAt = "2026-08-10T06:30:00.000Z",
+): ProjectSyncStatisticsSnapshot => ({
+  syncedAt,
+  scopes: [
+    {
+      mappingId: "mapping-root",
+      rootProjectId: "root",
+      includeSubprojects: true,
+      projects,
+    },
+  ],
+});
+
 const renderList = (
   model: TodoistListModel,
   actions = makeActions(),
   navigation = makeNavigation(),
   onRootProjectChange = vi.fn(),
   rootProjectId: string | null = null,
+  projectStatisticsSnapshot: ProjectSyncStatisticsSnapshot | null = null,
+  projectOverviewCollapsed = false,
+  onProjectOverviewCollapsedChange = vi.fn(),
+  projectSyncStatus: ProjectSyncStatus = { state: "idle" },
+  projectSyncConfigured = true,
 ) => {
-  const makeElement = (currentModel: TodoistListModel) => (
+  const makeElement = (
+    currentModel: TodoistListModel,
+    currentSnapshot = projectStatisticsSnapshot,
+    currentOverviewCollapsed = projectOverviewCollapsed,
+    currentRootProjectId = rootProjectId,
+  ) => (
     <TodoistList
       actions={actions}
       model={currentModel}
       navigation={navigation}
+      onProjectOverviewCollapsedChange={onProjectOverviewCollapsedChange}
       onRootProjectChange={onRootProjectChange}
       options={{ density: "comfortable", showDescriptions: true, showSections: true }}
-      rootProjectId={rootProjectId}
+      projectOverviewCollapsed={currentOverviewCollapsed}
+      projectSyncConfigured={projectSyncConfigured}
+      projectSyncStatus={projectSyncStatus}
+      projectStatisticsSnapshot={currentSnapshot}
+      rootProjectId={currentRootProjectId}
     />
   );
   const rendered = render(makeElement(model));
@@ -154,12 +203,192 @@ const renderList = (
     ...rendered,
     actions,
     navigation,
+    onProjectOverviewCollapsedChange,
     onRootProjectChange,
-    rerenderList: (nextModel: TodoistListModel) => rendered.rerender(makeElement(nextModel)),
+    rerenderList: (
+      nextModel: TodoistListModel,
+      nextSnapshot = projectStatisticsSnapshot,
+      nextOverviewCollapsed = projectOverviewCollapsed,
+      nextRootProjectId = rootProjectId,
+    ) =>
+      rendered.rerender(
+        makeElement(nextModel, nextSnapshot, nextOverviewCollapsed, nextRootProjectId),
+      ),
   };
 };
 
 describe("TodoistList", () => {
+  it("uses an accessible root-project dialog and restores trigger focus on Escape", () => {
+    renderList(makeModel(makeProject("root", "Root", [makeTask("root-task")])), makeActions());
+
+    const trigger = screen.getByRole("button", { name: "Root: All projects" });
+    expect(trigger).toHaveAttribute("aria-haspopup", "dialog");
+    fireEvent.click(trigger);
+
+    const dialog = screen.getByRole("dialog", { name: "Choose a root project" });
+    expect(screen.getByRole("searchbox", { name: "Search projects" })).toHaveFocus();
+    fireEvent.keyDown(dialog, { key: "Escape" });
+
+    expect(screen.queryByRole("dialog", { name: "Choose a root project" })).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+  });
+
+  it("renders snapshot statistics for the complete selected root hierarchy", () => {
+    const snapshot = makeStatisticsSnapshot([
+      makeProjectStatistics("grandchild", "child", 0, 0, 2, "Grandchild"),
+      makeProjectStatistics("root", null, 0, 1, 0, "Root"),
+      makeProjectStatistics("empty-child", "root", 2, 0, 0, "Empty child"),
+      makeProjectStatistics("child", "root", 1, 0, 1, "Child"),
+    ]);
+    renderList(
+      makeModel(makeProject("root", "Root", [makeTask("root-task")])),
+      makeActions(),
+      makeNavigation(),
+      vi.fn(),
+      "root",
+      snapshot,
+    );
+
+    const overview = screen.getByRole("region", { name: "Project overview" });
+    expect(overview).toHaveTextContent("4 projects · 4 tasks · 75% complete");
+    expect(
+      screen.getByLabelText("Visible in Base: 1 active, 0 completed, 0 unavailable"),
+    ).toBeInTheDocument();
+    const root = overview.querySelector<HTMLElement>('[data-project-id="root"]');
+    const child = overview.querySelector<HTMLElement>('[data-project-id="child"]');
+    const grandchild = overview.querySelector<HTMLElement>('[data-project-id="grandchild"]');
+    const emptyChild = overview.querySelector<HTMLElement>('[data-project-id="empty-child"]');
+    expect(root).toContainElement(child);
+    expect(child).toContainElement(grandchild);
+    expect(root).toContainElement(emptyChild);
+    expect(emptyChild).toHaveTextContent("No tasks");
+  });
+
+  it("selects a zero-task child exposed only by the statistics snapshot", () => {
+    const snapshot = makeStatisticsSnapshot([
+      makeProjectStatistics("root", null, 0, 1, 0, "Root"),
+      makeProjectStatistics("empty-child", "root", 0, 0, 0, "Empty child"),
+    ]);
+    const onRootProjectChange = vi.fn();
+    renderList(
+      makeModel(makeProject("root", "Root", [makeTask("root-task")])),
+      makeActions(),
+      makeNavigation(),
+      onRootProjectChange,
+      null,
+      snapshot,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Root: All projects" }));
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search projects" }), {
+      target: { value: "empty" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Root / Empty child" }));
+
+    expect(onRootProjectChange).toHaveBeenCalledWith("empty-child");
+    expect(screen.getByRole("button", { name: "Root: Root / Empty child" })).toBeInTheDocument();
+    const overview = screen.getByRole("region", { name: "Project overview" });
+    expect(overview).toHaveTextContent("1 project · No tasks");
+    expect(overview.querySelector('[data-project-id="empty-child"]')).toBeInTheDocument();
+    expect(
+      screen.queryByText("The selected root project is no longer available."),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByText("No tasks under this project match the Base filters."),
+    ).toBeInTheDocument();
+  });
+
+  it("forwards the controlled Project Overview collapse state", () => {
+    const onProjectOverviewCollapsedChange = vi.fn();
+    const snapshot = makeStatisticsSnapshot([makeProjectStatistics("root", null, 0, 1, 0, "Root")]);
+    const model = makeModel(makeProject("root", "Root", [makeTask("root-task")]));
+    const { rerenderList } = renderList(
+      model,
+      makeActions(),
+      makeNavigation(),
+      vi.fn(),
+      "root",
+      snapshot,
+      false,
+      onProjectOverviewCollapsedChange,
+    );
+
+    const toggle = screen.getByRole("button", { name: /Project overview/ });
+    fireEvent.click(toggle);
+    expect(onProjectOverviewCollapsedChange).toHaveBeenCalledOnce();
+    expect(onProjectOverviewCollapsedChange).toHaveBeenCalledWith(true);
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+
+    rerenderList(model, snapshot, true, "root");
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("refreshes Project Overview when a newer statistics snapshot arrives", () => {
+    const initialSnapshot = makeStatisticsSnapshot(
+      [makeProjectStatistics("root", null, 0, 1, 0, "Root")],
+      "2026-08-10T06:30:00.000Z",
+    );
+    const refreshedSnapshot = makeStatisticsSnapshot(
+      [
+        makeProjectStatistics("root", null, 0, 0, 1, "Root"),
+        makeProjectStatistics("new-child", "root", 0, 0, 1, "New child"),
+      ],
+      "2026-08-10T06:45:00.000Z",
+    );
+    const model = makeModel(makeProject("root", "Root", [makeTask("root-task")]));
+    const { rerenderList } = renderList(
+      model,
+      makeActions(),
+      makeNavigation(),
+      vi.fn(),
+      "root",
+      initialSnapshot,
+    );
+
+    const overview = screen.getByRole("region", { name: "Project overview" });
+    expect(overview).toHaveTextContent("1 project · 1 task · 0% complete");
+    expect(overview.querySelector('time[datetime="2026-08-10T06:30:00.000Z"]')).not.toBeNull();
+
+    rerenderList(model, refreshedSnapshot, false, "root");
+    expect(overview).toHaveTextContent("2 projects · 2 tasks · 100% complete");
+    expect(overview.querySelector('[data-project-id="new-child"]')).toBeInTheDocument();
+    expect(overview.querySelector('time[datetime="2026-08-10T06:45:00.000Z"]')).not.toBeNull();
+  });
+
+  it("follows an externally changed root across statistics and Base rows", () => {
+    const childTask = makeTask("child-task", "active", {
+      projectId: "child-project",
+      projectName: "Child",
+      projectIdPath: ["root", "child-project"],
+      projectPath: ["Root", "Child"],
+    });
+    const child = makeProject("child-project", "Child", [childTask]);
+    const root = makeProject("root", "Root", [makeTask("root-task")], [child]);
+    const model = makeModel(root);
+    const snapshot = makeStatisticsSnapshot([
+      makeProjectStatistics("root", null, 0, 1, 0, "Root"),
+      makeProjectStatistics("child-project", "root", 0, 1, 0, "Child"),
+    ]);
+    const { rerenderList } = renderList(
+      model,
+      makeActions(),
+      makeNavigation(),
+      vi.fn(),
+      "root",
+      snapshot,
+    );
+
+    expect(screen.getByText("Task root-task")).toBeInTheDocument();
+    rerenderList(model, snapshot, false, "child-project");
+
+    expect(screen.getByRole("button", { name: "Root: Root / Child" })).toBeInTheDocument();
+    expect(screen.queryByText("Task root-task")).not.toBeInTheDocument();
+    expect(screen.getByText("Task child-task")).toBeInTheDocument();
+    const overview = screen.getByRole("region", { name: "Project overview" });
+    expect(overview.querySelector('[data-project-id="child-project"]')).toBeInTheDocument();
+    expect(overview.querySelector('[data-project-id="root"]')).not.toBeInTheDocument();
+  });
+
   it("selects any project as the persisted presentation root", () => {
     const childTask = makeTask("child", "active", {
       content: "Child-only task",
@@ -172,15 +401,20 @@ describe("TodoistList", () => {
     const root = makeProject("root", "Root", [makeTask("root-task")], [child]);
     const { onRootProjectChange } = renderList(makeModel(root));
 
-    fireEvent.click(screen.getByRole("button", { name: "Root: All Todoist projects" }));
-    fireEvent.change(screen.getByRole("searchbox", { name: "Search Todoist projects" }), {
+    fireEvent.click(screen.getByRole("button", { name: "Root: All projects" }));
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search projects" }), {
       target: { value: "child" },
     });
-    fireEvent.click(screen.getByRole("option", { name: "Root / Child" }));
+    fireEvent.click(screen.getByRole("button", { name: "Root / Child" }));
 
     expect(onRootProjectChange).toHaveBeenCalledWith("child-project");
     expect(screen.getByText("Child-only task")).toBeInTheDocument();
     expect(screen.queryByText("Task root-task")).not.toBeInTheDocument();
+    expect(
+      screen.getByText("Root / Child", {
+        selector: ".todoist-bases-project-overview-scope",
+      }),
+    ).toBeInTheDocument();
     expect(screen.getByText("Root", { selector: ".todoist-bases-root-badge" })).toBeInTheDocument();
   });
 
@@ -442,7 +676,7 @@ describe("TodoistList", () => {
     renderList(model, makeActions(), makeNavigation(), vi.fn(), "filtered-project");
 
     expect(
-      screen.getByText("The selected root project is not available in this Base."),
+      screen.getByText("The selected root project is no longer available."),
     ).toBeInTheDocument();
     expect(
       screen.getByText("No tasks under this project match the Base filters."),

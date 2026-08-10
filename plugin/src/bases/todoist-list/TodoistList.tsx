@@ -8,9 +8,12 @@ import {
   useState,
 } from "react";
 
+import type { ProjectSyncStatisticsSnapshot, ProjectSyncStatus } from "@/project-sync";
 import { ObsidianIcon } from "@/ui/components/obsidian-icon";
 
 import { scopeTodoistListGroups } from "./model";
+import { ProjectOverview } from "./ProjectOverview";
+import { buildProjectOverviewModel } from "./projectOverviewModel";
 import type {
   TodoistListActions,
   TodoistListCounts,
@@ -35,6 +38,11 @@ export type TodoistListProps = {
   options: TodoistListViewOptions;
   actions: TodoistListActions;
   navigation: TodoistListNavigation;
+  projectStatisticsSnapshot: ProjectSyncStatisticsSnapshot | null;
+  projectSyncConfigured: boolean;
+  projectSyncStatus: ProjectSyncStatus;
+  projectOverviewCollapsed: boolean;
+  onProjectOverviewCollapsedChange: (collapsed: boolean) => void;
   onRootProjectChange: (projectId: string | null) => void;
 };
 
@@ -44,14 +52,21 @@ export const TodoistList: React.FC<TodoistListProps> = ({
   options,
   actions,
   navigation,
+  projectStatisticsSnapshot,
+  projectSyncConfigured,
+  projectSyncStatus,
+  projectOverviewCollapsed,
+  onProjectOverviewCollapsedChange,
   onRootProjectChange,
 }) => {
   const listRef = useRef<HTMLDivElement>(null);
   const [selectedRoot, setSelectedRoot] = useState(rootProjectId);
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
+  const [overviewCollapsed, setOverviewCollapsed] = useState(projectOverviewCollapsed);
   const [ready, setReady] = useState(() => readReady(actions));
 
   useEffect(() => setSelectedRoot(rootProjectId), [rootProjectId]);
+  useEffect(() => setOverviewCollapsed(projectOverviewCollapsed), [projectOverviewCollapsed]);
   useEffect(() => {
     const refresh = () => setReady(readReady(actions));
     refresh();
@@ -60,8 +75,21 @@ export const TodoistList: React.FC<TodoistListProps> = ({
     return () => ownerWindow.clearInterval(interval);
   }, [actions]);
 
+  const projectOverviewModel = useMemo(
+    () => buildProjectOverviewModel(projectStatisticsSnapshot, selectedRoot),
+    [projectStatisticsSnapshot, selectedRoot],
+  );
+  const projectOptions = useMemo(
+    () => mergeProjectOptions(projectOverviewModel?.projectOptions ?? [], model.projects),
+    [projectOverviewModel, model.projects],
+  );
   const rootAvailable =
-    selectedRoot === null || model.projects.some((project) => project.id === selectedRoot);
+    selectedRoot === null || projectOptions.some((project) => project.id === selectedRoot);
+  const projectOverviewScopeLabel =
+    selectedRoot === null
+      ? "All synchronized projects"
+      : (projectOptions.find((project) => project.id === selectedRoot)?.pathNames.join(" / ") ??
+        "Selected root project");
   const scopedGroups = useMemo(
     () => scopeTodoistListGroups(model.groups, selectedRoot),
     [model.groups, selectedRoot],
@@ -85,6 +113,11 @@ export const TodoistList: React.FC<TodoistListProps> = ({
     onRootProjectChange(projectId);
   };
 
+  const changeOverviewCollapsed = (nextCollapsed: boolean) => {
+    setOverviewCollapsed(nextCollapsed);
+    onProjectOverviewCollapsedChange(nextCollapsed);
+  };
+
   const toggleCollapsed = (key: string) => {
     setCollapsed((current) => {
       const next = new Set(current);
@@ -105,11 +138,13 @@ export const TodoistList: React.FC<TodoistListProps> = ({
   return (
     <div className="todoist-bases-list" data-density={options.density} ref={listRef}>
       <div className="todoist-bases-list-toolbar">
-        <RootPicker projects={model.projects} selected={selectedRoot} onChange={selectRoot} />
+        <RootPicker projects={projectOptions} selected={selectedRoot} onChange={selectRoot} />
         <output
           className="todoist-bases-list-toolbar-summary"
-          aria-label={countsLabel(scopedCounts)}
+          aria-label={`Visible in Base: ${countsLabel(scopedCounts)}`}
         >
+          <span className="todoist-bases-list-toolbar-summary-label">Visible in Base</span>
+          <span aria-hidden="true">·</span>
           <span>{scopedCounts.active} active</span>
           <span aria-hidden="true">·</span>
           <span>{scopedCounts.completed} completed</span>
@@ -142,10 +177,19 @@ export const TodoistList: React.FC<TodoistListProps> = ({
         </div>
       </div>
 
+      <ProjectOverview
+        collapsed={overviewCollapsed}
+        configured={projectSyncConfigured}
+        model={projectOverviewModel}
+        onCollapsedChange={changeOverviewCollapsed}
+        scopeLabel={projectOverviewScopeLabel}
+        status={projectSyncStatus}
+      />
+
       {!rootAvailable && (
         <output className="todoist-bases-list-notice">
           <ObsidianIcon id="lucide-circle-alert" size="s" />
-          <span>The selected root project is not available in this Base.</span>
+          <span>The selected root project is no longer available.</span>
           <button className="mod-cta" onClick={() => selectRoot(null)} type="button">
             Reset root
           </button>
@@ -197,10 +241,11 @@ const RootPicker: React.FC<{
   const [search, setSearch] = useState("");
   const containerRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
   const selectedProject = projects.find((project) => project.id === selected);
   const selectedLabel =
     selected === null
-      ? "All Todoist projects"
+      ? "All projects"
       : (selectedProject?.pathNames.join(" / ") ?? "Unavailable project");
   const query = search.trim().toLocaleLowerCase("en-US");
   const filtered = projects.filter((project) =>
@@ -227,6 +272,7 @@ const RootPicker: React.FC<{
   }, [open]);
 
   const choose = (projectId: string | null) => {
+    triggerRef.current?.focus();
     onChange(projectId);
     setOpen(false);
     setSearch("");
@@ -237,9 +283,10 @@ const RootPicker: React.FC<{
       <button
         aria-label={`Root: ${selectedLabel}`}
         aria-expanded={open}
-        aria-haspopup="listbox"
+        aria-haspopup="dialog"
         className="todoist-bases-root-picker-trigger"
         onClick={() => setOpen((value) => !value)}
+        ref={triggerRef}
         type="button"
       >
         <ObsidianIcon id="lucide-git-fork" size="s" />
@@ -249,19 +296,21 @@ const RootPicker: React.FC<{
       </button>
       {open && (
         <div
-          aria-label="Choose a Todoist root project"
+          aria-label="Choose a root project"
           className="todoist-bases-root-picker-popover"
           onKeyDown={(event) => {
             if (event.key === "Escape") {
               event.stopPropagation();
               setOpen(false);
+              setSearch("");
+              triggerRef.current?.focus();
             }
           }}
           role="dialog"
         >
           <div className="search-input-container">
             <input
-              aria-label="Search Todoist projects"
+              aria-label="Search projects"
               onChange={(event) => setSearch(event.currentTarget.value)}
               placeholder="Search projects"
               ref={searchRef}
@@ -269,15 +318,11 @@ const RootPicker: React.FC<{
               value={search}
             />
           </div>
-          <div
-            aria-label="Todoist root projects"
-            className="todoist-bases-root-options"
-            role="listbox"
-          >
+          <div className="todoist-bases-root-options">
             {query === "" && (
               <RootOption
                 depth={0}
-                label="All Todoist projects"
+                label="All projects"
                 onClick={() => choose(null)}
                 selected={selected === null}
               />
@@ -310,11 +355,10 @@ const RootOption: React.FC<{
   onClick: () => void;
 }> = ({ depth, label, path, selected, onClick }) => (
   <button
+    aria-current={selected ? "true" : undefined}
     aria-label={path ?? label}
-    aria-selected={selected}
     className="todoist-bases-root-option"
     onClick={onClick}
-    role="option"
     style={indentationStyle(depth)}
     type="button"
   >
@@ -960,6 +1004,22 @@ const makeDiagnosticsMessage = (model: TodoistListModel): string | null => {
 };
 
 const pluralize = (word: string, count: number): string => (count === 1 ? word : `${word}s`);
+
+const mergeProjectOptions = (
+  snapshotProjects: readonly TodoistListProjectOption[],
+  baseProjects: readonly TodoistListProjectOption[],
+): TodoistListProjectOption[] => {
+  const merged: TodoistListProjectOption[] = [];
+  const seen = new Set<string>();
+  for (const project of [...snapshotProjects, ...baseProjects]) {
+    if (seen.has(project.id)) {
+      continue;
+    }
+    seen.add(project.id);
+    merged.push(project);
+  }
+  return merged;
+};
 
 const indentationStyle = (depth: number): CSSProperties =>
   ({ "--todoist-bases-depth": Math.max(0, depth) }) as CSSProperties;

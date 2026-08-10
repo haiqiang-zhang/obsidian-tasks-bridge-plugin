@@ -174,6 +174,248 @@ describe("ProjectFolderSyncService", () => {
     expect(snapshot.tasks[0]).toMatchObject({ completed: false, task: { content: "Active" } });
   });
 
+  it("publishes complete direct statistics including zero-task descendants", async () => {
+    const root = makeProject("root", { name: "Root", childOrder: 1 });
+    const child = makeProject("child", {
+      name: "Child",
+      parentId: root.id,
+      childOrder: 2,
+    });
+    const grandchild = makeProject("grandchild", {
+      name: "Grandchild",
+      parentId: child.id,
+      childOrder: 3,
+    });
+    const pages = new Map<string, ProjectTaskPage>([
+      [
+        root.id,
+        {
+          activeTasks: [
+            makeTask("root-active-1", { project: root }),
+            makeTask("root-active-2", { project: root }),
+          ],
+          completedTasks: [makeTask("root-completed", { project: root })],
+        },
+      ],
+      [child.id, { activeTasks: [], completedTasks: [] }],
+      [
+        grandchild.id,
+        {
+          activeTasks: [makeTask("grandchild-active", { project: grandchild })],
+          completedTasks: [
+            makeTask("grandchild-completed-1", { project: grandchild }),
+            makeTask("grandchild-completed-2", { project: grandchild }),
+          ],
+        },
+      ],
+    ]);
+    const reconcile = vi.fn<ProjectSyncVault["reconcile"]>(async () => successResult());
+    const service = new ProjectFolderSyncService(
+      {
+        listProjects: () => [root, child, grandchild],
+        fetchProjectTasks: async (projectId) => {
+          const page = pages.get(projectId);
+          if (page === undefined) {
+            throw new Error(`Unexpected project '${projectId}'`);
+          }
+          return page;
+        },
+      },
+      makeVault({ reconcile }),
+      config(mapping(root.id)),
+    );
+
+    await service.sync();
+
+    const syncedAt = reconcile.mock.calls[0]?.[0].syncedAt;
+    expect(service.getStatisticsSnapshot()).toEqual({
+      syncedAt,
+      scopes: [
+        {
+          mappingId: "mapping-root",
+          rootProjectId: root.id,
+          includeSubprojects: true,
+          projects: [
+            {
+              id: root.id,
+              parentId: null,
+              name: "Root",
+              childOrder: 1,
+              directCounts: { active: 2, completed: 1 },
+            },
+            {
+              id: child.id,
+              parentId: root.id,
+              name: "Child",
+              childOrder: 2,
+              directCounts: { active: 0, completed: 0 },
+            },
+            {
+              id: grandchild.id,
+              parentId: child.id,
+              name: "Grandchild",
+              childOrder: 3,
+              directCounts: { active: 1, completed: 2 },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("publishes one complete statistics scope for each mapping", async () => {
+    const first = makeProject("first", { name: "First" });
+    const firstChild = makeProject("first-child", { parentId: first.id, name: "First child" });
+    const second = makeProject("second", { name: "Second" });
+    const firstMapping = mapping(first.id);
+    const secondMapping = mapping(second.id, { includeSubprojects: false });
+    const service = new ProjectFolderSyncService(
+      {
+        listProjects: () => [first, firstChild, second],
+        fetchProjectTasks: async (projectId) => ({
+          activeTasks:
+            projectId === second.id ? [makeTask("second-active", { project: second })] : [],
+          completedTasks: [],
+        }),
+      },
+      makeVault(),
+      config(firstMapping, secondMapping),
+    );
+
+    await service.sync();
+
+    expect(service.getStatisticsSnapshot()?.scopes).toEqual([
+      expect.objectContaining({
+        mappingId: firstMapping.id,
+        rootProjectId: first.id,
+        includeSubprojects: true,
+        projects: [
+          expect.objectContaining({ id: first.id }),
+          expect.objectContaining({ id: firstChild.id }),
+        ],
+      }),
+      expect.objectContaining({
+        mappingId: secondMapping.id,
+        rootProjectId: second.id,
+        includeSubprojects: false,
+        projects: [
+          expect.objectContaining({
+            id: second.id,
+            directCounts: { active: 1, completed: 0 },
+          }),
+        ],
+      }),
+    ]);
+  });
+
+  it("keeps last-good statistics across ordinary invalidation and a failed refresh", async () => {
+    const root = makeProject("root");
+    let shouldFail = false;
+    const service = new ProjectFolderSyncService(
+      {
+        listProjects: () => [root],
+        fetchProjectTasks: async () => {
+          if (shouldFail) {
+            throw new Error("network failed");
+          }
+          return {
+            activeTasks: [makeTask("active", { project: root })],
+            completedTasks: [],
+          };
+        },
+      },
+      makeVault(),
+      config(),
+    );
+    await service.sync();
+    const lastGood = service.getStatisticsSnapshot();
+
+    service.invalidate();
+    expect(service.getStatisticsSnapshot()).toBe(lastGood);
+
+    shouldFail = true;
+    await expect(service.sync()).rejects.toThrow("network failed");
+    expect(service.getStatisticsSnapshot()).toBe(lastGood);
+  });
+
+  it("preserves statistics for projection-only config changes and clears them at scope boundaries", async () => {
+    const root = makeProject("root");
+    const originalConfig = config();
+    const service = new ProjectFolderSyncService(
+      {
+        listProjects: () => [root],
+        fetchProjectTasks: async () => ({ activeTasks: [], completedTasks: [] }),
+      },
+      makeVault(),
+      originalConfig,
+    );
+    const observed: Array<{ state: string; hasSnapshot: boolean }> = [];
+    service.subscribe((status) => {
+      observed.push({
+        state: status.state,
+        hasSnapshot: service.getStatisticsSnapshot() !== null,
+      });
+    });
+
+    await service.sync();
+    const firstSnapshot = service.getStatisticsSnapshot();
+    expect(firstSnapshot).not.toBeNull();
+
+    service.setConfig(config());
+    expect(service.getStatisticsSnapshot()).toBe(firstSnapshot);
+
+    service.clearStatisticsSnapshot();
+    expect(service.getStatisticsSnapshot()).toBeNull();
+    expect(observed[observed.length - 1]).toEqual({ state: "success", hasSnapshot: false });
+
+    await service.sync();
+    const migratedSnapshot = service.getStatisticsSnapshot();
+    expect(migratedSnapshot).not.toBeNull();
+    service.setConfig(
+      config(
+        mapping(root.id, {
+          folder: "Todoist/new-root",
+          previousFolders: ["Todoist/root"],
+        }),
+      ),
+    );
+    expect(service.getStatisticsSnapshot()).toBe(migratedSnapshot);
+    expect(observed[observed.length - 1]).toEqual({ state: "idle", hasSnapshot: true });
+
+    service.setConfig(config(mapping(root.id, { includeSubprojects: false })));
+    expect(service.getStatisticsSnapshot()).toBeNull();
+    expect(observed[observed.length - 1]).toEqual({ state: "idle", hasSnapshot: false });
+
+    service.setConfig(originalConfig);
+    await service.sync();
+    expect(service.getStatisticsSnapshot()).not.toBeNull();
+    service.dispose();
+    expect(service.getStatisticsSnapshot()).toBeNull();
+    expect(observed[observed.length - 1]).toEqual({ state: "disposed", hasSnapshot: false });
+  });
+
+  it("does not publish statistics until every mapping reconciles successfully", async () => {
+    const first = makeProject("first");
+    const second = makeProject("second");
+    const reconcile = vi
+      .fn<ProjectSyncVault["reconcile"]>()
+      .mockResolvedValueOnce(successResult())
+      .mockRejectedValueOnce(new Error("second reconcile failed"));
+    const service = new ProjectFolderSyncService(
+      {
+        listProjects: () => [first, second],
+        fetchProjectTasks: async () => ({ activeTasks: [], completedTasks: [] }),
+      },
+      makeVault({ reconcile }),
+      config(mapping(first.id), mapping(second.id)),
+    );
+
+    await expect(service.sync()).rejects.toThrow("second reconcile failed");
+
+    expect(reconcile).toHaveBeenCalledTimes(2);
+    expect(service.getStatisticsSnapshot()).toBeNull();
+  });
+
   it("rejects invalid Vault mappings before making a Todoist task request", async () => {
     const root = makeProject("root");
     const fetchProjectTasks = vi.fn(async () => ({ activeTasks: [], completedTasks: [] }));

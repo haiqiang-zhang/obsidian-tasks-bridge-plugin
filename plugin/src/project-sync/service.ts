@@ -7,6 +7,7 @@ import type {
   ProjectSyncResult,
   ProjectSyncSnapshot,
   ProjectSyncSource,
+  ProjectSyncStatisticsSnapshot,
   ProjectSyncStatus,
   ProjectSyncStatusListener,
   ProjectSyncVault,
@@ -38,6 +39,7 @@ export class ProjectFolderSyncService {
   private disposed = false;
   private inFlight: InFlightSync | undefined;
   private status: ProjectSyncStatus = { state: "idle" };
+  private statisticsSnapshot: ProjectSyncStatisticsSnapshot | null = null;
   private readonly listeners = new Set<ProjectSyncStatusListener>();
 
   constructor(
@@ -61,8 +63,14 @@ export class ProjectFolderSyncService {
       return;
     }
 
+    // Vault destinations and migration bookkeeping do not change the server-side project scope.
+    // Keep the last complete snapshot across those projection-only updates.
+    const statisticsScopeChanged = !hasSameStatisticsScopes(this.config, config);
     this.config = cloneConfig(config);
     this.configGeneration++;
+    if (statisticsScopeChanged) {
+      this.statisticsSnapshot = null;
+    }
     this.setStatus(config.enabled ? { state: "idle" } : { state: "disabled" });
   }
 
@@ -80,6 +88,7 @@ export class ProjectFolderSyncService {
     }
     this.disposed = true;
     this.configGeneration++;
+    this.statisticsSnapshot = null;
     this.setStatus({ state: "disposed" });
     this.listeners.clear();
   }
@@ -90,6 +99,18 @@ export class ProjectFolderSyncService {
 
   public getStatus(): ProjectSyncStatus {
     return this.status;
+  }
+
+  public getStatisticsSnapshot(): ProjectSyncStatisticsSnapshot | null {
+    return this.statisticsSnapshot;
+  }
+
+  public clearStatisticsSnapshot(): void {
+    if (this.disposed || this.statisticsSnapshot === null) {
+      return;
+    }
+    this.statisticsSnapshot = null;
+    this.setStatus(this.status);
   }
 
   public validateConfig(config: ProjectSyncConfig = this.config): void {
@@ -195,6 +216,7 @@ export class ProjectFolderSyncService {
         addResult(result, mappingResult);
       }
       this.assertCurrent(generation);
+      this.statisticsSnapshot = makeStatisticsSnapshot(snapshots, syncedAt);
       this.setStatus({
         state: "success",
         completedAt: new Date().toISOString(),
@@ -324,6 +346,54 @@ const cloneConfig = (config: ProjectSyncConfig): ProjectSyncConfig => ({
   })),
 });
 
+const makeStatisticsSnapshot = (
+  snapshots: readonly {
+    mapping: ProjectSyncMapping;
+    snapshot: ProjectSyncSnapshot;
+  }[],
+  syncedAt: string,
+): ProjectSyncStatisticsSnapshot => ({
+  syncedAt,
+  scopes: snapshots.map(({ mapping, snapshot }) => {
+    const directCounts = new Map<string, { active: number; completed: number }>(
+      snapshot.projects.map((project) => [project.id, { active: 0, completed: 0 }]),
+    );
+
+    for (const snapshotTask of snapshot.tasks) {
+      const counts = directCounts.get(snapshotTask.task.project.id);
+      if (counts === undefined) {
+        throw new Error(
+          `Todoist task '${snapshotTask.task.id}' belongs to a project outside its statistics scope`,
+        );
+      }
+      if (snapshotTask.completed) {
+        counts.completed++;
+      } else {
+        counts.active++;
+      }
+    }
+
+    return {
+      mappingId: mapping.id,
+      rootProjectId: snapshot.rootProjectId,
+      includeSubprojects: mapping.includeSubprojects,
+      projects: snapshot.projects.map((project) => {
+        const counts = directCounts.get(project.id);
+        if (counts === undefined) {
+          throw new Error(`Todoist project '${project.id}' is missing from its statistics scope`);
+        }
+        return {
+          id: project.id,
+          parentId: project.parentId,
+          name: project.name,
+          childOrder: project.childOrder,
+          directCounts: { active: counts.active, completed: counts.completed },
+        };
+      }),
+    };
+  }),
+});
+
 const isSameConfig = (left: ProjectSyncConfig, right: ProjectSyncConfig): boolean =>
   left.enabled === right.enabled &&
   left.mappings.length === right.mappings.length &&
@@ -341,6 +411,25 @@ const isSameConfig = (left: ProjectSyncConfig, right: ProjectSyncConfig): boolea
       mapping.project?.projectName === other.project?.projectName
     );
   });
+
+const hasSameStatisticsScopes = (left: ProjectSyncConfig, right: ProjectSyncConfig): boolean => {
+  if (left.enabled !== right.enabled || left.mappings.length !== right.mappings.length) {
+    return false;
+  }
+
+  const rightById = new Map(right.mappings.map((mapping) => [mapping.id, mapping]));
+  if (rightById.size !== right.mappings.length) {
+    return false;
+  }
+  return left.mappings.every((mapping) => {
+    const other = rightById.get(mapping.id);
+    return (
+      other !== undefined &&
+      mapping.includeSubprojects === other.includeSubprojects &&
+      mapping.project?.projectId === other.project?.projectId
+    );
+  });
+};
 
 const validateMappingContents = (config: ProjectSyncConfig): void => {
   if (config.mappings.length === 0) {

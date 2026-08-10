@@ -31,6 +31,31 @@ export type ProjectSyncSnapshot = {
   syncedAt: string;
 };
 
+export type ProjectSyncStatisticsCounts = Readonly<{
+  active: number;
+  completed: number;
+}>;
+
+export type ProjectSyncProjectStatistics = Readonly<{
+  id: string;
+  parentId: string | null;
+  name: string;
+  childOrder: number;
+  directCounts: ProjectSyncStatisticsCounts;
+}>;
+
+export type ProjectSyncStatisticsScope = Readonly<{
+  mappingId: string;
+  rootProjectId: string;
+  includeSubprojects: boolean;
+  projects: readonly ProjectSyncProjectStatistics[];
+}>;
+
+export type ProjectSyncStatisticsSnapshot = Readonly<{
+  syncedAt: string;
+  scopes: readonly ProjectSyncStatisticsScope[];
+}>;
+
 export type ProjectSyncConflict = {
   message: string;
   path?: string;

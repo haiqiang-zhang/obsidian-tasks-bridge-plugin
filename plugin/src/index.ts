@@ -10,6 +10,7 @@ import {
   createTasksListViewRegistration,
   TASKS_LIST_VIEW_ID,
   type TodoistListActions,
+  type TodoistListProjectStatisticsSource,
 } from "@/bases/todoist-list";
 import { registerCommands } from "@/commands";
 import { QueryCache } from "@/data/queryCache";
@@ -68,7 +69,10 @@ export default class TodoistPlugin extends Plugin {
     const queryInjector = new QueryInjector(this);
     this.registerBasesView(
       TASKS_LIST_VIEW_ID,
-      createTasksListViewRegistration(this.makeTodoistListActions()),
+      createTasksListViewRegistration(
+        this.makeTodoistListActions(),
+        this.makeTodoistListProjectStatisticsSource(),
+      ),
     );
     this.registerMarkdownCodeBlockProcessor(
       "todoist",
@@ -146,6 +150,15 @@ export default class TodoistPlugin extends Plugin {
           },
         });
       },
+    };
+  }
+
+  private makeTodoistListProjectStatisticsSource(): TodoistListProjectStatisticsSource {
+    return {
+      getSnapshot: () => this.services.projectSync.getStatisticsSnapshot(),
+      getStatus: () => this.services.projectSync.getStatus(),
+      isConfigured: () => this.services.projectSync.getConfig().mappings.length > 0,
+      subscribe: (listener) => this.services.projectSync.subscribe(() => listener()),
     };
   }
 
@@ -312,6 +325,7 @@ export default class TodoistPlugin extends Plugin {
       apiToken: ++this.apiTokenGeneration,
       projectSyncConfig: this.projectSyncConfigGeneration,
     };
+    this.services.projectSync.clearStatisticsSnapshot();
     this.services.projectSync.invalidate();
     this.services.todoist.reset();
 

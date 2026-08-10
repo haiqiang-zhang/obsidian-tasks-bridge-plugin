@@ -117,7 +117,7 @@ Project
     └── Task
 ```
 
-Project and section headers, nested task indentation, descriptions, status counts, and compact property badges make a large hierarchy easier to scan. Its flat, Notion-inspired workspace uses Obsidian's theme variables, so it follows the active theme and remains consistent with native Bases controls.
+Project and section headers, nested task indentation, descriptions, status counts, and compact property badges make a large hierarchy easier to scan. A collapsible **Project overview** summarizes the synchronized hierarchy above the task rows. Its flat, Notion-inspired workspace uses Obsidian's theme variables, so it follows the active theme and remains consistent with native Bases controls.
 
 ### Create the view
 
@@ -139,17 +139,37 @@ Tasks List renders only valid notes created and owned by Project sync. A normal 
 
 ### Choose any project as the root
 
-Use **Root** in the Tasks List toolbar to focus the view on one project and all of its descendants. The selected project can be a top-level Todoist project or a child at any depth, so each Base can become a workspace for exactly the part of the hierarchy you want to manage. Choose **All Todoist projects** to return to every project available in the current Base result.
+Use **Root** in the Tasks List toolbar to focus the view on one project and all of its descendants. The selected project can be a top-level Todoist project or a child at any depth, so each Base can become a workspace for exactly the part of the hierarchy you want to manage. Choose **All projects** to return to every project available to the view.
 
 Projects with the same name are distinguished by their complete parent path. The selected root is saved in that view's Base configuration.
 
-The root selector does not bypass Base filters. It can only narrow the entries that Obsidian has already supplied to the view. If a project or task is excluded by a global or view filter, the root selector cannot add it back.
+The selected root controls both the complete Project overview and the filtered task rows. It cannot add a filtered task row back to the Base result.
+
+### Review the complete Project overview
+
+Expand **Project overview** above the task list to see statistics for the selected root project and every synchronized descendant below it. Choose **All projects** to combine every synchronized mapping. The overview includes:
+
+- total, active, and completed task counts;
+- completion percentage and a status breakdown;
+- the number of projects in the selected hierarchy;
+- the time of the latest complete Project sync; and
+- a nested project breakdown in which each project's counts include all of its descendants.
+
+These statistics come from the latest complete Project Sync snapshot, not from the files currently visible in the Base. The snapshot retains the complete synchronized project catalog, so child projects remain in the breakdown even when they contain no tasks or all of their task notes are excluded by Base filters. A failed or interrupted refresh does not replace the last complete snapshot.
+
+Select the **Project overview** header to collapse or expand the panel. That choice is saved for the individual Base view. Before the first complete Project sync, the panel displays a waiting state instead of partial statistics. If Project Sync is not configured, disabled, or the initial sync fails, it shows that state directly instead of leaving an indefinite loading indicator.
+
+:::info Project statistics and Base results use different scopes
+
+The Project overview always describes the complete synchronized subtree for the selected root. Task rows and the active, completed, and unavailable counts in the Tasks List toolbar still respect the current Base filters. The overview totals can therefore be larger than the number of task rows on screen. This is intentional: use the overview to understand the whole synchronized project, and use native Base filters to create the working list you need.
+
+:::
 
 ### Combine it with native Base controls
 
 Tasks List is an additional layout for the official Bases query system, not a separate task query engine. Configure the Base with the same native controls used by table, cards, and list views:
 
-- **Filters** decide which managed task notes can appear. For example, create separate views for active work, completed work, or a particular mapping folder.
+- **Filters** decide which managed task notes and toolbar counts appear. They do not reduce the complete Project overview. For example, create separate views for active work, completed work, or a particular mapping folder.
 - **Sort** determines the order supplied by Bases. Tasks List preserves that order among projects, sections, and sibling tasks while rebuilding parent-child relationships.
 - **Group** remains visible as separate Base groups. Todoist hierarchy is reconstructed independently inside each group.
 - **Properties** controls the task metadata shown in each row and the order in which it appears. Identity and hierarchy properties are used internally and are not repeated as badges.

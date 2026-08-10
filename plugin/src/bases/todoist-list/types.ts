@@ -1,5 +1,7 @@
 import type { BasesPropertyId } from "obsidian";
 
+import type { ProjectSyncStatisticsSnapshot, ProjectSyncStatus } from "@/project-sync";
+
 export type TodoistListTaskStatus = "active" | "completed" | "stale" | "out_of_scope";
 
 export type TodoistListCounts = {
@@ -126,6 +128,13 @@ export interface TodoistListActions {
 export interface TodoistListNavigation {
   openFile(filePath: string, newLeaf: boolean): void;
   hoverFile(filePath: string, targetEl: HTMLElement, event: MouseEvent): void;
+}
+
+export interface TodoistListProjectStatisticsSource {
+  getSnapshot(): ProjectSyncStatisticsSnapshot | null;
+  getStatus(): ProjectSyncStatus;
+  isConfigured(): boolean;
+  subscribe(listener: () => void): () => void;
 }
 
 export type TodoistListViewOptions = {

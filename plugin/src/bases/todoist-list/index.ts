@@ -8,6 +8,7 @@ export {
 export type {
   TodoistListActions,
   TodoistListModel,
+  TodoistListProjectStatisticsSource,
   TodoistListTaskRecord,
   TodoistListViewOptions,
 } from "./types";

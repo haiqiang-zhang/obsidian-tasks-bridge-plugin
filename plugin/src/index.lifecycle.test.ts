@@ -84,9 +84,10 @@ vi.mock("@/commands", () => ({
 
 vi.mock("@/bases/todoist-list", () => ({
   TASKS_LIST_VIEW_ID: "tasks-list",
-  createTasksListViewRegistration: (actions: unknown) => ({
+  createTasksListViewRegistration: (actions: unknown, projectStatistics: unknown) => ({
     name: "Tasks List",
     actions,
+    projectStatistics,
   }),
 }));
 
@@ -201,13 +202,17 @@ const makeServices = () => ({
     taskEdit: vi.fn(),
   },
   projectSync: {
+    clearStatisticsSnapshot: vi.fn(),
     dispose: vi.fn(),
     getConfig: vi.fn(() => ({
       enabled: false,
       mappings: [],
     })),
+    getStatus: vi.fn(() => ({ state: "disabled" as const })),
+    getStatisticsSnapshot: vi.fn(() => null),
     invalidate: vi.fn(),
     setConfig: vi.fn(),
+    subscribe: vi.fn(() => () => undefined),
     sync: vi.fn(async (): Promise<ProjectSyncResult | null> => null),
   },
   projectTasks: {
@@ -284,6 +289,18 @@ describe("TodoistPlugin async lifecycle", () => {
       "tasks-list",
       expect.objectContaining({ name: "Tasks List" }),
     );
+    const registration = runtime.registerBasesView.mock.calls[0]?.[1] as {
+      projectStatistics: {
+        getSnapshot(): unknown;
+        getStatus(): unknown;
+        isConfigured(): boolean;
+        subscribe(listener: () => void): () => void;
+      };
+    };
+    expect(registration.projectStatistics.getSnapshot()).toBeNull();
+    expect(registration.projectStatistics.getStatus()).toEqual({ state: "disabled" });
+    expect(registration.projectStatistics.isConfigured()).toBe(false);
+    expect(services.projectSync.getStatisticsSnapshot).toHaveBeenCalledOnce();
   });
 
   it("wires Tasks List actions through the managed-note command service and editor", async () => {
@@ -454,6 +471,7 @@ describe("TodoistPlugin async lifecycle", () => {
     expect(services.todoist.initialize).toHaveBeenCalledWith(
       expect.objectContaining({ token: "second-token" }),
     );
+    expect(services.projectSync.clearStatisticsSnapshot).toHaveBeenCalledTimes(2);
   });
 
   it("does not start Project sync when the plugin unloads during client initialization", async () => {

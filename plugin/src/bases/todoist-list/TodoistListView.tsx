@@ -8,9 +8,16 @@ import {
 } from "obsidian";
 import { createRoot, type Root } from "react-dom/client";
 
+import type { ProjectSyncStatisticsSnapshot } from "@/project-sync";
+
 import { buildTodoistListModel } from "./model";
 import { TodoistList } from "./TodoistList";
-import type { TodoistListActions, TodoistListNavigation, TodoistListViewOptions } from "./types";
+import type {
+  TodoistListActions,
+  TodoistListNavigation,
+  TodoistListProjectStatisticsSource,
+  TodoistListViewOptions,
+} from "./types";
 import "./styles.scss";
 
 export const TASKS_LIST_VIEW_ID = "tasks-list";
@@ -20,6 +27,7 @@ const rootProjectConfigKey = "todoistRootProjectId";
 const densityConfigKey = "todoistDensity";
 const showDescriptionsConfigKey = "todoistShowDescriptions";
 const showSectionsConfigKey = "todoistShowSections";
+const projectOverviewCollapsedConfigKey = "tasksProjectOverviewCollapsed";
 
 export const tasksListViewOptions = (): ViewOption[] => [
   {
@@ -48,10 +56,12 @@ export const tasksListViewOptions = (): ViewOption[] => [
 
 export const createTasksListViewRegistration = (
   actions: TodoistListActions,
+  projectStatistics: TodoistListProjectStatisticsSource,
 ): BasesViewRegistration => ({
   name: TASKS_LIST_VIEW_NAME,
   icon: "lucide-list-tree",
-  factory: (controller, containerEl) => new TasksListView(controller, containerEl, actions),
+  factory: (controller, containerEl) =>
+    new TasksListView(controller, containerEl, actions, projectStatistics),
   options: tasksListViewOptions,
 });
 
@@ -61,8 +71,12 @@ export class TasksListView extends BasesView implements HoverParent {
 
   private readonly actions: TodoistListActions;
   private readonly containerEl: HTMLDivElement;
+  private readonly projectStatistics: TodoistListProjectStatisticsSource;
   private readonly reactRoot: Root;
+  private readonly unsubscribeProjectStatistics: () => void;
   private readonly viewWindow: Window;
+  private projectStatisticsSnapshot: ProjectSyncStatisticsSnapshot | null;
+  private dataAvailable = false;
   private renderQueued = false;
   private unloaded = false;
 
@@ -70,18 +84,32 @@ export class TasksListView extends BasesView implements HoverParent {
     controller: QueryController,
     parentEl: HTMLElement,
     actions: TodoistListActions,
+    projectStatistics: TodoistListProjectStatisticsSource,
   ) {
     super(controller);
     this.actions = actions;
+    this.projectStatistics = projectStatistics;
+    this.projectStatisticsSnapshot = projectStatistics.getSnapshot();
     const ownerDocument = parentEl.ownerDocument;
     this.viewWindow = ownerDocument.defaultView ?? window;
     this.containerEl = ownerDocument.createElement("div");
     this.containerEl.className = "todoist-bases-list-container";
     parentEl.append(this.containerEl);
     this.reactRoot = createRoot(this.containerEl);
+    this.unsubscribeProjectStatistics = projectStatistics.subscribe(() => {
+      this.projectStatisticsSnapshot = this.projectStatistics.getSnapshot();
+      if (this.dataAvailable) {
+        this.queueRender();
+      }
+    });
   }
 
   public onDataUpdated(): void {
+    this.dataAvailable = true;
+    this.queueRender();
+  }
+
+  private queueRender(): void {
     if (this.renderQueued || this.unloaded) {
       return;
     }
@@ -99,6 +127,7 @@ export class TasksListView extends BasesView implements HoverParent {
 
   public override onunload(): void {
     this.unloaded = true;
+    this.unsubscribeProjectStatistics();
     this.reactRoot.unmount();
     this.containerEl.remove();
   }
@@ -109,6 +138,7 @@ export class TasksListView extends BasesView implements HoverParent {
       getDisplayName: (propertyId) => this.config.getDisplayName(propertyId),
     });
     const rootProjectId = readOptionalString(this.config.get(rootProjectConfigKey));
+    const projectOverviewCollapsed = this.config.get(projectOverviewCollapsedConfigKey) === true;
     const options = this.readOptions();
     const navigation: TodoistListNavigation = {
       openFile: (filePath, newLeaf) => {
@@ -130,8 +160,15 @@ export class TasksListView extends BasesView implements HoverParent {
         actions={this.actions}
         model={model}
         navigation={navigation}
+        onProjectOverviewCollapsedChange={(collapsed) =>
+          this.config.set(projectOverviewCollapsedConfigKey, collapsed)
+        }
         onRootProjectChange={(projectId) => this.config.set(rootProjectConfigKey, projectId)}
         options={options}
+        projectOverviewCollapsed={projectOverviewCollapsed}
+        projectSyncConfigured={this.projectStatistics.isConfigured()}
+        projectSyncStatus={this.projectStatistics.getStatus()}
+        projectStatisticsSnapshot={this.projectStatisticsSnapshot}
         rootProjectId={rootProjectId}
       />,
     );
