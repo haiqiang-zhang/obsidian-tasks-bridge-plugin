@@ -590,6 +590,12 @@ const TaskBranch: React.FC<
     completed: boolean;
     status: TodoistListTaskRecord["status"];
   } | null>(null);
+  const operationToken = useRef(0);
+  const completionOperation = useRef<{
+    completed: boolean;
+    status: TodoistListTaskRecord["status"];
+    token: number;
+  } | null>(null);
   const key = `${groupKey}:task:${task.id}`;
   const isCollapsed = collapsed.has(key);
   const hasChildren = task.children.length > 0;
@@ -598,10 +604,24 @@ const TaskBranch: React.FC<
     projectionLock.completed === task.completed &&
     projectionLock.status === task.status;
   useEffect(() => {
+    const operation = completionOperation.current;
+    if (
+      operation !== null &&
+      (operation.completed !== task.completed || operation.status !== task.status)
+    ) {
+      operationToken.current++;
+      completionOperation.current = null;
+      setPending(null);
+      setError(null);
+      setProjectionLock(null);
+      return;
+    }
+
     if (projectionLock !== null && !awaitingProjection) {
+      setError(null);
       setProjectionLock(null);
     }
-  }, [awaitingProjection, projectionLock]);
+  }, [awaitingProjection, projectionLock, task.completed, task.status]);
   const readOnlyReason = awaitingProjection
     ? "Todoist was updated. Waiting for Project sync before another action."
     : getReadOnlyReason(task, ready);
@@ -613,22 +633,45 @@ const TaskBranch: React.FC<
       return;
     }
     const action = task.status === "completed" ? "reopen" : "complete";
+    const token = ++operationToken.current;
+    const startingProjection = { completed: task.completed, status: task.status };
+    completionOperation.current = { ...startingProjection, token };
     setPending(action);
     setError(null);
     try {
-      if (action === "reopen") {
-        await actions.reopenTask(task);
-      } else {
-        await actions.completeTask(task);
+      const result =
+        action === "reopen" ? await actions.reopenTask(task) : await actions.completeTask(task);
+      if (operationToken.current !== token) {
+        return;
       }
+
+      setPending(null);
+      setProjectionLock(startingProjection);
+      void result.projection.catch((caught: unknown) => {
+        if (operationToken.current !== token) {
+          return;
+        }
+        console.error(`Failed to project ${action} Todoist task`, caught);
+        setError(
+          errorMessage(
+            caught,
+            `Todoist was updated, but Project sync could not refresh this task.`,
+          ),
+        );
+      });
     } catch (caught: unknown) {
+      if (operationToken.current !== token) {
+        return;
+      }
       console.error(`Failed to ${action} Todoist task`, caught);
       if (didRemoteMutationSucceed(caught)) {
-        setProjectionLock({ completed: task.completed, status: task.status });
+        setProjectionLock(startingProjection);
       }
       setError(errorMessage(caught, `Could not ${action} this task.`));
     } finally {
-      setPending(null);
+      if (operationToken.current === token) {
+        setPending(null);
+      }
     }
   };
 
@@ -636,15 +679,22 @@ const TaskBranch: React.FC<
     if (editReadOnlyReason !== null || pending !== null) {
       return;
     }
+    const token = ++operationToken.current;
+    completionOperation.current = null;
     setPending("edit");
     setError(null);
     try {
       await actions.editTask(task);
     } catch (caught: unknown) {
+      if (operationToken.current !== token) {
+        return;
+      }
       console.error("Failed to edit Todoist task", caught);
       setError(errorMessage(caught, "Could not open this task for editing."));
     } finally {
-      setPending(null);
+      if (operationToken.current === token) {
+        setPending(null);
+      }
     }
   };
 

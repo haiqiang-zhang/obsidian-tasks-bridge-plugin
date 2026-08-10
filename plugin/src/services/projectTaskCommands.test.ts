@@ -1,4 +1,4 @@
-import type { MetadataCache, TFile, Vault } from "obsidian";
+import type { FileManager, MetadataCache, TFile, Vault } from "obsidian";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { UpdateTaskParams } from "@/api/domain/task";
@@ -26,6 +26,23 @@ const TASK_ID = "task-1";
 const ROOT_PROJECT_ID = "root-1";
 const MAPPING_ID = "mapping-1";
 const FILE_PATH = "Todoist/Root/Task.md";
+const COMPLETED_AT = new Date("2026-08-10T05:00:00.000Z");
+
+type Deferred<T> = {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (reason: unknown) => void;
+};
+
+const deferred = <T>(): Deferred<T> => {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+};
 
 const successResult = (): ProjectSyncResult => ({
   created: 0,
@@ -73,12 +90,21 @@ const makeHarness = (options: HarnessOptions = {}) => {
   const frontmatter = "frontmatter" in options ? options.frontmatter : managedFrontmatter();
   const getFileByPath = vi.fn((_path: string) => file as TFile | null);
   const getFileCache = vi.fn(() => (frontmatter === undefined ? null : { frontmatter }));
+  const processFrontMatter = vi.fn(
+    async (_file: TFile, update: (value: ManagedFrontmatter) => void): Promise<void> => {
+      if (frontmatter === undefined) {
+        throw new Error("Frontmatter is unavailable");
+      }
+      update(frontmatter);
+    },
+  );
 
   const task = makeApiTask({ id: TASK_ID, checked: false });
   const actions = {
-    closeProjectTask: vi.fn(async (_id: string) => undefined),
+    closeProjectTask: vi.fn(async (_id: string) => COMPLETED_AT),
     closeTask: vi.fn(async (_id: string) => undefined),
     getTask: vi.fn(async (_id: string) => task),
+    reopenProjectTask: vi.fn(async (_id: string) => undefined),
     reopenTask: vi.fn(async (_id: string) => undefined),
     updateTask: vi.fn(async (_id: string, _params: UpdateTaskParams) => task),
   };
@@ -97,6 +123,7 @@ const makeHarness = (options: HarnessOptions = {}) => {
 
   const service = new ProjectTaskCommandService(
     { getFileByPath } as unknown as Vault,
+    { processFrontMatter } as unknown as FileManager,
     { getFileCache } as unknown as MetadataCache,
     todoist,
     projectSync,
@@ -108,6 +135,8 @@ const makeHarness = (options: HarnessOptions = {}) => {
     getFileByPath,
     getFileCache,
     invalidate,
+    frontmatter,
+    processFrontMatter,
     service,
     sync,
     task,
@@ -260,13 +289,36 @@ describe("ProjectTaskCommandService", () => {
     );
   });
 
-  it("completes only an active managed task and refreshes its projection", async () => {
-    const harness = makeHarness();
+  it("completes only an active managed task and atomically projects its status", async () => {
+    const harness = makeHarness({
+      frontmatter: managedFrontmatter({
+        todoist_completed: false,
+        todoist_stale_since: "2026-08-09T05:00:00.000Z",
+        todoist_sync_missing_count: 2,
+      }),
+    });
 
-    await expect(harness.service.completeTask(reference)).resolves.toBeUndefined();
+    const result = await harness.service.completeTask(reference);
+    await expect(result.projection).resolves.toBeUndefined();
+
     expect(harness.actions.closeProjectTask).toHaveBeenCalledWith(TASK_ID);
+    expect(harness.processFrontMatter).toHaveBeenCalledWith(harness.file, expect.any(Function));
+    expect(harness.frontmatter).toMatchObject({
+      todoist_completed: true,
+      todoist_completed_at: COMPLETED_AT.toISOString(),
+      todoist_status: "completed",
+      todoist_synced_at: expect.any(String),
+      todoist_sync_missing_count: 0,
+    });
+    expect(harness.frontmatter).not.toHaveProperty("todoist_stale_since");
     expect(harness.invalidate).toHaveBeenCalledOnce();
-    expect(harness.sync).toHaveBeenCalledOnce();
+    expect(harness.actions.closeProjectTask.mock.invocationCallOrder[0]).toBeLessThan(
+      harness.invalidate.mock.invocationCallOrder[0],
+    );
+    expect(harness.invalidate.mock.invocationCallOrder[0]).toBeLessThan(
+      harness.processFrontMatter.mock.invocationCallOrder[0],
+    );
+    await vi.waitFor(() => expect(harness.sync).toHaveBeenCalledOnce());
 
     const completed = makeHarness({
       frontmatter: managedFrontmatter({ todoist_status: "completed" }),
@@ -277,21 +329,128 @@ describe("ProjectTaskCommandService", () => {
     expect(completed.actions.closeProjectTask).not.toHaveBeenCalled();
   });
 
-  it("reopens only a completed managed task and refreshes its projection", async () => {
+  it("reopens only a completed managed task and atomically projects its status", async () => {
     const harness = makeHarness({
-      frontmatter: managedFrontmatter({ todoist_status: "completed" }),
+      frontmatter: managedFrontmatter({
+        todoist_completed: true,
+        todoist_completed_at: COMPLETED_AT.toISOString(),
+        todoist_stale_since: "2026-08-09T05:00:00.000Z",
+        todoist_status: "completed",
+        todoist_sync_missing_count: 2,
+      }),
     });
 
-    await expect(harness.service.reopenTask(reference)).resolves.toBeUndefined();
-    expect(harness.actions.reopenTask).toHaveBeenCalledWith(TASK_ID);
+    const result = await harness.service.reopenTask(reference);
+    await expect(result.projection).resolves.toBeUndefined();
+
+    expect(harness.actions.reopenProjectTask).toHaveBeenCalledWith(TASK_ID);
+    expect(harness.frontmatter).toMatchObject({
+      todoist_completed: false,
+      todoist_status: "active",
+      todoist_synced_at: expect.any(String),
+      todoist_sync_missing_count: 0,
+    });
+    expect(harness.frontmatter).not.toHaveProperty("todoist_completed_at");
+    expect(harness.frontmatter).not.toHaveProperty("todoist_stale_since");
     expect(harness.invalidate).toHaveBeenCalledOnce();
-    expect(harness.sync).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(harness.sync).toHaveBeenCalledOnce());
 
     const active = makeHarness();
     await expect(active.service.reopenTask(reference)).rejects.toThrow(
       "Only completed tasks can be reopened",
     );
-    expect(active.actions.reopenTask).not.toHaveBeenCalled();
+    expect(active.actions.reopenProjectTask).not.toHaveBeenCalled();
+  });
+
+  it("returns the targeted projection without awaiting the queued canonical sync", async () => {
+    const harness = makeHarness();
+    const projectionWrite = deferred<void>();
+    const canonicalSync = deferred<ProjectSyncResult | null>();
+    harness.processFrontMatter.mockImplementationOnce(async (_file, update) => {
+      if (harness.frontmatter === undefined) {
+        throw new Error("Frontmatter is unavailable");
+      }
+      update(harness.frontmatter);
+      await projectionWrite.promise;
+    });
+    harness.sync.mockReturnValueOnce(canonicalSync.promise);
+
+    const result = await harness.service.completeTask(reference);
+
+    expect(harness.invalidate).toHaveBeenCalledOnce();
+    expect(harness.sync).not.toHaveBeenCalled();
+
+    projectionWrite.resolve(undefined);
+    await expect(result.projection).resolves.toBeUndefined();
+    await vi.waitFor(() => expect(harness.sync).toHaveBeenCalledOnce());
+
+    canonicalSync.resolve(successResult());
+    await canonicalSync.promise;
+  });
+
+  it("wraps an atomic status projection failure after the remote mutation succeeds", async () => {
+    const harness = makeHarness();
+    const projectionCause = new Error("Vault is read-only");
+    harness.processFrontMatter.mockRejectedValueOnce(projectionCause);
+
+    const result = await harness.service.completeTask(reference);
+
+    await expect(result.projection).rejects.toMatchObject({
+      constructor: ProjectTaskProjectionError,
+      message: "Todoist was updated, but the Vault projection could not be refreshed",
+      projectionCause,
+      remoteMutationSucceeded: true,
+    });
+    expect(harness.actions.closeProjectTask).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(harness.sync).toHaveBeenCalledOnce());
+  });
+
+  it("revalidates the managed note identity inside the atomic projection", async () => {
+    const harness = makeHarness();
+    harness.processFrontMatter.mockImplementationOnce(async (_file, update) => {
+      if (harness.frontmatter === undefined) {
+        throw new Error("Frontmatter is unavailable");
+      }
+      harness.frontmatter.todoist_task_id = "replacement-task";
+      update(harness.frontmatter);
+    });
+
+    const result = await harness.service.completeTask(reference);
+
+    await expect(result.projection).rejects.toMatchObject({
+      constructor: ProjectTaskProjectionError,
+      projectionCause: expect.objectContaining({
+        message: "The managed Todoist task identity changed before its status was projected",
+      }),
+      remoteMutationSucceeded: true,
+    });
+    expect(harness.frontmatter).not.toHaveProperty("todoist_completed_at");
+  });
+
+  it("logs a queued canonical sync failure without rejecting the targeted projection", async () => {
+    const harness = makeHarness({
+      frontmatter: managedFrontmatter({
+        todoist_completed: true,
+        todoist_completed_at: COMPLETED_AT.toISOString(),
+        todoist_status: "completed",
+      }),
+    });
+    const syncError = new Error("Canonical sync failed");
+    harness.sync.mockRejectedValueOnce(syncError);
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    try {
+      const result = await harness.service.reopenTask(reference);
+      await expect(result.projection).resolves.toBeUndefined();
+      await vi.waitFor(() =>
+        expect(consoleError).toHaveBeenCalledWith(
+          "Background Project sync failed after a Todoist task status change:",
+          syncError,
+        ),
+      );
+    } finally {
+      consoleError.mockRestore();
+    }
   });
 
   it.each([
@@ -310,7 +469,7 @@ describe("ProjectTaskCommandService", () => {
     {
       name: "reopen",
       status: "completed",
-      action: "reopenTask",
+      action: "reopenProjectTask",
       invoke: (service: ProjectTaskCommandService) => service.reopenTask(reference),
     },
   ] as const)("does not start Project sync when remote $name fails", async (testCase) => {
@@ -321,6 +480,7 @@ describe("ProjectTaskCommandService", () => {
     harness.actions[testCase.action].mockRejectedValue(remoteError);
 
     await expect(testCase.invoke(harness.service)).rejects.toBe(remoteError);
+    expect(harness.processFrontMatter).not.toHaveBeenCalled();
     expect(harness.invalidate).not.toHaveBeenCalled();
     expect(harness.sync).not.toHaveBeenCalled();
   });
@@ -414,7 +574,7 @@ describe("ProjectTaskCommandService", () => {
     });
   });
 
-  it("accepts a non-blocking target conflict when the projection used a safe alternate path", async () => {
+  it("accepts a non-blocking target conflict when the canonical update used a safe alternate path", async () => {
     const harness = makeHarness();
     harness.sync.mockResolvedValue({
       ...successResult(),
@@ -427,20 +587,20 @@ describe("ProjectTaskCommandService", () => {
       ],
     });
 
-    await expect(harness.service.completeTask(reference)).resolves.toBeUndefined();
+    await expect(harness.service.updateTask(reference, {})).resolves.toEqual(harness.task);
   });
 
   it("treats a null sync result as a post-mutation projection failure", async () => {
     const harness = makeHarness();
     harness.sync.mockResolvedValue(null);
 
-    await expect(harness.service.completeTask(reference)).rejects.toMatchObject({
+    await expect(harness.service.updateTask(reference, {})).rejects.toMatchObject({
       constructor: ProjectTaskProjectionError,
       projectionCause: expect.objectContaining({
         message: "Project sync did not produce a Vault projection",
       }),
       remoteMutationSucceeded: true,
     });
-    expect(harness.actions.closeProjectTask).toHaveBeenCalledOnce();
+    expect(harness.actions.updateTask).toHaveBeenCalledOnce();
   });
 });

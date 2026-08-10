@@ -106,7 +106,7 @@ export default class TodoistPlugin extends Plugin {
       isReady: () => this.services.projectTasks.isReady(),
       completeTask: async (task) => {
         try {
-          await this.services.projectTasks.completeTask({
+          return await this.services.projectTasks.completeTask({
             id: task.id,
             filePath: task.filePath,
           });
@@ -121,7 +121,7 @@ export default class TodoistPlugin extends Plugin {
       },
       reopenTask: async (task) => {
         try {
-          await this.services.projectTasks.reopenTask({
+          return await this.services.projectTasks.reopenTask({
             id: task.id,
             filePath: task.filePath,
           });

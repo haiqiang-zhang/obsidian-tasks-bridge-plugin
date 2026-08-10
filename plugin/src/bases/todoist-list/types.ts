@@ -112,10 +112,14 @@ export type TodoistListModel = {
   diagnostics: TodoistListDiagnostics;
 };
 
+export type TodoistListMutationResult = {
+  projection: Promise<void>;
+};
+
 export interface TodoistListActions {
   isReady(): boolean;
-  completeTask(task: TodoistListTaskRecord): Promise<void>;
-  reopenTask(task: TodoistListTaskRecord): Promise<void>;
+  completeTask(task: TodoistListTaskRecord): Promise<TodoistListMutationResult>;
+  reopenTask(task: TodoistListTaskRecord): Promise<TodoistListMutationResult>;
   editTask(task: TodoistListTaskRecord): Promise<void> | void;
 }
 

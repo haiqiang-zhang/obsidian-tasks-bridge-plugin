@@ -53,8 +53,8 @@ const emptyModel = (): TodoistListModel => ({
 
 const actions = (): TodoistListActions => ({
   isReady: vi.fn(() => true),
-  completeTask: vi.fn(async () => undefined),
-  reopenTask: vi.fn(async () => undefined),
+  completeTask: vi.fn(async () => ({ projection: Promise.resolve() })),
+  reopenTask: vi.fn(async () => ({ projection: Promise.resolve() })),
   editTask: vi.fn(),
 });
 

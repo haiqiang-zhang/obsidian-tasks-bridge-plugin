@@ -8,7 +8,7 @@ There are a few steps to get up and running with this plugin.
 
 ## 1. Install plugin
 
-Until Tasks Bridge is available in the Obsidian Community Plugins directory, install it manually from the [latest GitHub release](https://github.com/haiqiang-zhang/tasks-bridge/releases/latest):
+Until Tasks Bridge is available in the Obsidian Community Plugins directory, install it manually from the [latest GitHub release](https://github.com/haiqiang-zhang/obsidian-tasks-bridge-plugin/releases/latest):
 
 1. Download `main.js`, `manifest.json`, and `styles.css` from the release.
 2. Create `<vault>/.obsidian/plugins/tasks-bridge/` in your Vault.

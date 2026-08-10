@@ -1,4 +1,10 @@
-import { type MetadataCache, normalizePath, type TFile, type Vault } from "obsidian";
+import {
+  type FileManager,
+  type MetadataCache,
+  normalizePath,
+  type TFile,
+  type Vault,
+} from "obsidian";
 
 import type { Task as ApiTask, UpdateTaskParams } from "@/api/domain/task";
 import { type TodoistAdapter, TodoistRemoteMutationFollowupError } from "@/data";
@@ -7,17 +13,22 @@ import {
   type ProjectFolderSyncService,
   readManagedNoteIdentity,
 } from "@/project-sync";
-import type { ManagedFrontmatter } from "@/project-sync/document";
+import type { ManagedFrontmatter, ManagedNoteIdentity } from "@/project-sync/document";
 
 export type ManagedProjectTaskReference = {
   id: string;
   filePath: string;
 };
 
+export type ProjectTaskMutationResult = {
+  projection: Promise<void>;
+};
+
 type ManagedProjectTaskStatus = "active" | "completed";
 
 type ManagedProjectTaskTarget = {
   file: TFile;
+  identity: ManagedNoteIdentity;
   status: ManagedProjectTaskStatus;
   taskId: string;
 };
@@ -41,17 +52,20 @@ export class ProjectTaskProjectionError extends Error {
 
 export class ProjectTaskCommandService {
   private readonly vault: Vault;
+  private readonly fileManager: FileManager;
   private readonly metadataCache: MetadataCache;
   private readonly todoist: TodoistAdapter;
   private readonly projectSync: ProjectFolderSyncService;
 
   constructor(
     vault: Vault,
+    fileManager: FileManager,
     metadataCache: MetadataCache,
     todoist: TodoistAdapter,
     projectSync: ProjectFolderSyncService,
   ) {
     this.vault = vault;
+    this.fileManager = fileManager;
     this.metadataCache = metadataCache;
     this.todoist = todoist;
     this.projectSync = projectSync;
@@ -88,20 +102,26 @@ export class ProjectTaskCommandService {
     return task;
   }
 
-  public async completeTask(reference: ManagedProjectTaskReference): Promise<void> {
+  public async completeTask(
+    reference: ManagedProjectTaskReference,
+  ): Promise<ProjectTaskMutationResult> {
     const target = this.resolveTarget(reference);
     this.requireStatus(target, "active", "Only active tasks can be completed");
 
-    await this.runRemoteMutation(() => this.todoist.actions.closeProjectTask(target.taskId));
-    await this.syncAfterRemoteMutation(target.taskId);
+    const completedAt = await this.runRemoteMutation(() =>
+      this.todoist.actions.closeProjectTask(target.taskId),
+    );
+    return this.startStatusProjection(target, "completed", completedAt);
   }
 
-  public async reopenTask(reference: ManagedProjectTaskReference): Promise<void> {
+  public async reopenTask(
+    reference: ManagedProjectTaskReference,
+  ): Promise<ProjectTaskMutationResult> {
     const target = this.resolveTarget(reference);
     this.requireStatus(target, "completed", "Only completed tasks can be reopened");
 
-    await this.runRemoteMutation(() => this.todoist.actions.reopenTask(target.taskId));
-    await this.syncAfterRemoteMutation(target.taskId);
+    await this.runRemoteMutation(() => this.todoist.actions.reopenProjectTask(target.taskId));
+    return this.startStatusProjection(target, "active");
   }
 
   private resolveTarget(reference: ManagedProjectTaskReference): ManagedProjectTaskTarget {
@@ -153,7 +173,7 @@ export class ProjectTaskCommandService {
       throw new ProjectTaskCommandError("This task is unavailable until Project sync restores it");
     }
 
-    return { file, status, taskId: identity.taskId };
+    return { file, identity, status, taskId: identity.taskId };
   }
 
   private requireStatus(
@@ -177,6 +197,78 @@ export class ProjectTaskCommandService {
     }
   }
 
+  private startStatusProjection(
+    target: ManagedProjectTaskTarget,
+    status: ManagedProjectTaskStatus,
+    completedAt?: Date,
+  ): ProjectTaskMutationResult {
+    const syncedAt = new Date().toISOString();
+    const projection = this.projectStatus(target, status, syncedAt, completedAt).catch(
+      (error: unknown) => {
+        throw new ProjectTaskProjectionError(error);
+      },
+    );
+
+    this.queueCanonicalSync(projection);
+    return { projection };
+  }
+
+  private async projectStatus(
+    target: ManagedProjectTaskTarget,
+    status: ManagedProjectTaskStatus,
+    syncedAt: string,
+    completedAt?: Date,
+  ): Promise<void> {
+    // Invalidate first so a snapshot captured before the Todoist response cannot overwrite this
+    // targeted projection. The canonical refresh is queued only after this atomic write settles.
+    this.projectSync.invalidate();
+    await this.fileManager.processFrontMatter(target.file, (frontmatter: unknown) => {
+      if (!isRecord(frontmatter)) {
+        throw new Error(`Invalid frontmatter in '${target.file.path}'`);
+      }
+      this.requireSameIdentity(target, frontmatter);
+
+      frontmatter.todoist_status = status;
+      frontmatter.todoist_completed = status === "completed";
+      frontmatter.todoist_synced_at = syncedAt;
+      frontmatter.todoist_sync_missing_count = 0;
+      delete frontmatter.todoist_stale_since;
+
+      if (status === "completed" && completedAt !== undefined) {
+        frontmatter.todoist_completed_at = completedAt.toISOString();
+      } else {
+        delete frontmatter.todoist_completed_at;
+      }
+    });
+  }
+
+  private requireSameIdentity(
+    target: ManagedProjectTaskTarget,
+    frontmatter: ManagedFrontmatter,
+  ): void {
+    const identity = readManagedNoteIdentity(frontmatter);
+    if (
+      identity === null ||
+      identity.taskId !== target.identity.taskId ||
+      identity.mappingId !== target.identity.mappingId ||
+      identity.rootProjectId !== target.identity.rootProjectId ||
+      identity.projectId !== target.identity.projectId
+    ) {
+      throw new Error("The managed Todoist task identity changed before its status was projected");
+    }
+  }
+
+  private queueCanonicalSync(projection: Promise<void>): void {
+    void projection
+      .then(
+        () => this.projectSync.sync(),
+        () => this.projectSync.sync(),
+      )
+      .catch((error: unknown) => {
+        console.error("Background Project sync failed after a Todoist task status change:", error);
+      });
+  }
+
   private async syncAfterRemoteMutation(taskId: string): Promise<void> {
     try {
       // A sync that started before the mutation may still be in flight. Invalidate its generation
@@ -197,3 +289,6 @@ export class ProjectTaskCommandService {
     }
   }
 }
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);

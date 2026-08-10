@@ -100,7 +100,7 @@ const SettingsRoot: React.FC<Props> = ({ plugin }) => {
           icon="book-open"
           onClick={() => {
             location.replace(
-              "https://haiqiang-zhang.github.io/obsidian-todoist-plus-plugin/docs/overview/",
+              "https://haiqiang-zhang.github.io/obsidian-tasks-bridge-plugin/docs/overview/",
             );
           }}
         />
@@ -109,7 +109,7 @@ const SettingsRoot: React.FC<Props> = ({ plugin }) => {
           icon="github"
           onClick={() => {
             location.replace(
-              "https://github.com/haiqiang-zhang/obsidian-todoist-plus-plugin/issues/new/choose",
+              "https://github.com/haiqiang-zhang/obsidian-tasks-bridge-plugin/issues/new/choose",
             );
           }}
         />

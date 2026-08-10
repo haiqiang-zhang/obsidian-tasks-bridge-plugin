@@ -34,7 +34,11 @@ export type {
   SubscriptionResult,
 } from "@/data/subscriptions";
 
-export type TodoistRemoteMutationAction = "closeProjectTask" | "reopenTask" | "updateTask";
+export type TodoistRemoteMutationAction =
+  | "closeProjectTask"
+  | "reopenProjectTask"
+  | "reopenTask"
+  | "updateTask";
 
 export class TodoistRemoteMutationFollowupError extends Error {
   public readonly remoteMutationSucceeded = true;
@@ -66,10 +70,11 @@ type InFlightMetadataSync = {
 export class TodoistAdapter {
   public actions = {
     closeTask: async (id: TaskId) => await this.closeTask(id),
-    closeProjectTask: async (id: TaskId): Promise<void> => await this.closeProjectTask(id),
+    closeProjectTask: async (id: TaskId): Promise<Date> => await this.closeProjectTask(id),
     createTask: async (content: string, params: CreateTaskParams): Promise<ApiTask> =>
       await this.api.withInner((api) => api.createTask(content, params)),
     getTask: async (id: TaskId): Promise<ApiTask> => await this.getTask(id),
+    reopenProjectTask: async (id: TaskId): Promise<void> => await this.reopenProjectTask(id),
     reopenTask: async (id: TaskId): Promise<void> => await this.reopenTask(id),
     updateTask: async (id: TaskId, params: UpdateTaskParams): Promise<ApiTask> =>
       await this.updateTask(id, params),
@@ -469,17 +474,31 @@ export class TodoistAdapter {
     });
   }
 
-  private async closeProjectTask(id: TaskId): Promise<void> {
+  private async reopenProjectTask(id: TaskId): Promise<void> {
+    const accountGeneration = this.accountGeneration;
+    await this.api.withInner((api) => api.reopenTask(id));
+    await this.runRemoteMutationFollowup("reopenProjectTask", async () => {
+      this.assertAccountGeneration(accountGeneration, "reopening a project task");
+    });
+
+    void this.refreshActiveSubscriptions(accountGeneration, "reopening a project task").catch(
+      (error: unknown) => {
+        console.error("Failed to refresh task queries after reopening a project task:", error);
+      },
+    );
+  }
+
+  private async closeProjectTask(id: TaskId): Promise<Date> {
     const accountGeneration = this.accountGeneration;
     await this.api.withInner((api) => api.closeTask(id));
-    await this.runRemoteMutationFollowup("closeProjectTask", async () => {
+    return await this.runRemoteMutationFollowup("closeProjectTask", async () => {
       this.assertAccountGeneration(accountGeneration, "closing a project task");
       const completedAt = new Date();
       for (const subscription of this.allSubscriptions()) {
         subscription.complete(id, completedAt);
       }
-      await this.onTaskClosed?.(id, completedAt);
-      this.assertAccountGeneration(accountGeneration, "closing a project task");
+      void this.notifyTaskClosed(id, completedAt);
+      return completedAt;
     });
   }
 

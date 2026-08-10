@@ -587,7 +587,46 @@ describe("TodoistAdapter", () => {
       expect(mockApi.getTasks).not.toHaveBeenCalled();
     });
 
-    it("closes a project task and commits query and cache follow-up", async () => {
+    it("confirms a project reopen without waiting for mounted query refreshes", async () => {
+      const pendingRefresh = deferred<ReturnType<typeof makeApiTask>[]>();
+      vi.mocked(mockApi.reopenTask).mockResolvedValue(undefined);
+      vi.mocked(mockApi.getTasks).mockImplementationOnce(async () => await pendingRefresh.promise);
+      await adapter.initialize(mockApi);
+      const queryCallback = vi.fn();
+      adapter.subscribe("#test", queryCallback);
+
+      await expect(adapter.actions.reopenProjectTask("reopened-task")).resolves.toBeUndefined();
+
+      expect(mockApi.reopenTask).toHaveBeenCalledWith("reopened-task");
+      expect(mockApi.getTasks).toHaveBeenCalledWith("#test");
+
+      pendingRefresh.resolve([makeApiTask({ id: "reopened-task" })]);
+      await vi.waitFor(() =>
+        expect(queryCallback).toHaveBeenCalledWith(expect.objectContaining({ type: "success" })),
+      );
+    });
+
+    it("rejects a project reopen when the account changes after Todoist confirms it", async () => {
+      const pendingReopen = deferred<void>();
+      vi.mocked(mockApi.reopenTask).mockImplementationOnce(async () => await pendingReopen.promise);
+      await adapter.initialize(mockApi);
+      adapter.subscribe("#test", vi.fn());
+
+      const reopening = adapter.actions.reopenProjectTask("old-account-task");
+      adapter.reset();
+      pendingReopen.resolve(undefined);
+
+      await expect(reopening).rejects.toMatchObject({
+        action: "reopenProjectTask",
+        remoteMutationSucceeded: true,
+        cause: expect.objectContaining({
+          message: "Todoist account changed while reopening a project task",
+        }),
+      });
+      expect(mockApi.getTasks).not.toHaveBeenCalled();
+    });
+
+    it("closes a project task, updates queries, and starts its cache follow-up", async () => {
       const onTaskClosed = vi.fn();
       adapter = new TodoistAdapter({ onTaskClosed });
       vi.mocked(mockApi.closeTask).mockResolvedValue(undefined);
@@ -602,7 +641,7 @@ describe("TodoistAdapter", () => {
         [makeTask("task-1")],
       );
 
-      await expect(adapter.actions.closeProjectTask("task-1")).resolves.toBeUndefined();
+      await expect(adapter.actions.closeProjectTask("task-1")).resolves.toBeInstanceOf(Date);
 
       expect(mockApi.closeTask).toHaveBeenCalledWith("task-1");
       expect(onTaskClosed).toHaveBeenCalledWith("task-1", expect.any(Date));
@@ -631,11 +670,12 @@ describe("TodoistAdapter", () => {
       expect(onTaskClosed).not.toHaveBeenCalled();
     });
 
-    it("marks a project close cache failure after updating mounted queries", async () => {
+    it("does not reject a confirmed project close when its cache follow-up fails", async () => {
       const cacheError = new Error("cache write failed");
       adapter = new TodoistAdapter({
         onTaskClosed: vi.fn().mockRejectedValue(cacheError),
       });
+      const errorLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
       vi.mocked(mockApi.closeTask).mockResolvedValue(undefined);
       await adapter.initialize(mockApi);
 
@@ -648,21 +688,19 @@ describe("TodoistAdapter", () => {
         [makeTask("task-1")],
       );
 
-      const error = await adapter.actions
-        .closeProjectTask("task-1")
-        .catch((reason: unknown) => reason);
-
-      expect(error).toBeInstanceOf(TodoistRemoteMutationFollowupError);
-      expect(error).toMatchObject({
-        action: "closeProjectTask",
-        remoteMutationSucceeded: true,
-        cause: cacheError,
-      });
+      await expect(adapter.actions.closeProjectTask("task-1")).resolves.toBeInstanceOf(Date);
+      await vi.waitFor(() =>
+        expect(errorLog).toHaveBeenCalledWith(
+          "Failed to update Todoist query cache after closing a task:",
+          cacheError,
+        ),
+      );
       const result = captured as SubscriptionResult;
       expect(result.type).toBe("success");
       if (result.type === "success") {
         expect(result.tasks).toEqual([]);
       }
+      errorLog.mockRestore();
     });
 
     it("marks an account change after a project close without committing local follow-up", async () => {

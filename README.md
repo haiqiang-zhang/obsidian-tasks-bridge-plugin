@@ -1,4 +1,4 @@
-# Tasks Bridge
+# Obsidian Tasks Bridge
 
 <p align="center">
   <img src="docs/static/img/logo.svg" alt="Tasks Bridge logo" width="96">
@@ -14,11 +14,16 @@ Tasks Bridge is based on the original [Todoist Sync](https://github.com/jamiebry
 
 ```mermaid
 flowchart LR
-    OBSIDIAN["Obsidian<br/>Interaction and presentation"] <--> BRIDGE["Tasks Bridge"]
-    BRIDGE --> TODOIST["Todoist<br/>Implemented"]
-    BRIDGE -.-> FUTURE_A["Future task backend A<br/>Planned"]
-    BRIDGE -.-> FUTURE_B["Future task backend B<br/>Planned"]
-    BRIDGE -.-> MORE["More task backends<br/>Planned"]
+    OBSIDIAN["`Obsidian
+    Interaction and presentation`"] <--> BRIDGE["Tasks Bridge"]
+    BRIDGE --> TODOIST["`Todoist
+    Implemented`"]
+    BRIDGE -.-> FUTURE_A["`Future task backend A
+    Planned`"]
+    BRIDGE -.-> FUTURE_B["`Future task backend B
+    Planned`"]
+    BRIDGE -.-> MORE["`More task backends
+    Planned`"]
 ```
 
 The solid backend connection is available now. Dashed connections are planned integrations. Every task service remains the system of record for its own data.
@@ -28,11 +33,11 @@ Todoist is the first supported backend. The current Todoist integration provides
 - **Query blocks** render a Todoist filter inside any note, with cache-first loading and optional completed-task history.
 - **Project sync** maps one or more Todoist projects to independent Vault folders. Each selected folder is that project's exact root, optional child projects become nested folders, and every active or completed task becomes a Markdown file that can be managed with [Obsidian Bases](https://help.obsidian.md/bases).
 
-Project sync is a one-way Todoist-to-Obsidian projection. It retrieves complete completed-task history from Todoist's project endpoint, preserves note bodies and properties not managed by the plugin, and does not treat arbitrary Base or Markdown edits as Todoist changes. Its **Tasks List** Base view provides explicit server-backed actions for editing, completing, and reopening tasks. Open task notes are deferred instead of overwritten, and tasks that leave an included child hierarchy are retained as `out_of_scope`. See the [project sync guide](https://haiqiang-zhang.github.io/tasks-bridge/docs/project-mode/).
+Project sync is a one-way Todoist-to-Obsidian projection. It retrieves complete completed-task history from Todoist's project endpoint, preserves note bodies and properties not managed by the plugin, and does not treat arbitrary Base or Markdown edits as Todoist changes. Its **Tasks List** Base view provides explicit server-backed actions for editing, completing, and reopening tasks. Open task notes are deferred instead of overwritten, and tasks that leave an included child hierarchy are retained as `out_of_scope`. See the [project sync guide](https://haiqiang-zhang.github.io/obsidian-tasks-bridge-plugin/docs/project-mode/).
 
 The Todoist integration is not created by, affiliated with, endorsed by, or supported by Doist.
 
-Read the [Tasks Bridge documentation](https://haiqiang-zhang.github.io/tasks-bridge/) for installation, query syntax, and general usage.
+Read the [Tasks Bridge documentation](https://haiqiang-zhang.github.io/obsidian-tasks-bridge-plugin/) for installation, query syntax, and general usage.
 
 ## What Tasks Bridge adds to Todoist Sync
 

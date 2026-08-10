@@ -4,7 +4,7 @@ import type * as Preset from "@docusaurus/preset-classic";
 
 const title = "Tasks Bridge";
 const org = "haiqiang-zhang";
-const project = "tasks-bridge";
+const project = "obsidian-tasks-bridge-plugin";
 
 const config: Config = {
   title: title,

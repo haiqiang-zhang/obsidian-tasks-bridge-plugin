@@ -211,10 +211,10 @@ const makeServices = () => ({
     sync: vi.fn(async (): Promise<ProjectSyncResult | null> => null),
   },
   projectTasks: {
-    completeTask: vi.fn(async () => undefined),
+    completeTask: vi.fn(async () => ({ projection: Promise.resolve() })),
     isReady: vi.fn(() => true),
     loadEditableTask: vi.fn(),
-    reopenTask: vi.fn(async () => undefined),
+    reopenTask: vi.fn(async () => ({ projection: Promise.resolve() })),
     updateTask: vi.fn(async () => undefined),
   },
   todoist: {

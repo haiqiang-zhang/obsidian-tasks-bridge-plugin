@@ -5,6 +5,7 @@ import { TodoistList } from "./TodoistList";
 import type {
   TodoistListActions,
   TodoistListModel,
+  TodoistListMutationResult,
   TodoistListNavigation,
   TodoistListProject,
   TodoistListTaskNode,
@@ -105,10 +106,26 @@ const makeModel = (root: TodoistListProject): TodoistListModel => ({
 
 const makeActions = (ready = true): TodoistListActions => ({
   isReady: vi.fn(() => ready),
-  completeTask: vi.fn().mockResolvedValue(undefined),
-  reopenTask: vi.fn().mockResolvedValue(undefined),
+  completeTask: vi.fn().mockResolvedValue({ projection: Promise.resolve() }),
+  reopenTask: vi.fn().mockResolvedValue({ projection: Promise.resolve() }),
   editTask: vi.fn(),
 });
+
+type Deferred<T> = {
+  promise: Promise<T>;
+  reject: (reason?: unknown) => void;
+  resolve: (value: T) => void;
+};
+
+const deferred = <T,>(): Deferred<T> => {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, reject, resolve };
+};
 
 const makeNavigation = (): TodoistListNavigation => ({
   openFile: vi.fn(),
@@ -300,6 +317,86 @@ describe("TodoistList", () => {
     rerenderList(makeModel(makeProject("root", "Root", [completed])));
     const reopen = screen.getByRole("checkbox", { name: "Reopen task: Task active" });
     await waitFor(() => expect(reopen).toBeEnabled());
+  });
+
+  it("ends remote loading while projection is pending and unlocks after Base confirms the state", async () => {
+    const projection = deferred<void>();
+    const completed = makeTask("completed", "completed");
+    const actions = makeActions();
+    vi.mocked(actions.reopenTask).mockResolvedValue({ projection: projection.promise });
+    const { rerenderList } = renderList(
+      makeModel(makeProject("root", "Root", [completed])),
+      actions,
+    );
+
+    const reopen = screen.getByRole("checkbox", { name: "Reopen task: Task completed" });
+    fireEvent.click(reopen);
+
+    await waitFor(() =>
+      expect(reopen.closest("span")).toHaveAttribute(
+        "title",
+        "Todoist was updated. Waiting for Project sync before another action.",
+      ),
+    );
+    expect(reopen.closest("span")).not.toHaveAttribute("data-loading");
+    expect(reopen).toBeDisabled();
+
+    rerenderList(makeModel(makeProject("root", "Root", [makeTask("completed", "active")])));
+    const complete = screen.getByRole("checkbox", { name: "Complete task: Task completed" });
+    await waitFor(() => expect(complete).toBeEnabled());
+    expect(complete.closest("span")).not.toHaveAttribute("data-loading");
+
+    await act(async () => projection.resolve());
+  });
+
+  it("ignores a late remote failure after Base status supersedes the pending action", async () => {
+    const remote = deferred<TodoistListMutationResult>();
+    const completed = makeTask("completed", "completed");
+    const actions = makeActions();
+    vi.mocked(actions.reopenTask).mockReturnValue(remote.promise);
+    const { rerenderList } = renderList(
+      makeModel(makeProject("root", "Root", [completed])),
+      actions,
+    );
+
+    const reopen = screen.getByRole("checkbox", { name: "Reopen task: Task completed" });
+    fireEvent.click(reopen);
+    await waitFor(() => expect(reopen.closest("span")).toHaveAttribute("data-loading", "true"));
+
+    rerenderList(makeModel(makeProject("root", "Root", [makeTask("completed", "active")])));
+    const complete = screen.getByRole("checkbox", { name: "Complete task: Task completed" });
+    await waitFor(() => expect(complete).toBeEnabled());
+    expect(complete.closest("span")).not.toHaveAttribute("data-loading");
+
+    await act(async () => remote.reject(new Error("Late reopen failure")));
+    expect(screen.queryByText("Late reopen failure")).not.toBeInTheDocument();
+    expect(complete.closest("span")).not.toHaveAttribute("data-loading");
+    expect(complete).toBeEnabled();
+  });
+
+  it("shows projection failure without a spinner and clears it after Base confirms the state", async () => {
+    const projection = deferred<void>();
+    const completed = makeTask("completed", "completed");
+    const actions = makeActions();
+    vi.mocked(actions.reopenTask).mockResolvedValue({ projection: projection.promise });
+    const { rerenderList } = renderList(
+      makeModel(makeProject("root", "Root", [completed])),
+      actions,
+    );
+
+    const reopen = screen.getByRole("checkbox", { name: "Reopen task: Task completed" });
+    fireEvent.click(reopen);
+    await waitFor(() => expect(reopen.closest("span")).not.toHaveAttribute("data-loading"));
+
+    await act(async () => projection.reject(new Error("Projection refresh failed")));
+    expect(await screen.findByText("Projection refresh failed")).toBeInTheDocument();
+    expect(reopen.closest("span")).not.toHaveAttribute("data-loading");
+    expect(reopen).toBeDisabled();
+
+    rerenderList(makeModel(makeProject("root", "Root", [makeTask("completed", "active")])));
+    const complete = screen.getByRole("checkbox", { name: "Complete task: Task completed" });
+    await waitFor(() => expect(complete).toBeEnabled());
+    expect(screen.queryByText("Projection refresh failed")).not.toBeInTheDocument();
   });
 
   it("opens and previews the backing Markdown note", () => {

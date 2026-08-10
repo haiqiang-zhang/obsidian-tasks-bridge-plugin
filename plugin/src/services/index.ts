@@ -48,6 +48,7 @@ export const makeServices = (plugin: TodoistPlugin): Services => {
     projectSync,
     projectTasks: new ProjectTaskCommandService(
       plugin.app.vault,
+      plugin.app.fileManager,
       plugin.app.metadataCache,
       todoist,
       projectSync,
