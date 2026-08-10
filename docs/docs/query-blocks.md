@@ -42,7 +42,7 @@ The initial refresh loads the newest three-month window. Each Todoist request as
 
 The button shows **Load 6 months**, then **Load 9 months**, **Load 12 months**, and so on. This stepped design exists because Todoist's current completed-task API limits each filtered history request to a three-month window. Each successful click therefore loads one complete preceding window; older windows are never fetched automatically.
 
-We are waiting for Todoist to officially support retrieving all completed tasks matched by a filter without fixed date windows. When that becomes available, Todoist Sync ++ will adopt it with a more seamless implementation.
+We are waiting for Todoist to officially support retrieving all completed tasks matched by a filter without fixed date windows. When that becomes available, Tasks Bridge will adopt it with a more seamless implementation.
 
 :::
 

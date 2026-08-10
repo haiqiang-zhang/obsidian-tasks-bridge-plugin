@@ -1,5 +1,6 @@
 import { type App, PluginSettingTab } from "obsidian";
 import type React from "react";
+import { useCallback, useEffect, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 
 import { t } from "@/i18n";
@@ -11,6 +12,8 @@ import { TokenValidation } from "../../token";
 import { AutoRefreshIntervalControl } from "./AutoRefreshIntervalControl";
 import { LabelsControl } from "./LabelsControl";
 import { ProjectDropdownControl } from "./ProjectDropdownControl";
+import { ProjectSyncMappingsControl } from "./ProjectSyncMappingsControl";
+import { ProjectSyncNowControl } from "./ProjectSyncNowControl";
 import { Setting } from "./SettingItem";
 import { TokenChecker } from "./TokenChecker";
 import "./styles.scss";
@@ -48,6 +51,25 @@ type SettingsKeys<V> = {
 
 const SettingsRoot: React.FC<Props> = ({ plugin }) => {
   const settings = useSettingsStore();
+  const [projectSyncValidation, setProjectSyncValidation] = useState({
+    ready: false,
+    valid: false,
+  });
+  const onProjectSyncValidityChange = useCallback((valid: boolean, ready: boolean) => {
+    setProjectSyncValidation((current) =>
+      current.valid === valid && current.ready === ready ? current : { ready, valid },
+    );
+  }, []);
+
+  useEffect(() => {
+    if (
+      projectSyncValidation.ready &&
+      !projectSyncValidation.valid &&
+      settings.projectSyncEnabled
+    ) {
+      void plugin.writeOptions({ projectSyncEnabled: false });
+    }
+  }, [plugin, projectSyncValidation, settings.projectSyncEnabled]);
 
   const mkOptionUpdate = <K extends keyof Settings>(key: K) => {
     return async (val: Settings[K]) => {
@@ -126,6 +148,41 @@ const SettingsRoot: React.FC<Props> = ({ plugin }) => {
             await plugin.services.token.migrateStorage(oldStorage, val);
             await plugin.writeOptions({ tokenStorage: val });
           }}
+        />
+      </Setting.Root>
+
+      <h2>{i18n.projectSync.header}</h2>
+      <Setting.Root
+        name={i18n.projectSync.enabled.label}
+        description={i18n.projectSync.enabled.description}
+      >
+        <Setting.ToggleControl
+          {...toggleProps("projectSyncEnabled")}
+          ariaLabel={i18n.projectSync.enabled.label}
+          disabled={!projectSyncValidation.valid && !settings.projectSyncEnabled}
+        />
+      </Setting.Root>
+      <Setting.Root
+        name={i18n.projectSync.mappings.label}
+        description={i18n.projectSync.mappings.description}
+      >
+        <ProjectSyncMappingsControl
+          mappings={settings.projectSyncMappings}
+          onChange={async (mappings, valid) => {
+            await plugin.writeOptions({
+              projectSyncMappings: mappings,
+              ...(settings.projectSyncEnabled && !valid ? { projectSyncEnabled: false } : {}),
+            });
+          }}
+          onValidityChange={onProjectSyncValidityChange}
+        />
+      </Setting.Root>
+      <Setting.Root
+        name={i18n.projectSync.syncNow.label}
+        description={i18n.projectSync.syncNow.description}
+      >
+        <ProjectSyncNowControl
+          disabled={!settings.projectSyncEnabled || !projectSyncValidation.valid}
         />
       </Setting.Root>
 

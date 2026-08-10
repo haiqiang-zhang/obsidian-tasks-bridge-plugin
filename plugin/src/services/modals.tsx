@@ -6,6 +6,7 @@ import { ModalContext, type ModalInfo, PluginContext } from "@/ui/context";
 
 import type TodoistPlugin from "..";
 import { CreateTaskModal } from "../ui/createTaskModal";
+import { EditTaskModal } from "../ui/editTaskModal";
 import { OnboardingModal } from "../ui/onboardingModal";
 
 type ModalOptions = {
@@ -77,6 +78,13 @@ export class ModalHandler {
 
   public taskCreation(props: React.ComponentProps<typeof CreateTaskModal>) {
     new ReactModal(this.plugin, CreateTaskModal, props, {
+      dontCloseOnExternalClick: Platform.isMobileApp,
+    }).open();
+  }
+
+  public taskEdit(props: React.ComponentProps<typeof EditTaskModal>) {
+    new ReactModal(this.plugin, EditTaskModal, props, {
+      title: "Edit Todoist task",
       dontCloseOnExternalClick: Platform.isMobileApp,
     }).open();
   }

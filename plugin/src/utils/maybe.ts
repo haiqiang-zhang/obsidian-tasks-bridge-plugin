@@ -15,6 +15,10 @@ export class Maybe<T> {
     this.value = val;
   }
 
+  public clear(): void {
+    this.value = undefined;
+  }
+
   public hasValue(): boolean {
     return this.value !== undefined;
   }

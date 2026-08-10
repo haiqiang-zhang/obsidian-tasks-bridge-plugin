@@ -56,9 +56,14 @@ export type DueDate = {
 type Props = {
   selected: DueDate | undefined;
   setSelected: (selected: DueDate | undefined) => void;
+  allowPastDates?: boolean;
 };
 
-export const DueDateSelector: React.FC<Props> = ({ selected, setSelected }) => {
+export const DueDateSelector: React.FC<Props> = ({
+  selected,
+  setSelected,
+  allowPastDates = false,
+}) => {
   const label = getLabel(selected);
   const suggestions = getSuggestions();
 
@@ -142,7 +147,7 @@ export const DueDateSelector: React.FC<Props> = ({ selected, setSelected }) => {
                   selectDate(date);
                   close();
                 }}
-                minValue={today(timezone())}
+                minValue={allowPastDates ? undefined : today(timezone())}
               >
                 <header>
                   <Heading level={4} />

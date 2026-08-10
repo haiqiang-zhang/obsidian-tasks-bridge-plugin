@@ -17,18 +17,66 @@ Controls where the plugin stores your Todoist API token. There are two options:
 
 Changing this setting will automatically migrate your token to the new storage location.
 
+## Project sync
+
+Project sync is an independent, one-way Todoist-to-Vault projection. You can configure multiple Todoist-project-to-Vault-folder mappings. Its controls remain available while the mode is disabled, so you can prepare every destination and scope before enabling it. See the [project sync guide](./project-mode) for the folder layout, task properties, and safety behavior.
+
+### Enable project sync
+
+Enables synchronization for every valid project mapping. An enabled configuration synchronizes once at startup, can be synchronized manually at any time, and participates in periodic synchronization when the global **Auto-refresh** setting is also enabled. Disabling the mode stops synchronization and leaves existing Markdown files in place.
+
+### Project mappings
+
+Select **Add project mapping** to configure one or more independent project trees. Every mapping contains the following three controls.
+
+#### Todoist project
+
+Select the root project to synchronize. Projects are displayed hierarchically with their parent path so projects with the same name remain distinguishable.
+
+#### Vault folder
+
+Select or enter an existing Vault folder. This is the selected Todoist project's **exact root folder**, not a parent destination. Tasks belonging directly to the selected project are written into this folder. The plugin does not add another folder named after the selected project.
+
+If you later change this folder, the plugin migrates the mapping's managed notes from every registered previous root. Open notes are deferred and retried, so an interrupted move does not create a second copy or discard user-authored content.
+
+#### Include child projects
+
+When enabled, all descendants of the selected project are synchronized recursively. Each child project becomes a nested folder below the mapped root folder. When disabled, only the selected project and its own tasks are synchronized. Previously synchronized descendant notes remain in place and become `out_of_scope` rather than being deleted.
+
+#### Mapping validation
+
+Validation messages appear directly in each mapping. All mappings must be valid before a manual or automatic project sync can start. The settings reject:
+
+- an incomplete mapping;
+- a Todoist project that is unavailable or selected more than once;
+- a Vault folder that does not exist;
+- equal or nested Vault folders, including case and Unicode-normalization variants; and
+- a separately mapped Todoist project already covered by another mapping with **Include child projects** enabled.
+
+These restrictions ensure that two mappings never own the same Todoist tasks or write inside the same Vault tree.
+
+If a mapping edit makes an enabled configuration invalid, the plugin turns project sync off in the same settings update. It also turns the mode off if live project or folder metadata later makes the configuration invalid.
+
+### Synchronize project now
+
+Runs every project mapping immediately. The button is available only after project sync is enabled, at least one mapping exists, Todoist project metadata is ready, and all mappings pass validation.
+
+Project mode retrieves the full completed-task history available from Todoist's project endpoint. It does not use the progressive **Load earlier** controls from query blocks. Query-block filters, caching, and rendering settings remain independent of these mappings.
+
 ## Auto-refresh
 
 ### Auto-refresh enabled
 
-When enabled, all queries will auto-refresh themselves according to the interval in the settings.
+When enabled, periodic refreshes apply to both synchronization modes:
+
+- query blocks that do not define their own `autorefresh` value; and
+- Project sync when **Enable project sync** is also enabled and every mapping is valid.
+
+Project sync at startup and manual synchronization through **Sync now** or the **Sync Todoist projects** command remain available when global auto-refresh is disabled.
 
 ### Auto-refresh interval
 
-This defines, in seconds, the interval between automatic refreshes. This is only used when:
-
-- the auto-refresh is enabled in the settings
-- the query does not define an explicit interval
+This defines the shared interval, in seconds, for automatic query-block and Project sync refreshes. A query block can define an explicit [`autorefresh`](./query-blocks#autorefresh) value, which overrides the shared interval for that block only. Project sync always uses the shared interval.
 
 ## Rendering
 

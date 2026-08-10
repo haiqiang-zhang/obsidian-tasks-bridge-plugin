@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img" aria-labelledby="title">
-  <title id="title">Todoist Sync ++</title>
+  <title id="title">Tasks Bridge</title>
   <defs>
     <linearGradient id="surface" x1="4" y1="3" x2="21" y2="22" gradientUnits="userSpaceOnUse">
       <stop stop-color="#ffffff" stop-opacity=".15"/>

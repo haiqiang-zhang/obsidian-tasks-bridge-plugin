@@ -3,7 +3,12 @@ import type { Label, LabelId } from "@/api/domain/label";
 import type { Project, ProjectId } from "@/api/domain/project";
 import type { Section, SectionId } from "@/api/domain/section";
 import type { SyncToken } from "@/api/domain/sync";
-import type { Task as ApiTask, CreateTaskParams, TaskId } from "@/api/domain/task";
+import type {
+  Task as ApiTask,
+  CreateTaskParams,
+  TaskId,
+  UpdateTaskParams,
+} from "@/api/domain/task";
 import type { UserInfo } from "@/api/domain/user";
 import { mapApiError } from "@/data/errors";
 import { type DataAccessor, hydrate } from "@/data/hydrate";
@@ -29,15 +34,45 @@ export type {
   SubscriptionResult,
 } from "@/data/subscriptions";
 
+export type TodoistRemoteMutationAction = "closeProjectTask" | "reopenTask" | "updateTask";
+
+export class TodoistRemoteMutationFollowupError extends Error {
+  public readonly remoteMutationSucceeded = true;
+  public readonly action: TodoistRemoteMutationAction;
+  public readonly cause: unknown;
+
+  constructor(action: TodoistRemoteMutationAction, cause: unknown) {
+    super(`Todoist ${action} succeeded, but its local follow-up failed`);
+    this.name = "TodoistRemoteMutationFollowupError";
+    this.action = action;
+    this.cause = cause;
+  }
+}
+
 type TodoistAdapterOptions = {
   onTaskClosed?: (taskId: TaskId, completedAt: Date) => Promise<void> | void;
+};
+
+export type ProjectTaskSnapshot = {
+  activeTasks: Task[];
+  completedTasks: Task[];
+};
+
+type InFlightMetadataSync = {
+  accountGeneration: number;
+  promise: Promise<boolean>;
 };
 
 export class TodoistAdapter {
   public actions = {
     closeTask: async (id: TaskId) => await this.closeTask(id),
+    closeProjectTask: async (id: TaskId): Promise<void> => await this.closeProjectTask(id),
     createTask: async (content: string, params: CreateTaskParams): Promise<ApiTask> =>
       await this.api.withInner((api) => api.createTask(content, params)),
+    getTask: async (id: TaskId): Promise<ApiTask> => await this.getTask(id),
+    reopenTask: async (id: TaskId): Promise<void> => await this.reopenTask(id),
+    updateTask: async (id: TaskId, params: UpdateTaskParams): Promise<ApiTask> =>
+      await this.updateTask(id, params),
   };
 
   private readonly api: Maybe<TodoistApiClient> = Maybe.Empty();
@@ -52,6 +87,7 @@ export class TodoistAdapter {
 
   private accountGeneration = 0;
   private hasSynced = false;
+  private metadataSyncInFlight: InFlightMetadataSync | undefined;
   private readonly onTaskClosed: TodoistAdapterOptions["onTaskClosed"];
   private syncToken: SyncToken = "*";
 
@@ -78,28 +114,66 @@ export class TodoistAdapter {
     await this.sync();
   }
 
-  public async sync(): Promise<void> {
+  /**
+   * Refresh shared metadata and every mounted query-block subscription.
+   *
+   * The boolean reports whether repository metadata was refreshed for the current account. Query
+   * subscriptions are still refreshed when metadata fails so the original query-block mode keeps
+   * its previous best-effort behavior.
+   */
+  public async sync(): Promise<boolean> {
     if (!this.api.hasValue()) {
-      return;
+      return false;
     }
 
     const accountGeneration = this.accountGeneration;
-    await Promise.all([this.syncUserInfo(accountGeneration), this.syncMetadata(accountGeneration)]);
+    const metadataSucceeded = await this.syncMetadata();
 
     if (accountGeneration !== this.accountGeneration) {
-      return;
+      return false;
     }
 
     for (const subscription of this.subscriptions.list()) {
       if (accountGeneration !== this.accountGeneration) {
-        return;
+        return false;
       }
       await subscription.update();
     }
 
     if (accountGeneration === this.accountGeneration) {
       this.hasSynced = true;
+      return metadataSucceeded;
     }
+
+    return false;
+  }
+
+  /** Returns true only when Todoist repository metadata was applied for the current account. */
+  public syncMetadata(): Promise<boolean> {
+    if (!this.api.hasValue()) {
+      return Promise.resolve(false);
+    }
+
+    const accountGeneration = this.accountGeneration;
+    if (this.metadataSyncInFlight?.accountGeneration === accountGeneration) {
+      return this.metadataSyncInFlight.promise;
+    }
+
+    const promise = this.performMetadataSync(accountGeneration).finally(() => {
+      if (this.metadataSyncInFlight?.promise === promise) {
+        this.metadataSyncInFlight = undefined;
+      }
+    });
+    this.metadataSyncInFlight = { accountGeneration, promise };
+    return promise;
+  }
+
+  private async performMetadataSync(accountGeneration: number): Promise<boolean> {
+    const [, metadataSucceeded] = await Promise.all([
+      this.syncUserInfo(accountGeneration),
+      this.syncMetadataRepositories(accountGeneration),
+    ]);
+    return metadataSucceeded;
   }
 
   private async syncUserInfo(accountGeneration: number): Promise<void> {
@@ -116,23 +190,25 @@ export class TodoistAdapter {
     }
   }
 
-  private async syncMetadata(accountGeneration: number): Promise<void> {
+  private async syncMetadataRepositories(accountGeneration: number): Promise<boolean> {
     try {
       if (!this.api.hasValue()) {
-        return;
+        return false;
       }
 
       const response = await this.api.withInner((api) => api.sync(this.syncToken));
       if (accountGeneration !== this.accountGeneration) {
-        return;
+        return false;
       }
 
       this.projects.applyDiff(response.projects);
       this.sections.applyDiff(response.sections);
       this.labels.applyDiff(response.labels);
       this.syncToken = response.syncToken;
+      return true;
     } catch (error) {
       console.error("Failed to sync metadata:", error);
+      return false;
     }
   }
 
@@ -142,6 +218,52 @@ export class TodoistAdapter {
       sections: this.sections,
       labels: this.labels,
     };
+  }
+
+  public listActiveProjects(): Project[] {
+    return Array.from(this.projects.iterActive());
+  }
+
+  public async getProjectTasks(projectId: ProjectId): Promise<ProjectTaskSnapshot> {
+    const accountGeneration = this.accountGeneration;
+    const activeTasks = await this.api.withInner((api) => api.getActiveTasksByProject(projectId));
+    if (accountGeneration !== this.accountGeneration) {
+      throw new Error("Todoist account changed during project task sync");
+    }
+    // Capture the completed-task boundary only after the active snapshot returns. This includes
+    // tasks completed while the active request was in flight instead of leaving the previous
+    // boundary gap between the two scans.
+    const completedUntil = new Date().toISOString();
+    const completedTasks = await this.api.withInner((api) =>
+      api.getCompletedTasksByProject(projectId, completedUntil),
+    );
+
+    if (accountGeneration !== this.accountGeneration) {
+      throw new Error("Todoist account changed during project task sync");
+    }
+
+    const tasksById = new Map<TaskId, ApiTask>();
+
+    for (const task of activeTasks) {
+      tasksById.set(task.id, task);
+    }
+    // Annotated completion entries are fetched after the active snapshot and carry the current
+    // `checked` state. Let that later observation win for both newly completed and reopened tasks.
+    for (const task of completedTasks) {
+      tasksById.set(task.id, task);
+    }
+
+    const snapshot: ProjectTaskSnapshot = { activeTasks: [], completedTasks: [] };
+    for (const task of tasksById.values()) {
+      const hydrated = hydrate(task, this.data());
+      if (task.checked ?? task.completedAt != null) {
+        snapshot.completedTasks.push(hydrated);
+      } else {
+        snapshot.activeTasks.push(hydrated);
+      }
+    }
+
+    return snapshot;
   }
 
   public subscribe(
@@ -216,7 +338,9 @@ export class TodoistAdapter {
 
   public reset(): void {
     this.accountGeneration++;
+    this.api.clear();
     this.hasSynced = false;
+    this.metadataSyncInFlight = undefined;
     this.syncToken = "*";
     this.userInfo = undefined;
     this.projects.clear();
@@ -317,6 +441,75 @@ export class TodoistAdapter {
     }
 
     await cacheUpdate;
+  }
+
+  private async getTask(id: TaskId): Promise<ApiTask> {
+    const accountGeneration = this.accountGeneration;
+    const task = await this.api.withInner((api) => api.getTask(id));
+    this.assertAccountGeneration(accountGeneration, "fetching a task");
+    return task;
+  }
+
+  private async updateTask(id: TaskId, params: UpdateTaskParams): Promise<ApiTask> {
+    const accountGeneration = this.accountGeneration;
+    const task = await this.api.withInner((api) => api.updateTask(id, params));
+    await this.runRemoteMutationFollowup("updateTask", async () => {
+      this.assertAccountGeneration(accountGeneration, "updating a task");
+      await this.refreshActiveSubscriptions(accountGeneration, "updating a task");
+    });
+    return task;
+  }
+
+  private async reopenTask(id: TaskId): Promise<void> {
+    const accountGeneration = this.accountGeneration;
+    await this.api.withInner((api) => api.reopenTask(id));
+    await this.runRemoteMutationFollowup("reopenTask", async () => {
+      this.assertAccountGeneration(accountGeneration, "reopening a task");
+      await this.refreshActiveSubscriptions(accountGeneration, "reopening a task");
+    });
+  }
+
+  private async closeProjectTask(id: TaskId): Promise<void> {
+    const accountGeneration = this.accountGeneration;
+    await this.api.withInner((api) => api.closeTask(id));
+    await this.runRemoteMutationFollowup("closeProjectTask", async () => {
+      this.assertAccountGeneration(accountGeneration, "closing a project task");
+      const completedAt = new Date();
+      for (const subscription of this.allSubscriptions()) {
+        subscription.complete(id, completedAt);
+      }
+      await this.onTaskClosed?.(id, completedAt);
+      this.assertAccountGeneration(accountGeneration, "closing a project task");
+    });
+  }
+
+  private async runRemoteMutationFollowup<T>(
+    action: TodoistRemoteMutationAction,
+    followup: () => Promise<T>,
+  ): Promise<T> {
+    try {
+      return await followup();
+    } catch (cause: unknown) {
+      throw new TodoistRemoteMutationFollowupError(action, cause);
+    }
+  }
+
+  private async refreshActiveSubscriptions(
+    accountGeneration: number,
+    operation: string,
+  ): Promise<void> {
+    const refreshes = Array.from(this.subscriptions.list(), (subscription) => {
+      this.assertAccountGeneration(accountGeneration, operation);
+      return subscription.update();
+    });
+    await Promise.all(refreshes);
+    this.assertAccountGeneration(accountGeneration, operation);
+  }
+
+  private assertAccountGeneration(accountGeneration: number, operation: string): void {
+    if (accountGeneration !== this.accountGeneration) {
+      throw new Error(`Todoist account changed while ${operation}`);
+    }
   }
 
   private async notifyTaskClosed(id: TaskId, completedAt: Date): Promise<void> {

@@ -10,6 +10,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Changes
+
+- Renamed the plugin to **Tasks Bridge** with the plugin ID `tasks-bridge`.
+- Repositioned the project as a bridge between Obsidian and external task-management services: those services remain the task backends and systems of record, while Obsidian provides the interaction and presentation layer.
+- Kept Todoist as the first supported backend and retained the original Todoist Sync acknowledgement.
+- Renamed the custom Bases view to **Tasks List** and changed its internal view type to `tasks-list`.
+- Existing installations must preserve `data.json`, rename the local plugin folder from `todoist-sync-plus` to `tasks-bridge`, restart Obsidian, and enable the new plugin ID.
+
 ## v2.7.1 (2026-08-09)
 
 ### 🔁 Changes

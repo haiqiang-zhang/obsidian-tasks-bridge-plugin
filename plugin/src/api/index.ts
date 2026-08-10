@@ -1,10 +1,22 @@
 import snakify from "snakify-ts";
 import { z } from "zod";
 
+import type { ProjectId } from "@/api/domain/project";
 import type { SyncResponse, SyncToken } from "@/api/domain/sync";
 import { syncResponseSchema } from "@/api/domain/sync";
-import type { CreateTaskParams, Task, TaskId } from "@/api/domain/task";
-import { completedTaskSchema, taskSchema } from "@/api/domain/task";
+import type {
+  CompletedTaskEntry,
+  CreateTaskParams,
+  Task,
+  TaskId,
+  UpdateTaskParams,
+} from "@/api/domain/task";
+import {
+  completedTaskEntrySchema,
+  completedTaskSchema,
+  projectTaskSchema,
+  taskSchema,
+} from "@/api/domain/task";
 import type { UserInfo } from "@/api/domain/user";
 import { userInfoSchema } from "@/api/domain/user";
 import { type RequestParams, StatusCode, type WebFetcher, type WebResponse } from "@/api/fetcher";
@@ -13,6 +25,7 @@ import { debug } from "@/log";
 
 const COMPLETED_TASKS_LOOKBACK_DAYS = 90;
 const COMPLETED_TASKS_PAGE_LIMIT = "200";
+const PROJECT_TASKS_PAGE_LIMIT = "200";
 const MILLISECONDS_PER_DAY = 86_400_000;
 const TODOIST_SERVICE_LAUNCH_AT = Date.parse("2007-01-01T00:00:00.000Z");
 
@@ -36,6 +49,8 @@ export class TodoistApiClient {
   private readonly fetcher: WebFetcher;
   private readonly taskQueriesInFlight = new Map<string, Promise<Task[]>>();
   private readonly completedTaskPagesInFlight = new Map<string, Promise<CompletedTasksPage>>();
+  private readonly activeProjectTasksInFlight = new Map<ProjectId, Promise<Task[]>>();
+  private readonly completedProjectTasksInFlight = new Map<string, Promise<Task[]>>();
 
   constructor(token: string, fetcher: WebFetcher) {
     this.token = token;
@@ -57,6 +72,49 @@ export class TodoistApiClient {
     } finally {
       if (this.taskQueriesInFlight.get(requestKey) === request) {
         this.taskQueriesInFlight.delete(requestKey);
+      }
+    }
+  }
+
+  public async getActiveTasksByProject(projectId: ProjectId): Promise<Task[]> {
+    const existingRequest = this.activeProjectTasksInFlight.get(projectId);
+    if (existingRequest !== undefined) {
+      return await existingRequest;
+    }
+
+    const request = this.doPaginated("/tasks", projectTaskSchema, {
+      project_id: projectId,
+      limit: PROJECT_TASKS_PAGE_LIMIT,
+    });
+    this.activeProjectTasksInFlight.set(projectId, request);
+
+    try {
+      return await request;
+    } finally {
+      if (this.activeProjectTasksInFlight.get(projectId) === request) {
+        this.activeProjectTasksInFlight.delete(projectId);
+      }
+    }
+  }
+
+  public async getCompletedTasksByProject(projectId: ProjectId, until?: string): Promise<Task[]> {
+    const requestKey = JSON.stringify({ projectId, until: until ?? null });
+    const existingRequest = this.completedProjectTasksInFlight.get(requestKey);
+    if (existingRequest !== undefined) {
+      return await existingRequest;
+    }
+
+    const request = this.fetchAllCompletedTasksByProject(
+      projectId,
+      until ?? new Date().toISOString(),
+    );
+    this.completedProjectTasksInFlight.set(requestKey, request);
+
+    try {
+      return await request;
+    } finally {
+      if (this.completedProjectTasksInFlight.get(requestKey) === request) {
+        this.completedProjectTasksInFlight.delete(requestKey);
       }
     }
   }
@@ -101,8 +159,32 @@ export class TodoistApiClient {
     return parseApiResponse(taskSchema, response.body);
   }
 
+  public async getTask(id: TaskId): Promise<Task> {
+    const response = await this.do(`/tasks/${id}`, "GET", {});
+    return parseApiResponse(projectTaskSchema, response.body);
+  }
+
+  public async updateTask(id: TaskId, options: UpdateTaskParams): Promise<Task> {
+    const { duration, ...fields } = options;
+    const bodyFields: Record<string, unknown> = { ...fields };
+    if (duration === null) {
+      bodyFields.duration = null;
+      bodyFields.durationUnit = null;
+    } else if (duration !== undefined) {
+      bodyFields.duration = duration.amount;
+      bodyFields.durationUnit = duration.unit;
+    }
+    const body = snakify(bodyFields);
+    const response = await this.do(`/tasks/${id}`, "POST", { json: body });
+    return parseApiResponse(projectTaskSchema, response.body);
+  }
+
   public async closeTask(id: TaskId): Promise<void> {
     await this.do(`/tasks/${id}/close`, "POST", {});
+  }
+
+  public async reopenTask(id: TaskId): Promise<void> {
+    await this.do(`/tasks/${id}/reopen`, "POST", {});
   }
 
   public async getUser(): Promise<UserInfo> {
@@ -125,6 +207,72 @@ export class TodoistApiClient {
     }
 
     return await this.doPaginated("/tasks", taskSchema);
+  }
+
+  private async fetchAllCompletedTasksByProject(
+    projectId: ProjectId,
+    until: string,
+  ): Promise<Task[]> {
+    const responseSchema = z.object({
+      items: z.array(completedTaskEntrySchema),
+    });
+    const entriesByTaskId = new Map<TaskId, CompletedTaskEntry>();
+    const seenPages = new Set<string>();
+    let offset = 0;
+
+    while (true) {
+      const response = await this.do("/tasks/completed", "GET", {
+        queryParams: {
+          project_id: projectId,
+          limit: PROJECT_TASKS_PAGE_LIMIT,
+          offset: offset.toString(),
+          until,
+          annotate_items: "true",
+        },
+      });
+      const page = parseApiResponse(responseSchema, response.body);
+      const pageSignature = page.items.map((entry) => entry.id).join("\u0000");
+
+      if (page.items.length === Number(PROJECT_TASKS_PAGE_LIMIT)) {
+        if (seenPages.has(pageSignature)) {
+          throw new Error("Todoist completed-task pagination returned a repeated page");
+        }
+        seenPages.add(pageSignature);
+      }
+
+      for (const entry of page.items) {
+        const existingEntry = entriesByTaskId.get(entry.taskId);
+        if (
+          existingEntry === undefined ||
+          this.compareCompletionEntries(entry, existingEntry) > 0
+        ) {
+          entriesByTaskId.set(entry.taskId, entry);
+        }
+      }
+
+      if (page.items.length < Number(PROJECT_TASKS_PAGE_LIMIT)) {
+        return Array.from(entriesByTaskId.values(), (entry) => ({
+          ...entry.itemObject,
+          addedAt: entry.itemObject.addedAt ?? entry.completedAt,
+          completedAt: entry.itemObject.checked ? entry.completedAt : null,
+        }));
+      }
+
+      offset += page.items.length;
+    }
+  }
+
+  private compareCompletionEntries(
+    candidate: CompletedTaskEntry,
+    existing: CompletedTaskEntry,
+  ): number {
+    const completedAtDifference =
+      Date.parse(candidate.completedAt) - Date.parse(existing.completedAt);
+    if (completedAtDifference !== 0) {
+      return completedAtDifference;
+    }
+
+    return candidate.id.localeCompare(existing.id);
   }
 
   private makeInitialCompletedTasksPageRequest(
@@ -166,6 +314,7 @@ export class TodoistApiClient {
     params?: Record<string, string>,
   ): Promise<T[]> {
     const allResults: T[] = [];
+    const seenCursors = new Set<string>();
     let cursor: string | null = null;
 
     const paginatedSchema = z.object({
@@ -187,6 +336,12 @@ export class TodoistApiClient {
 
       allResults.push(...paginatedResponse.results);
       cursor = paginatedResponse.nextCursor;
+      if (cursor !== null) {
+        if (seenCursors.has(cursor)) {
+          throw new Error("Todoist pagination returned a repeated cursor");
+        }
+        seenCursors.add(cursor);
+      }
     } while (cursor);
 
     return allResults;

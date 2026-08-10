@@ -2,9 +2,9 @@ import { themes as prismThemes } from "prism-react-renderer";
 import type { Config } from "@docusaurus/types";
 import type * as Preset from "@docusaurus/preset-classic";
 
-const title = "Obsidian Todoist Sync ++";
+const title = "Tasks Bridge";
 const org = "haiqiang-zhang";
-const project = "obsidian-todoist-plus-plugin";
+const project = "tasks-bridge";
 
 const config: Config = {
   title: title,
@@ -41,7 +41,7 @@ const config: Config = {
     navbar: {
       title: title,
       logo: {
-        alt: "Todoist Sync ++ logo",
+        alt: "Tasks Bridge logo",
         src: "img/logo.svg",
       },
       items: [

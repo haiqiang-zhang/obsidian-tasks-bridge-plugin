@@ -69,21 +69,45 @@ const ButtonControl: React.FC<ButtonProps> = ({ label, icon, onClick, disabled }
 type ToggleControl = {
   value: boolean;
   onClick: (val: boolean) => Promise<void>;
+  disabled?: boolean;
+  ariaLabel?: string;
 };
 
-const ToggleControl: React.FC<ToggleControl> = ({ value, onClick }) => {
-  const [isToggled, setIsToggled] = useState(value);
-
+const ToggleControl: React.FC<ToggleControl> = ({
+  value,
+  onClick,
+  disabled = false,
+  ariaLabel,
+}) => {
   const onToggle = async () => {
-    const val = !isToggled;
-    setIsToggled(val);
-    await onClick(val);
+    if (!disabled) {
+      await onClick(!value);
+    }
   };
 
   const className = classNames("checkbox-container", {
-    "is-enabled": isToggled,
+    "is-enabled": value,
+    "is-disabled": disabled,
   });
-  return <div className={className} onClick={onToggle} onKeyDown={onToggle} />;
+  const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== "Enter" && event.key !== " ") {
+      return;
+    }
+    event.preventDefault();
+    void onToggle();
+  };
+  return (
+    <div
+      aria-checked={value}
+      aria-disabled={disabled}
+      aria-label={ariaLabel}
+      className={className}
+      onClick={() => void onToggle()}
+      onKeyDown={onKeyDown}
+      role="switch"
+      tabIndex={disabled ? -1 : 0}
+    />
+  );
 };
 
 type DropdownOptionValue = OptionHTMLAttributes<HTMLOptionElement>["value"];

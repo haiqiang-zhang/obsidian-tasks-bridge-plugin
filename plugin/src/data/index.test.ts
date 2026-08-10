@@ -7,8 +7,22 @@ import {
   type OnSubscriptionChange,
   type SubscriptionResult,
   TodoistAdapter,
+  TodoistRemoteMutationFollowupError,
 } from "@/data/index";
-import { makeApiTask, makeTask } from "@/factories/data";
+import { makeApiTask, makeProject, makeTask } from "@/factories/data";
+
+type Deferred<T> = {
+  promise: Promise<T>;
+  resolve(value: T): void;
+};
+
+const deferred = <T>(): Deferred<T> => {
+  let resolvePromise: (value: T) => void = () => undefined;
+  const promise = new Promise<T>((resolve) => {
+    resolvePromise = resolve;
+  });
+  return { promise, resolve: resolvePromise };
+};
 
 const makeSyncResponse = (overrides?: Partial<SyncResponse>): SyncResponse => ({
   syncToken: "token-1",
@@ -39,6 +53,8 @@ const makeCompletedProgress = (
 const makeMockApi = (): TodoistApiClient => {
   return {
     getTasks: vi.fn().mockResolvedValue([]),
+    getActiveTasksByProject: vi.fn().mockResolvedValue([]),
+    getCompletedTasksByProject: vi.fn().mockResolvedValue([]),
     getCompletedTasksPage: vi.fn().mockResolvedValue({
       tasks: [],
       request: newestCompletedRequest,
@@ -46,6 +62,9 @@ const makeMockApi = (): TodoistApiClient => {
     }),
     createTask: vi.fn(),
     closeTask: vi.fn(),
+    getTask: vi.fn(),
+    reopenTask: vi.fn(),
+    updateTask: vi.fn(),
     getUser: vi.fn().mockResolvedValue({ isPremium: false }),
     sync: vi.fn().mockResolvedValue(makeSyncResponse()),
   } as unknown as TodoistApiClient;
@@ -73,6 +92,611 @@ describe("TodoistAdapter", () => {
   beforeEach(() => {
     adapter = new TodoistAdapter();
     mockApi = makeMockApi();
+  });
+
+  describe("project mode access", () => {
+    it("lists only active Todoist projects", async () => {
+      const active = makeProject("active", { name: "Active" });
+      const archived = { ...makeProject("archived", { name: "Archived" }), isArchived: true };
+      const deleted = { ...makeProject("deleted", { name: "Deleted" }), isDeleted: true };
+      vi.mocked(mockApi.sync).mockResolvedValue(
+        makeSyncResponse({ projects: [active, archived, deleted] }),
+      );
+
+      await adapter.initialize(mockApi);
+
+      expect(adapter.listActiveProjects()).toEqual([active]);
+    });
+
+    it("uses the later annotated state for tasks that complete during the active scan", async () => {
+      vi.useFakeTimers();
+      const project = makeProject("project-1", { name: "Project One" });
+      const until = "2026-08-10T04:30:00.000Z";
+      vi.mocked(mockApi.sync).mockResolvedValue(makeSyncResponse({ projects: [project] }));
+      vi.mocked(mockApi.getActiveTasksByProject).mockImplementation(async () => {
+        vi.setSystemTime(new Date(until));
+        return [
+          makeApiTask({ id: "active-only", projectId: project.id, checked: false }),
+          makeApiTask({ id: "transitioned", projectId: project.id, checked: false }),
+        ];
+      });
+      vi.mocked(mockApi.getCompletedTasksByProject).mockResolvedValue([
+        makeApiTask({
+          id: "transitioned",
+          projectId: project.id,
+          checked: true,
+          completedAt: "2026-08-10T04:30:00.000Z",
+        }),
+        makeApiTask({
+          id: "completed-only",
+          projectId: project.id,
+          checked: true,
+          completedAt: "2026-08-09T04:30:00.000Z",
+        }),
+      ]);
+      try {
+        await adapter.initialize(mockApi);
+
+        const snapshot = await adapter.getProjectTasks(project.id);
+
+        expect(mockApi.getActiveTasksByProject).toHaveBeenCalledWith(project.id);
+        expect(mockApi.getCompletedTasksByProject).toHaveBeenCalledWith(project.id, until);
+        expect(vi.mocked(mockApi.getActiveTasksByProject).mock.invocationCallOrder[0]).toBeLessThan(
+          vi.mocked(mockApi.getCompletedTasksByProject).mock.invocationCallOrder[0],
+        );
+        expect(snapshot.activeTasks).toEqual([
+          expect.objectContaining({ id: "active-only", project, completedAt: undefined }),
+        ]);
+        expect(snapshot.completedTasks).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              id: "transitioned",
+              project,
+              completedAt: "2026-08-10T04:30:00.000Z",
+            }),
+            expect.objectContaining({
+              id: "completed-only",
+              project,
+              completedAt: "2026-08-09T04:30:00.000Z",
+            }),
+          ]),
+        );
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("keeps a reopened task active when the later annotated item is unchecked", async () => {
+      const project = makeProject("project-1", { name: "Project One" });
+      vi.mocked(mockApi.sync).mockResolvedValue(makeSyncResponse({ projects: [project] }));
+      vi.mocked(mockApi.getActiveTasksByProject).mockResolvedValue([
+        makeApiTask({ id: "reopened", projectId: project.id, checked: false }),
+      ]);
+      vi.mocked(mockApi.getCompletedTasksByProject).mockResolvedValue([
+        makeApiTask({
+          id: "reopened",
+          projectId: project.id,
+          checked: false,
+          completedAt: null,
+        }),
+      ]);
+      await adapter.initialize(mockApi);
+
+      const snapshot = await adapter.getProjectTasks(project.id);
+
+      expect(snapshot.activeTasks).toEqual([
+        expect.objectContaining({ id: "reopened", project, completedAt: null }),
+      ]);
+      expect(snapshot.completedTasks).toEqual([]);
+    });
+
+    it("rejects a project task snapshot if the Todoist account changes", async () => {
+      const project = makeProject("project-1");
+      vi.mocked(mockApi.sync).mockResolvedValue(makeSyncResponse({ projects: [project] }));
+      vi.mocked(mockApi.getCompletedTasksByProject).mockImplementation(async () => {
+        adapter.reset();
+        return [];
+      });
+      await adapter.initialize(mockApi);
+
+      await expect(adapter.getProjectTasks(project.id)).rejects.toThrow(
+        "Todoist account changed during project task sync",
+      );
+    });
+
+    it("does not start the completed scan after the account changes during the active scan", async () => {
+      const project = makeProject("project-1");
+      vi.mocked(mockApi.sync).mockResolvedValue(makeSyncResponse({ projects: [project] }));
+      vi.mocked(mockApi.getActiveTasksByProject).mockImplementation(async () => {
+        adapter.reset();
+        return [];
+      });
+      await adapter.initialize(mockApi);
+
+      await expect(adapter.getProjectTasks(project.id)).rejects.toThrow(
+        "Todoist account changed during project task sync",
+      );
+      expect(mockApi.getCompletedTasksByProject).not.toHaveBeenCalled();
+    });
+
+    it("does not reuse the previous account API for sync after reset", async () => {
+      await adapter.initialize(mockApi);
+      const userCalls = vi.mocked(mockApi.getUser).mock.calls.length;
+      const metadataCalls = vi.mocked(mockApi.sync).mock.calls.length;
+
+      adapter.reset();
+      await adapter.sync();
+
+      expect(adapter.isReady()).toBe(false);
+      expect(mockApi.getUser).toHaveBeenCalledTimes(userCalls);
+      expect(mockApi.sync).toHaveBeenCalledTimes(metadataCalls);
+    });
+
+    it("does not reuse the previous account API for project tasks after reset", async () => {
+      const project = makeProject("project-1");
+      vi.mocked(mockApi.sync).mockResolvedValue(makeSyncResponse({ projects: [project] }));
+      await adapter.initialize(mockApi);
+
+      adapter.reset();
+
+      await expect(adapter.getProjectTasks(project.id)).rejects.toThrow(
+        "tried to access inner value of empty Maybe",
+      );
+      expect(mockApi.getActiveTasksByProject).not.toHaveBeenCalled();
+      expect(mockApi.getCompletedTasksByProject).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("metadata sync", () => {
+    it("refreshes account metadata without updating query subscriptions", async () => {
+      await adapter.initialize(mockApi);
+      adapter.subscribe("#test", vi.fn());
+      vi.mocked(mockApi.getTasks).mockClear();
+      vi.mocked(mockApi.getCompletedTasksPage).mockClear();
+
+      const project = makeProject("metadata-project", { name: "Metadata project" });
+      vi.mocked(mockApi.sync).mockResolvedValueOnce(
+        makeSyncResponse({ syncToken: "token-2", projects: [project] }),
+      );
+
+      const succeeded = await adapter.syncMetadata();
+
+      expect(succeeded).toBe(true);
+      expect(mockApi.getUser).toHaveBeenCalledTimes(2);
+      expect(mockApi.sync).toHaveBeenLastCalledWith("token-1");
+      expect(adapter.listActiveProjects()).toEqual([project]);
+      expect(mockApi.getTasks).not.toHaveBeenCalled();
+      expect(mockApi.getCompletedTasksPage).not.toHaveBeenCalled();
+    });
+
+    it("treats user-info failure as nonfatal when repository metadata succeeds", async () => {
+      await adapter.initialize(mockApi);
+      const project = makeProject("metadata-project", { name: "Metadata project" });
+      const userError = new Error("user unavailable");
+      vi.mocked(mockApi.getUser).mockRejectedValueOnce(userError);
+      vi.mocked(mockApi.sync).mockResolvedValueOnce(
+        makeSyncResponse({ syncToken: "token-2", projects: [project] }),
+      );
+      const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+      try {
+        await expect(adapter.syncMetadata()).resolves.toBe(true);
+
+        expect(adapter.listActiveProjects()).toEqual([project]);
+        expect(error).toHaveBeenCalledWith("Failed to fetch user info:", userError);
+      } finally {
+        error.mockRestore();
+      }
+    });
+
+    it("returns false when repository metadata cannot be refreshed", async () => {
+      const existing = makeProject("existing-project", { name: "Existing project" });
+      vi.mocked(mockApi.sync).mockResolvedValueOnce(makeSyncResponse({ projects: [existing] }));
+      await adapter.initialize(mockApi);
+      adapter.subscribe("#test", vi.fn());
+      vi.mocked(mockApi.getTasks).mockClear();
+      const metadataError = new Error("metadata unavailable");
+      vi.mocked(mockApi.sync).mockRejectedValueOnce(metadataError);
+      const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+      try {
+        await expect(adapter.syncMetadata()).resolves.toBe(false);
+
+        expect(adapter.listActiveProjects()).toEqual([existing]);
+        expect(mockApi.getTasks).not.toHaveBeenCalled();
+        expect(error).toHaveBeenCalledWith("Failed to sync metadata:", metadataError);
+      } finally {
+        error.mockRestore();
+      }
+    });
+
+    it("keeps full sync query updates when repository metadata refresh fails", async () => {
+      await adapter.initialize(mockApi);
+      let captured: SubscriptionResult = { type: "not-ready" };
+      adapter.subscribe("#test", (result) => {
+        captured = result;
+      });
+      vi.mocked(mockApi.getTasks).mockResolvedValueOnce([makeApiTask({ id: "fresh-task" })]);
+      vi.mocked(mockApi.sync).mockRejectedValueOnce(new Error("metadata unavailable"));
+      const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+      try {
+        await adapter.sync();
+
+        expect(adapter.isReady()).toBe(true);
+        expect(mockApi.getTasks).toHaveBeenCalledWith("#test");
+        const result = captured as SubscriptionResult;
+        expect(result.type).toBe("success");
+        if (result.type === "success") {
+          expect(result.tasks.map((task) => task.id)).toEqual(["fresh-task"]);
+        }
+      } finally {
+        error.mockRestore();
+      }
+    });
+
+    it("coalesces concurrent metadata refreshes for the same account", async () => {
+      await adapter.initialize(mockApi);
+      const user = deferred<{ isPremium: boolean }>();
+      const metadata = deferred<SyncResponse>();
+      vi.mocked(mockApi.getUser).mockImplementationOnce(async () => await user.promise);
+      vi.mocked(mockApi.sync).mockImplementationOnce(async () => await metadata.promise);
+      vi.mocked(mockApi.getUser).mockClear();
+      vi.mocked(mockApi.sync).mockClear();
+
+      const first = adapter.syncMetadata();
+      const second = adapter.syncMetadata();
+
+      expect(second).toBe(first);
+      expect(mockApi.getUser).toHaveBeenCalledOnce();
+      expect(mockApi.sync).toHaveBeenCalledOnce();
+
+      user.resolve({ isPremium: true });
+      metadata.resolve(makeSyncResponse({ syncToken: "token-2" }));
+      await expect(Promise.all([first, second])).resolves.toEqual([true, true]);
+    });
+
+    it("starts a new metadata refresh after reset without applying the old account response", async () => {
+      await adapter.initialize(mockApi);
+      const oldProject = makeProject("old-project", { name: "Old project" });
+      const oldUser = deferred<{ isPremium: boolean }>();
+      const oldMetadata = deferred<SyncResponse>();
+      vi.mocked(mockApi.getUser).mockImplementationOnce(async () => await oldUser.promise);
+      vi.mocked(mockApi.sync).mockImplementationOnce(async () => await oldMetadata.promise);
+
+      const oldRefresh = adapter.syncMetadata();
+      expect(mockApi.getUser).toHaveBeenCalledTimes(2);
+      expect(mockApi.sync).toHaveBeenCalledTimes(2);
+
+      adapter.reset();
+      const newApi = makeMockApi();
+      const newProject = makeProject("new-project", { name: "New project" });
+      vi.mocked(newApi.getUser).mockResolvedValue({ isPremium: false });
+      vi.mocked(newApi.sync).mockResolvedValue(
+        makeSyncResponse({ syncToken: "new-token", projects: [newProject] }),
+      );
+
+      await adapter.initialize(newApi);
+
+      expect(newApi.getUser).toHaveBeenCalledOnce();
+      expect(newApi.sync).toHaveBeenCalledOnce();
+      expect(adapter.isReady()).toBe(true);
+      expect(adapter.isPremium()).toBe(false);
+      expect(adapter.listActiveProjects()).toEqual([newProject]);
+
+      oldUser.resolve({ isPremium: true });
+      oldMetadata.resolve(makeSyncResponse({ syncToken: "old-token", projects: [oldProject] }));
+      await expect(oldRefresh).resolves.toBe(false);
+
+      expect(adapter.isPremium()).toBe(false);
+      expect(adapter.listActiveProjects()).toEqual([newProject]);
+    });
+  });
+
+  describe("task actions", () => {
+    it("gets an active task from the current Todoist account", async () => {
+      const task = makeApiTask({ id: "task-to-edit", content: "Edit me" });
+      vi.mocked(mockApi.getTask).mockResolvedValue(task);
+      await adapter.initialize(mockApi);
+
+      await expect(adapter.actions.getTask("task-to-edit")).resolves.toEqual(task);
+      expect(mockApi.getTask).toHaveBeenCalledWith("task-to-edit");
+    });
+
+    it("rejects a task fetched from an account that was reset while the request was pending", async () => {
+      const pendingTask = deferred<ReturnType<typeof makeApiTask>>();
+      vi.mocked(mockApi.getTask).mockImplementationOnce(async () => await pendingTask.promise);
+      await adapter.initialize(mockApi);
+
+      const fetching = adapter.actions.getTask("old-account-task");
+      adapter.reset();
+      pendingTask.resolve(makeApiTask({ id: "old-account-task" }));
+
+      await expect(fetching).rejects.toThrow("Todoist account changed while fetching a task");
+    });
+
+    it("returns an updated task and refreshes mounted query subscriptions", async () => {
+      const updatedTask = makeApiTask({ id: "task-1", content: "Updated remotely" });
+      vi.mocked(mockApi.updateTask).mockResolvedValue(updatedTask);
+      vi.mocked(mockApi.getTasks).mockResolvedValue([updatedTask]);
+      await adapter.initialize(mockApi);
+
+      let captured: SubscriptionResult = { type: "not-ready" };
+      adapter.subscribe("#test", (result) => {
+        captured = result;
+      });
+
+      await expect(
+        adapter.actions.updateTask("task-1", {
+          content: "Updated remotely",
+          duration: { amount: 30, unit: "minute" },
+        }),
+      ).resolves.toEqual(updatedTask);
+
+      expect(mockApi.updateTask).toHaveBeenCalledWith("task-1", {
+        content: "Updated remotely",
+        duration: { amount: 30, unit: "minute" },
+      });
+      expect(mockApi.getTasks).toHaveBeenCalledWith("#test");
+      const result = captured as SubscriptionResult;
+      expect(result.type).toBe("success");
+      if (result.type === "success") {
+        expect(result.tasks).toMatchObject([{ id: "task-1", content: "Updated remotely" }]);
+      }
+    });
+
+    it("does not refresh queries when updating the remote task fails", async () => {
+      vi.mocked(mockApi.updateTask).mockRejectedValue(new Error("update failed"));
+      await adapter.initialize(mockApi);
+      adapter.subscribe("#test", vi.fn());
+
+      await expect(adapter.actions.updateTask("task-1", { content: "Not saved" })).rejects.toThrow(
+        "update failed",
+      );
+
+      expect(mockApi.getTasks).not.toHaveBeenCalled();
+    });
+
+    it("marks an old-account update as remotely successful without refreshing the next account", async () => {
+      const pendingTask = deferred<ReturnType<typeof makeApiTask>>();
+      vi.mocked(mockApi.updateTask).mockImplementationOnce(async () => await pendingTask.promise);
+      await adapter.initialize(mockApi);
+      adapter.subscribe("#test", vi.fn());
+
+      const updating = adapter.actions.updateTask("old-account-task", { content: "Old" });
+      adapter.reset();
+      pendingTask.resolve(makeApiTask({ id: "old-account-task", content: "Old" }));
+
+      const error = await updating.catch((reason: unknown) => reason);
+      expect(error).toBeInstanceOf(TodoistRemoteMutationFollowupError);
+      expect(error).toMatchObject({
+        action: "updateTask",
+        remoteMutationSucceeded: true,
+        cause: expect.objectContaining({
+          message: "Todoist account changed while updating a task",
+        }),
+      });
+      expect(mockApi.getTasks).not.toHaveBeenCalled();
+    });
+
+    it("marks an account reset during the update query refresh as a post-response failure", async () => {
+      const updatedTask = makeApiTask({ id: "task-1", content: "Updated remotely" });
+      const pendingRefresh = deferred<ReturnType<typeof makeApiTask>[]>();
+      vi.mocked(mockApi.updateTask).mockResolvedValue(updatedTask);
+      vi.mocked(mockApi.getTasks).mockImplementationOnce(async () => await pendingRefresh.promise);
+      await adapter.initialize(mockApi);
+      adapter.subscribe("#test", vi.fn());
+
+      const updating = adapter.actions.updateTask("task-1", { content: "Updated remotely" });
+      await vi.waitFor(() => expect(mockApi.getTasks).toHaveBeenCalledWith("#test"));
+      adapter.reset();
+      pendingRefresh.resolve([updatedTask]);
+
+      const error = await updating.catch((reason: unknown) => reason);
+      expect(error).toBeInstanceOf(TodoistRemoteMutationFollowupError);
+      expect(error).toMatchObject({
+        action: "updateTask",
+        remoteMutationSucceeded: true,
+      });
+      expect(mockApi.updateTask).toHaveBeenCalledOnce();
+    });
+
+    it("reopens a task and refreshes mounted query subscriptions", async () => {
+      const reopenedTask = makeApiTask({ id: "reopened-task", content: "Active again" });
+      vi.mocked(mockApi.reopenTask).mockResolvedValue(undefined);
+      vi.mocked(mockApi.getTasks).mockResolvedValue([reopenedTask]);
+      await adapter.initialize(mockApi);
+
+      let captured: SubscriptionResult = { type: "not-ready" };
+      adapter.subscribe("#test", (result) => {
+        captured = result;
+      });
+
+      await expect(adapter.actions.reopenTask("reopened-task")).resolves.toBeUndefined();
+
+      expect(mockApi.reopenTask).toHaveBeenCalledWith("reopened-task");
+      expect(mockApi.getTasks).toHaveBeenCalledWith("#test");
+      const result = captured as SubscriptionResult;
+      expect(result.type).toBe("success");
+      if (result.type === "success") {
+        expect(result.tasks).toMatchObject([{ id: "reopened-task" }]);
+      }
+    });
+
+    it("refreshes completed-enabled subscriptions after reopening a task", async () => {
+      const reopenedTask = makeApiTask({ id: "reopened-task", content: "Active again" });
+      vi.mocked(mockApi.reopenTask).mockResolvedValue(undefined);
+      vi.mocked(mockApi.getTasks).mockResolvedValue([reopenedTask]);
+      await adapter.initialize(mockApi);
+
+      let captured: SubscriptionResult = { type: "not-ready" };
+      adapter.subscribe(
+        "#test",
+        (result) => {
+          captured = result;
+        },
+        [
+          makeTask("reopened-task", {
+            content: "Previously completed",
+            completedAt: "2026-08-09T00:00:00.000Z",
+          }),
+        ],
+        true,
+      );
+
+      await adapter.actions.reopenTask("reopened-task");
+
+      expect(mockApi.getCompletedTasksPage).toHaveBeenCalledWith("#test", undefined, undefined);
+      const result = captured as SubscriptionResult;
+      expect(result.type).toBe("success");
+      if (result.type === "success") {
+        expect(result.tasks).toMatchObject([{ id: "reopened-task", content: "Active again" }]);
+        expect(result.tasks[0].completedAt).toBeUndefined();
+      }
+    });
+
+    it("does not refresh queries when reopening the remote task fails", async () => {
+      vi.mocked(mockApi.reopenTask).mockRejectedValue(new Error("reopen failed"));
+      await adapter.initialize(mockApi);
+      adapter.subscribe("#test", vi.fn());
+
+      await expect(adapter.actions.reopenTask("task-1")).rejects.toThrow("reopen failed");
+
+      expect(mockApi.getTasks).not.toHaveBeenCalled();
+    });
+
+    it("marks an account change after reopening as a post-response failure", async () => {
+      const pendingReopen = deferred<void>();
+      vi.mocked(mockApi.reopenTask).mockImplementationOnce(async () => await pendingReopen.promise);
+      await adapter.initialize(mockApi);
+      adapter.subscribe("#test", vi.fn());
+
+      const reopening = adapter.actions.reopenTask("old-account-task");
+      adapter.reset();
+      pendingReopen.resolve(undefined);
+
+      const error = await reopening.catch((reason: unknown) => reason);
+      expect(error).toBeInstanceOf(TodoistRemoteMutationFollowupError);
+      expect(error).toMatchObject({
+        action: "reopenTask",
+        remoteMutationSucceeded: true,
+        cause: expect.objectContaining({
+          message: "Todoist account changed while reopening a task",
+        }),
+      });
+      expect(mockApi.getTasks).not.toHaveBeenCalled();
+    });
+
+    it("closes a project task and commits query and cache follow-up", async () => {
+      const onTaskClosed = vi.fn();
+      adapter = new TodoistAdapter({ onTaskClosed });
+      vi.mocked(mockApi.closeTask).mockResolvedValue(undefined);
+      await adapter.initialize(mockApi);
+
+      let captured: SubscriptionResult = { type: "not-ready" };
+      adapter.subscribe(
+        "#test",
+        (result) => {
+          captured = result;
+        },
+        [makeTask("task-1")],
+      );
+
+      await expect(adapter.actions.closeProjectTask("task-1")).resolves.toBeUndefined();
+
+      expect(mockApi.closeTask).toHaveBeenCalledWith("task-1");
+      expect(onTaskClosed).toHaveBeenCalledWith("task-1", expect.any(Date));
+      const result = captured as SubscriptionResult;
+      expect(result.type).toBe("success");
+      if (result.type === "success") {
+        expect(result.tasks).toEqual([]);
+        expect(result.cacheEffect).toEqual({ type: "none" });
+      }
+    });
+
+    it("preserves a remote close failure when closing a project task", async () => {
+      const remoteError = new Error("close failed");
+      const onTaskClosed = vi.fn();
+      adapter = new TodoistAdapter({ onTaskClosed });
+      vi.mocked(mockApi.closeTask).mockRejectedValue(remoteError);
+      await adapter.initialize(mockApi);
+      adapter.subscribe("#test", vi.fn(), [makeTask("task-1")]);
+
+      const error = await adapter.actions
+        .closeProjectTask("task-1")
+        .catch((reason: unknown) => reason);
+
+      expect(error).toBe(remoteError);
+      expect(error).not.toBeInstanceOf(TodoistRemoteMutationFollowupError);
+      expect(onTaskClosed).not.toHaveBeenCalled();
+    });
+
+    it("marks a project close cache failure after updating mounted queries", async () => {
+      const cacheError = new Error("cache write failed");
+      adapter = new TodoistAdapter({
+        onTaskClosed: vi.fn().mockRejectedValue(cacheError),
+      });
+      vi.mocked(mockApi.closeTask).mockResolvedValue(undefined);
+      await adapter.initialize(mockApi);
+
+      let captured: SubscriptionResult = { type: "not-ready" };
+      adapter.subscribe(
+        "#test",
+        (result) => {
+          captured = result;
+        },
+        [makeTask("task-1")],
+      );
+
+      const error = await adapter.actions
+        .closeProjectTask("task-1")
+        .catch((reason: unknown) => reason);
+
+      expect(error).toBeInstanceOf(TodoistRemoteMutationFollowupError);
+      expect(error).toMatchObject({
+        action: "closeProjectTask",
+        remoteMutationSucceeded: true,
+        cause: cacheError,
+      });
+      const result = captured as SubscriptionResult;
+      expect(result.type).toBe("success");
+      if (result.type === "success") {
+        expect(result.tasks).toEqual([]);
+      }
+    });
+
+    it("marks an account change after a project close without committing local follow-up", async () => {
+      const pendingClose = deferred<void>();
+      const onTaskClosed = vi.fn();
+      adapter = new TodoistAdapter({ onTaskClosed });
+      vi.mocked(mockApi.closeTask).mockImplementationOnce(async () => await pendingClose.promise);
+      await adapter.initialize(mockApi);
+      adapter.subscribe("#test", vi.fn(), [makeTask("task-1")]);
+
+      const closing = adapter.actions.closeProjectTask("task-1");
+      adapter.reset();
+      pendingClose.resolve(undefined);
+
+      const error = await closing.catch((reason: unknown) => reason);
+      expect(error).toBeInstanceOf(TodoistRemoteMutationFollowupError);
+      expect(error).toMatchObject({
+        action: "closeProjectTask",
+        remoteMutationSucceeded: true,
+      });
+      expect(onTaskClosed).not.toHaveBeenCalled();
+    });
+
+    it("preserves the legacy close action's silent account-change behavior", async () => {
+      const pendingClose = deferred<void>();
+      vi.mocked(mockApi.closeTask).mockImplementationOnce(async () => await pendingClose.promise);
+      await adapter.initialize(mockApi);
+
+      const closing = adapter.actions.closeTask("task-1");
+      adapter.reset();
+      pendingClose.resolve(undefined);
+
+      await expect(closing).resolves.toBeUndefined();
+    });
   });
 
   describe("Subscription", () => {

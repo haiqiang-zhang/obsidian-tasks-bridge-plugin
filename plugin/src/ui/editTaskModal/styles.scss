@@ -1,0 +1,35 @@
+.task-edit-modal-root {
+  .task-edit-location,
+  .task-edit-recurring-hint {
+    display: flex;
+    align-items: center;
+    gap: var(--size-2-2);
+    color: var(--text-muted);
+    font-size: var(--font-ui-small);
+  }
+
+  .task-edit-location {
+    min-width: 0;
+    padding: var(--size-2-2) var(--size-4-2);
+    border: var(--border-width) solid var(--background-modifier-border);
+    border-radius: var(--radius-s);
+    background: var(--background-secondary);
+
+    span {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+  }
+
+  .task-edit-recurring-hint {
+    padding-inline: var(--size-2-1);
+  }
+
+  .task-edit-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: var(--size-2-2);
+    margin-top: var(--size-4-2);
+  }
+}

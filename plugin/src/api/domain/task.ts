@@ -35,6 +35,8 @@ export const prioritySchema = z.union([
 
 export type Priority = z.infer<typeof prioritySchema>;
 
+const todoistTimestampSchema = z.iso.datetime({ offset: true });
+
 export const taskSchema = z.object({
   id: taskIdSchema,
   addedAt: z.string(),
@@ -49,9 +51,28 @@ export const taskSchema = z.object({
   duration: durationSchema.nullable(),
   deadline: deadlineSchema.nullable(),
   childOrder: z.number(),
+  checked: z.boolean().optional(),
+  updatedAt: todoistTimestampSchema.optional(),
 });
 
 const UNKNOWN_ADDED_AT = "1970-01-01T00:00:00.000Z";
+
+const itemSyncTaskSchema = taskSchema.extend({
+  addedAt: z.string().nullable(),
+  checked: z.boolean(),
+  updatedAt: todoistTimestampSchema.nullable(),
+});
+
+export const projectTaskSchema = itemSyncTaskSchema.transform((task) => ({
+  ...task,
+  addedAt: task.addedAt ?? UNKNOWN_ADDED_AT,
+  updatedAt: task.updatedAt ?? undefined,
+}));
+
+const annotatedCompletedTaskSchema = itemSyncTaskSchema.transform((task) => ({
+  ...task,
+  updatedAt: task.updatedAt ?? undefined,
+}));
 
 export const completedTaskSchema = taskSchema
   .extend({
@@ -62,6 +83,34 @@ export const completedTaskSchema = taskSchema
     ...task,
     addedAt: task.addedAt ?? task.completedAt ?? UNKNOWN_ADDED_AT,
   }));
+
+export const completedTaskEntrySchema = z
+  .object({
+    id: z.string(),
+    taskId: taskIdSchema,
+    projectId: projectIdSchema,
+    completedAt: todoistTimestampSchema,
+    itemObject: annotatedCompletedTaskSchema,
+  })
+  .superRefine((entry, context) => {
+    if (entry.taskId !== entry.itemObject.id) {
+      context.addIssue({
+        code: "custom",
+        path: ["itemObject", "id"],
+        message: "Annotated task ID must match the completion entry task ID",
+      });
+    }
+
+    if (entry.projectId !== entry.itemObject.projectId) {
+      context.addIssue({
+        code: "custom",
+        path: ["itemObject", "projectId"],
+        message: "Annotated task project ID must match the completion entry project ID",
+      });
+    }
+  });
+
+export type CompletedTaskEntry = z.infer<typeof completedTaskEntrySchema>;
 
 export type Task = z.infer<typeof taskSchema> & {
   completedAt?: string | null;
@@ -78,3 +127,16 @@ export const createTaskParamsSchema = z.object({
   deadlineDate: z.string().optional(),
 });
 export type CreateTaskParams = z.infer<typeof createTaskParamsSchema>;
+
+export const updateTaskParamsSchema = z.object({
+  content: z.string().optional(),
+  description: z.string().optional(),
+  labels: z.array(z.string()).optional(),
+  priority: prioritySchema.optional(),
+  dueString: z.string().optional(),
+  dueDate: z.string().optional(),
+  dueDatetime: z.string().optional(),
+  duration: durationSchema.nullable().optional(),
+  deadlineDate: z.string().nullable().optional(),
+});
+export type UpdateTaskParams = z.infer<typeof updateTaskParamsSchema>;

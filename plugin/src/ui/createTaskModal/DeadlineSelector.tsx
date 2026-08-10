@@ -32,9 +32,14 @@ export type Deadline = {
 type Props = {
   selected: Deadline | undefined;
   setSelected: (selected: Deadline | undefined) => void;
+  allowPastDates?: boolean;
 };
 
-export const DeadlineSelector: React.FC<Props> = ({ selected, setSelected }) => {
+export const DeadlineSelector: React.FC<Props> = ({
+  selected,
+  setSelected,
+  allowPastDates = false,
+}) => {
   const label = getLabel(selected);
   const suggestions = getSuggestions();
 
@@ -93,7 +98,7 @@ export const DeadlineSelector: React.FC<Props> = ({ selected, setSelected }) => 
                   selectDate(date);
                   close();
                 }}
-                minValue={today(timezone())}
+                minValue={allowPastDates ? undefined : today(timezone())}
               >
                 <header>
                   <Heading level={4} />

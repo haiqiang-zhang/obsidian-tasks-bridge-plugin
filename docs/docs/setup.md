@@ -8,22 +8,30 @@ There are a few steps to get up and running with this plugin.
 
 ## 1. Install plugin
 
-Until Todoist Sync ++ is available in the Obsidian Community Plugins directory, install it manually from the [latest GitHub release](https://github.com/haiqiang-zhang/obsidian-todoist-plus-plugin/releases/latest):
+Until Tasks Bridge is available in the Obsidian Community Plugins directory, install it manually from the [latest GitHub release](https://github.com/haiqiang-zhang/tasks-bridge/releases/latest):
 
 1. Download `main.js`, `manifest.json`, and `styles.css` from the release.
-2. Create `<vault>/.obsidian/plugins/todoist-sync-plus/` in your Vault.
+2. Create `<vault>/.obsidian/plugins/tasks-bridge/` in your Vault.
 3. Copy the three downloaded files into that directory.
-4. Restart Obsidian, open **Settings → Community plugins**, and enable **Todoist Sync ++**.
+4. Restart Obsidian, open **Settings → Community plugins**, and enable **Tasks Bridge**.
 
-## 2. Setup API token
+:::caution Existing Todoist Sync ++ installations
 
-Once the plugin is installed, you'll need to enable and do some initial setup.
+The plugin ID changed from `todoist-sync-plus` to `tasks-bridge`. Disable **Todoist Sync ++**, rename its plugin folder to `tasks-bridge` without deleting `data.json`, replace the three plugin assets, restart Obsidian, and then enable **Tasks Bridge**. Do not keep both plugin folders installed.
 
-1. Enable the plugin from Obsidian's setting page
-2. You should get a popup asking you to provide your [API token](https://todoist.com/help/articles/find-your-api-token-Jpzx9IIlB).
-3. Enter your API token into the prompt. You can type it directly or use the "Paste from clipboard" button for convenience.
-4. The prompt will verify that the token provided is valid and will present you with a checkmark if it is
-5. Select 'Save' to complete the setup
+Because Obsidian prefixes command IDs with the plugin ID, integrations that refer to a complete command ID must be updated from `todoist-sync-plus:<command>` to `tasks-bridge:<command>`.
+
+:::
+
+## 2. Configure the Todoist backend
+
+Todoist is currently the first supported task backend. After enabling the plugin, connect it with your Todoist API token:
+
+1. Enable the plugin from Obsidian's Settings page.
+2. In the prompt, provide your [Todoist API token](https://todoist.com/help/articles/find-your-api-token-Jpzx9IIlB).
+3. Enter the token directly or use **Paste from clipboard**.
+4. Wait for the checkmark confirming that the token is valid.
+5. Select **Save** to complete the setup.
 
 > By default, your API token is stored securely using Obsidian's built-in secret storage. You can change this to file-based storage in the [plugin configuration](./configuration#token-storage).
 

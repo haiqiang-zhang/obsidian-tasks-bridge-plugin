@@ -4,6 +4,7 @@ import { Menu } from "obsidian";
 import type { Task } from "@/data/task";
 import { t } from "@/i18n";
 import type TodoistPlugin from "@/index";
+import { todoistTaskAppUrl, todoistTaskWebUrl } from "@/todoist/taskLinks";
 
 type TaskContext = {
   task: Task;
@@ -29,18 +30,14 @@ export function showTaskContext(ctx: TaskContext, position: Point) {
         .setTitle(i18n.openTaskInAppLabel)
         .setIcon("popup-open")
         .onClick(() => {
-          openExternal(`todoist://task?id=${ctx.task.id}`);
+          openExternal(todoistTaskAppUrl(ctx.task.id));
         }),
     )
     .addItem((menuItem) =>
       menuItem
         .setTitle(i18n.openTaskInBrowserLabel)
         .setIcon("popup-open")
-        .onClick(() =>
-          openExternal(
-            `https://todoist.com/app/project/${ctx.task.project.id}/task/${ctx.task.id}`,
-          ),
-        ),
+        .onClick(() => openExternal(todoistTaskWebUrl(ctx.task.project.id, ctx.task.id))),
     )
     .showAtPosition(position);
 }

@@ -1,11 +1,11 @@
 {
-  "id": "todoist-sync-plus",
-  "name": "Todoist Sync ++",
+  "id": "tasks-bridge",
+  "name": "Tasks Bridge",
   "version": "2.7.1",
   "minAppVersion": "1.11.4",
-  "description": "Synchronize Todoist tasks with Obsidian.",
+  "description": "Use Obsidian to interact with tasks stored in external task-management services.",
   "author": "Jamie Brynes and Haiqiang Zhang",
-  "authorUrl": "https://github.com/haiqiang-zhang/obsidian-todoist-plus-plugin",
+  "authorUrl": "https://github.com/haiqiang-zhang/tasks-bridge",
   "isDesktopOnly": false,
   "fundingUrl": "https://www.buymeacoffee.com/jamiebrynes"
 }

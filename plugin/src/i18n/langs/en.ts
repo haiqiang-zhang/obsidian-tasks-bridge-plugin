@@ -3,6 +3,10 @@ import type { Translations } from "@/i18n/translation";
 export const en: Translations = {
   notices: {
     migrationFailed: "Failed to apply migrations. Check the console for details.",
+    projectSyncDisabled: "Project sync is disabled or is not fully configured.",
+    projectSyncComplete: (created, updated, moved, stale, conflicts) =>
+      `Project sync complete: ${created} created, ${updated} updated, ${moved} moved, ${stale} stale, ${conflicts} conflicts.`,
+    projectSyncFailed: (message) => `Project sync failed: ${message}`,
   },
   settings: {
     general: {
@@ -31,11 +35,66 @@ export const en: Translations = {
       header: "Auto-refresh",
       toggle: {
         label: "Enable auto-refresh",
-        description: "Whether queries should auto-refresh at a set interval",
+        description: "Automatically refresh query blocks and Project sync at a shared interval",
       },
       interval: {
         label: "Auto-refresh interval",
-        description: "The interval, in seconds, that queries will be auto-refreshed by default",
+        description:
+          "The interval, in seconds, used to refresh query blocks and Project sync by default",
+      },
+    },
+    projectSync: {
+      header: "Project sync",
+      enabled: {
+        label: "Enable project sync",
+        description: "Synchronize one or more Todoist projects into independent Vault folder trees",
+      },
+      mappings: {
+        label: "Project mappings",
+        description:
+          "Map each Todoist project to the existing Vault folder that will act as its root",
+        empty: "No project mappings yet.",
+        add: "Add project mapping",
+        remove: "Remove mapping",
+        mappingLabel: (number) => `Project mapping ${number}`,
+        removeLabel: (number) => `Remove project mapping ${number}`,
+        pendingMoveLabel: "Pending folder move",
+        pendingMoveDescription: (folders) => `Waiting to migrate managed notes from: ${folders}`,
+      },
+      folder: {
+        label: "Vault folder",
+        description: "The existing Vault folder used as this Todoist project's exact root folder",
+        placeholder: "Choose an existing folder",
+        exactRootHint: "This is the selected project's root folder, not its parent.",
+      },
+      project: {
+        label: "Todoist project",
+        description: "The Todoist project synchronized into this folder",
+        noProject: "Select a project",
+        loading: "Loading projects…",
+        deletedWarning: "This project no longer exists",
+        deleted: "deleted",
+      },
+      includeSubprojects: {
+        label: "Include child projects",
+        description:
+          "Create the selected project's complete descendant hierarchy as nested folders",
+      },
+      validation: {
+        projectRequired: "Select a Todoist project.",
+        folderRequired: "Choose a Vault folder.",
+        projectUnavailable: "The selected Todoist project is no longer available.",
+        folderMissing: "This Vault folder does not exist.",
+        duplicateProject: "This Todoist project is already mapped.",
+        folderOverlap: "This Vault folder overlaps another project mapping.",
+        hierarchyOverlap:
+          "This project is already covered by another mapping that includes child projects.",
+      },
+      syncNow: {
+        label: "Synchronize projects now",
+        description: "Fetch every valid project mapping and update its Markdown files now",
+        buttonLabel: "Sync now",
+        syncingLabel: "Syncing…",
       },
     },
     rendering: {
@@ -209,6 +268,19 @@ export const en: Translations = {
       doNotAddLink: "Do not add link",
     },
   },
+  editTaskModal: {
+    taskNamePlaceholder: "Task name",
+    descriptionPlaceholder: "Description",
+    recurringDueHint:
+      "The recurring schedule will stay unchanged unless you choose a new due date.",
+    cancelButtonLabel: "Cancel",
+    saveButtonLabel: "Save changes",
+    savingButtonLabel: "Saving…",
+    successNotice: "Todoist task updated",
+    errorNotice: "Could not update the Todoist task",
+    projectionErrorNotice:
+      "Todoist was updated, but the Vault projection could not be refreshed. Run Project sync again.",
+  },
   onboardingModal: {
     failureNoticeMessage: "Failed to save API token",
     explainer:
@@ -283,6 +355,7 @@ export const en: Translations = {
   },
   commands: {
     sync: "Sync with Todoist",
+    projectSync: "Sync Todoist projects",
     addTask: "Add task",
     addTaskPageContent: "Add task with current page in task content",
     addTaskPageDescription: "Add task with current page in task description",

@@ -1,6 +1,15 @@
 export type Translations = {
   notices: {
     migrationFailed: string;
+    projectSyncDisabled: string;
+    projectSyncComplete: (
+      created: number,
+      updated: number,
+      moved: number,
+      stale: number,
+      conflicts: number,
+    ) => string;
+    projectSyncFailed: (message: string) => string;
   };
   settings: {
     general: {
@@ -34,6 +43,57 @@ export type Translations = {
       interval: {
         label: string;
         description: string;
+      };
+    };
+    projectSync: {
+      header: string;
+      enabled: {
+        label: string;
+        description: string;
+      };
+      mappings: {
+        label: string;
+        description: string;
+        empty: string;
+        add: string;
+        remove: string;
+        mappingLabel: (number: number) => string;
+        removeLabel: (number: number) => string;
+        pendingMoveLabel: string;
+        pendingMoveDescription: (folders: string) => string;
+      };
+      folder: {
+        label: string;
+        description: string;
+        placeholder: string;
+        exactRootHint: string;
+      };
+      project: {
+        label: string;
+        description: string;
+        noProject: string;
+        loading: string;
+        deletedWarning: string;
+        deleted: string;
+      };
+      includeSubprojects: {
+        label: string;
+        description: string;
+      };
+      validation: {
+        projectRequired: string;
+        folderRequired: string;
+        projectUnavailable: string;
+        folderMissing: string;
+        duplicateProject: string;
+        folderOverlap: string;
+        hierarchyOverlap: string;
+      };
+      syncNow: {
+        label: string;
+        description: string;
+        buttonLabel: string;
+        syncingLabel: string;
       };
     };
     rendering: {
@@ -191,6 +251,17 @@ export type Translations = {
       doNotAddLink: string;
     };
   };
+  editTaskModal: {
+    taskNamePlaceholder: string;
+    descriptionPlaceholder: string;
+    recurringDueHint: string;
+    cancelButtonLabel: string;
+    saveButtonLabel: string;
+    savingButtonLabel: string;
+    successNotice: string;
+    errorNotice: string;
+    projectionErrorNotice: string;
+  };
   onboardingModal: {
     failureNoticeMessage: string;
     explainer: string;
@@ -256,6 +327,7 @@ export type Translations = {
   };
   commands: {
     sync: string;
+    projectSync: string;
     addTask: string;
     addTaskPageContent: string;
     addTaskPageDescription: string;

@@ -1,20 +1,40 @@
-# Obsidian Todoist Sync ++
+# Tasks Bridge
 
 <p align="center">
-  <img src="docs/static/img/logo.svg" alt="Todoist Sync ++ logo" width="96">
+  <img src="docs/static/img/logo.svg" alt="Tasks Bridge logo" width="96">
 </p>
 
-Todoist Sync ++ is based on the original [Todoist Sync](https://github.com/jamiebrynes7/obsidian-todoist-plugin) plugin created by [Jamie Brynes](https://github.com/jamiebrynes7).
+Tasks Bridge is based on the original [Todoist Sync](https://github.com/jamiebrynes7/obsidian-todoist-plugin) plugin created by [Jamie Brynes](https://github.com/jamiebrynes7).
 
 ## What is it?
 
-**Todoist Sync ++** is an unofficial Obsidian plugin that displays Todoist tasks in Obsidian notes and supports selected updates from Obsidian.
+**Tasks Bridge** connects Obsidian to external task-management services. Those services are the task backends and systems of record: they remain responsible for primary task storage and synchronization, while Obsidian provides the interaction and presentation layer for viewing, organizing, and updating tasks.
 
-This project is not created by, affiliated with, endorsed by, or supported by Doist.
+## Architecture
 
-Read the [Todoist Sync ++ documentation](https://haiqiang-zhang.github.io/obsidian-todoist-plus-plugin/) for installation, query syntax, and general usage.
+```mermaid
+flowchart LR
+    OBSIDIAN["Obsidian<br/>Interaction and presentation"] <--> BRIDGE["Tasks Bridge"]
+    BRIDGE --> TODOIST["Todoist<br/>Implemented"]
+    BRIDGE -.-> FUTURE_A["Future task backend A<br/>Planned"]
+    BRIDGE -.-> FUTURE_B["Future task backend B<br/>Planned"]
+    BRIDGE -.-> MORE["More task backends<br/>Planned"]
+```
 
-## Improvements in Todoist Sync ++
+The solid backend connection is available now. Dashed connections are planned integrations. Every task service remains the system of record for its own data.
+
+Todoist is the first supported backend. The current Todoist integration provides two independent workflows:
+
+- **Query blocks** render a Todoist filter inside any note, with cache-first loading and optional completed-task history.
+- **Project sync** maps one or more Todoist projects to independent Vault folders. Each selected folder is that project's exact root, optional child projects become nested folders, and every active or completed task becomes a Markdown file that can be managed with [Obsidian Bases](https://help.obsidian.md/bases).
+
+Project sync is a one-way Todoist-to-Obsidian projection. It retrieves complete completed-task history from Todoist's project endpoint, preserves note bodies and properties not managed by the plugin, and does not treat arbitrary Base or Markdown edits as Todoist changes. Its **Tasks List** Base view provides explicit server-backed actions for editing, completing, and reopening tasks. Open task notes are deferred instead of overwritten, and tasks that leave an included child hierarchy are retained as `out_of_scope`. See the [project sync guide](https://haiqiang-zhang.github.io/tasks-bridge/docs/project-mode/).
+
+The Todoist integration is not created by, affiliated with, endorsed by, or supported by Doist.
+
+Read the [Tasks Bridge documentation](https://haiqiang-zhang.github.io/tasks-bridge/) for installation, query syntax, and general usage.
+
+## What Tasks Bridge adds to Todoist Sync
 
 Compared with the upstream Todoist Sync codebase, this fork adds:
 
@@ -26,11 +46,13 @@ Compared with the upstream Todoist Sync codebase, this fork adds:
 - Compact, consistent layouts for both titled and untitled Todoist blocks.
 - Time-zone-correct same-day due-date handling.
 - Optional completed-task display with complete cursor pagination and user-controlled three-month history expansion.
+- Independent multi-project sync with validated folder mappings, resumable root-folder moves, nested child-project folders, one Markdown file per task, complete active and completed history, and flat `todoist_*` properties for Obsidian Bases.
+- A native-styled **Tasks List** Base view with Project → Section → Task → Subtask hierarchy, arbitrary project roots, native filters/sorts/groups/property order, and controlled Todoist task actions.
 - Symlink-safe production builds that preserve the plugin's existing `data.json`.
 
 ## Acknowledgements
 
-Todoist Sync ++ is based on [Todoist Sync](https://github.com/jamiebrynes7/obsidian-todoist-plugin). Thank you to Jamie Brynes and all [upstream contributors](https://github.com/jamiebrynes7/obsidian-todoist-plugin/graphs/contributors) for creating and maintaining the original project.
+Tasks Bridge is based on [Todoist Sync](https://github.com/jamiebrynes7/obsidian-todoist-plugin). Thank you to Jamie Brynes and all [upstream contributors](https://github.com/jamiebrynes7/obsidian-todoist-plugin/graphs/contributors) for creating and maintaining the original project.
 
 ## Support the original project
 

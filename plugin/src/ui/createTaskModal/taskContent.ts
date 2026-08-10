@@ -1,4 +1,5 @@
 import type { AddTaskAction } from "@/settings";
+import { todoistTaskAppUrl, todoistTaskWebUrl } from "@/todoist/taskLinks";
 
 export type FileInfo = {
   name: string;
@@ -66,10 +67,10 @@ export const buildClipboardMarkdown = (
   let url: string;
   switch (options.variant) {
     case "add-copy-app":
-      url = `todoist://task?id=${task.id}`;
+      url = todoistTaskAppUrl(task.id);
       break;
     case "add-copy-web":
-      url = `https://todoist.com/app/project/${task.projectId}/task/${task.id}`;
+      url = todoistTaskWebUrl(task.projectId, task.id);
       break;
     default: {
       const _: never = options.variant;

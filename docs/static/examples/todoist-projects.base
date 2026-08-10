@@ -1,0 +1,26 @@
+filters:
+  and:
+    - 'todoist_sync_managed == true'
+    - 'todoist_status != "out_of_scope"'
+
+properties:
+  todoist_priority:
+    displayName: "Priority"
+  todoist_due_date:
+    displayName: "Due"
+  todoist_deadline:
+    displayName: "Deadline"
+  todoist_labels:
+    displayName: "Labels"
+
+views:
+  - type: tasks-list
+    name: "Tasks List"
+    todoistDensity: comfortable
+    todoistShowDescriptions: true
+    todoistShowSections: true
+    order:
+      - todoist_priority
+      - todoist_due_date
+      - todoist_deadline
+      - todoist_labels

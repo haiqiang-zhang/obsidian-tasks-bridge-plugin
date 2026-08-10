@@ -21,11 +21,13 @@ export const nl: DeepPartial<Translations> = {
       header: "Automatisch verversen",
       toggle: {
         label: "Automatisch verversen inschakelen",
-        description: "Of queries automatisch moeten verversen op een ingestelde interval",
+        description:
+          "Queryblokken en projectsynchronisatie automatisch verversen met een gedeeld interval",
       },
       interval: {
         label: "Interval automatisch verversen",
-        description: "Het interval, in seconden, waarop queries standaard worden ververst",
+        description:
+          "Het interval, in seconden, waarop queryblokken en projectsynchronisatie standaard worden ververst",
       },
     },
     rendering: {
