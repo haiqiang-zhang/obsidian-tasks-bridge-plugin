@@ -6,6 +6,7 @@ import type { SyncToken } from "@/api/domain/sync";
 import type {
   Task as ApiTask,
   CreateTaskParams,
+  ProjectCompletionEvent,
   TaskId,
   UpdateTaskParams,
 } from "@/api/domain/task";
@@ -60,6 +61,7 @@ type TodoistAdapterOptions = {
 export type ProjectTaskSnapshot = {
   activeTasks: Task[];
   completedTasks: Task[];
+  completionEvents: ProjectCompletionEvent[];
 };
 
 type InFlightMetadataSync = {
@@ -239,7 +241,7 @@ export class TodoistAdapter {
     // tasks completed while the active request was in flight instead of leaving the previous
     // boundary gap between the two scans.
     const completedUntil = new Date().toISOString();
-    const completedTasks = await this.api.withInner((api) =>
+    const completedProjectTasks = await this.api.withInner((api) =>
       api.getCompletedTasksByProject(projectId, completedUntil),
     );
 
@@ -254,11 +256,15 @@ export class TodoistAdapter {
     }
     // Annotated completion entries are fetched after the active snapshot and carry the current
     // `checked` state. Let that later observation win for both newly completed and reopened tasks.
-    for (const task of completedTasks) {
+    for (const task of completedProjectTasks.tasks) {
       tasksById.set(task.id, task);
     }
 
-    const snapshot: ProjectTaskSnapshot = { activeTasks: [], completedTasks: [] };
+    const snapshot: ProjectTaskSnapshot = {
+      activeTasks: [],
+      completedTasks: [],
+      completionEvents: completedProjectTasks.completionEvents.map((event) => ({ ...event })),
+    };
     for (const task of tasksById.values()) {
       const hydrated = hydrate(task, this.data());
       if (task.checked ?? task.completedAt != null) {

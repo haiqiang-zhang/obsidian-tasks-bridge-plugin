@@ -252,7 +252,7 @@ describe("TodoistApiClient", () => {
   });
 
   describe("getCompletedTasksByProject", () => {
-    it("exhausts offset pages and preserves the newest occurrence of each task ID", async () => {
+    it("exhausts offset pages, preserves every event, and keeps the newest task snapshot", async () => {
       vi.useFakeTimers();
       vi.setSystemTime(new Date("2026-08-10T04:30:00.000Z"));
 
@@ -292,7 +292,7 @@ describe("TodoistApiClient", () => {
           );
         const client = new TodoistApiClient("test-token", fetcher);
 
-        const tasks = await client.getCompletedTasksByProject("project-1");
+        const { tasks, completionEvents } = await client.getCompletedTasksByProject("project-1");
 
         expect(tasks).toHaveLength(201);
         expect(tasks.find((task) => task.id === "completed-199")).toMatchObject({
@@ -303,6 +303,21 @@ describe("TodoistApiClient", () => {
           id: "completed-200",
           completedAt: "2026-08-02T00:00:00.000Z",
         });
+        expect(completionEvents).toHaveLength(202);
+        expect(completionEvents.filter((event) => event.taskId === "completed-199")).toEqual([
+          {
+            id: "completion-newer-199",
+            taskId: "completed-199",
+            projectId: "456",
+            completedAt: "2026-08-09T00:00:00.000Z",
+          },
+          {
+            id: "completion-older-199",
+            taskId: "completed-199",
+            projectId: "456",
+            completedAt: "2026-08-01T00:00:00.000Z",
+          },
+        ]);
         expect(fetcher.fetch).toHaveBeenCalledTimes(2);
 
         const first = parseUrl(fetcher.fetch.mock.calls[0][0].url);
@@ -356,31 +371,41 @@ describe("TodoistApiClient", () => {
       );
       const client = new TodoistApiClient("test-token", fetcher);
 
-      await expect(client.getCompletedTasksByProject("project-1")).resolves.toEqual([
-        {
-          id: "task-42",
-          addedAt: "2026-08-09T12:34:56.000Z",
-          content: "Annotated task",
-          description: "Full snapshot",
-          projectId: "456",
-          sectionId: "section-1",
-          parentId: "parent-1",
-          labels: ["research"],
-          priority: 4,
-          due: {
-            date: "2026-08-20",
-            datetime: "2026-08-20T09:00:00.000Z",
-            timezone: "Asia/Shanghai",
-            isRecurring: false,
+      await expect(client.getCompletedTasksByProject("project-1")).resolves.toEqual({
+        tasks: [
+          {
+            id: "task-42",
+            addedAt: "2026-08-09T12:34:56.000Z",
+            content: "Annotated task",
+            description: "Full snapshot",
+            projectId: "456",
+            sectionId: "section-1",
+            parentId: "parent-1",
+            labels: ["research"],
+            priority: 4,
+            due: {
+              date: "2026-08-20",
+              datetime: "2026-08-20T09:00:00.000Z",
+              timezone: "Asia/Shanghai",
+              isRecurring: false,
+            },
+            duration: { amount: 30, unit: "minute" },
+            deadline: { date: "2026-08-22" },
+            childOrder: 7,
+            checked: true,
+            updatedAt: "2026-08-09T00:00:00.000Z",
+            completedAt: "2026-08-09T12:34:56.000Z",
           },
-          duration: { amount: 30, unit: "minute" },
-          deadline: { date: "2026-08-22" },
-          childOrder: 7,
-          checked: true,
-          updatedAt: "2026-08-09T00:00:00.000Z",
-          completedAt: "2026-08-09T12:34:56.000Z",
-        },
-      ]);
+        ],
+        completionEvents: [
+          {
+            id: "completion-event-9001",
+            taskId: "task-42",
+            projectId: "456",
+            completedAt: "2026-08-09T12:34:56.000Z",
+          },
+        ],
+      });
     });
 
     it("returns a reopened or recurring annotated item as active when checked is false", async () => {
@@ -402,14 +427,23 @@ describe("TodoistApiClient", () => {
       );
       const client = new TodoistApiClient("test-token", fetcher);
 
-      await expect(client.getCompletedTasksByProject("project-1")).resolves.toMatchObject([
-        {
-          id: "reopened-task",
-          checked: false,
-          updatedAt: "2026-08-10T01:00:00.000Z",
-          completedAt: null,
-        },
-      ]);
+      await expect(client.getCompletedTasksByProject("project-1")).resolves.toMatchObject({
+        tasks: [
+          {
+            id: "reopened-task",
+            checked: false,
+            updatedAt: "2026-08-10T01:00:00.000Z",
+            completedAt: null,
+          },
+        ],
+        completionEvents: [
+          {
+            id: "completion-before-reopen",
+            taskId: "reopened-task",
+            completedAt: "2026-08-09T12:34:56.000Z",
+          },
+        ],
+      });
     });
 
     it.each([
@@ -475,13 +509,39 @@ describe("TodoistApiClient", () => {
         );
       const client = new TodoistApiClient("test-token", fetcher);
 
-      const tasks = await client.getCompletedTasksByProject("project-1");
+      const { tasks, completionEvents } = await client.getCompletedTasksByProject("project-1");
 
       expect(tasks).toHaveLength(200);
       expect(tasks.find((task) => task.id === "repeated-task")).toMatchObject({
         content: "Newer snapshot",
         completedAt: "2026-08-09T00:00:00.000Z",
       });
+      expect(completionEvents).toHaveLength(201);
+      expect(completionEvents.filter((event) => event.taskId === "repeated-task")).toHaveLength(2);
+    });
+
+    it("deduplicates repeated completion events by event ID without dropping task snapshots", async () => {
+      const firstPage = Array.from({ length: 200 }, (_, index) =>
+        makeCompletedTaskEntry(
+          { id: `completed-${index}` },
+          { id: index === 0 ? "duplicate-event" : `event-${index}` },
+        ),
+      );
+      const fetcher = makeFetcher();
+      fetcher.fetch
+        .mockResolvedValueOnce(makeCompletedPaginatedResponse(firstPage))
+        .mockResolvedValueOnce(
+          makeCompletedPaginatedResponse([
+            makeCompletedTaskEntry({ id: "another-task" }, { id: "duplicate-event" }),
+          ]),
+        );
+      const client = new TodoistApiClient("test-token", fetcher);
+
+      const { tasks, completionEvents } = await client.getCompletedTasksByProject("project-1");
+
+      expect(tasks).toHaveLength(201);
+      expect(completionEvents).toHaveLength(200);
+      expect(completionEvents.filter(({ id }) => id === "duplicate-event")).toHaveLength(1);
     });
 
     it("requests one final page when the result count is an exact multiple of 200", async () => {
@@ -494,9 +554,13 @@ describe("TodoistApiClient", () => {
         .mockResolvedValueOnce(makeCompletedPaginatedResponse([]));
       const client = new TodoistApiClient("test-token", fetcher);
 
-      await expect(
-        client.getCompletedTasksByProject("project-1", "2026-08-10T00:00:00.000Z"),
-      ).resolves.toHaveLength(200);
+      const result = await client.getCompletedTasksByProject(
+        "project-1",
+        "2026-08-10T00:00:00.000Z",
+      );
+
+      expect(result.tasks).toHaveLength(200);
+      expect(result.completionEvents).toHaveLength(200);
 
       expect(fetcher.fetch).toHaveBeenCalledTimes(2);
       expect(parseUrl(fetcher.fetch.mock.calls[1][0].url).params.get("offset")).toBe("200");
@@ -508,6 +572,20 @@ describe("TodoistApiClient", () => {
       );
       const fetcher = makeFetcher();
       fetcher.fetch.mockResolvedValue(makeCompletedPaginatedResponse(repeatedPage));
+      const client = new TodoistApiClient("test-token", fetcher);
+
+      await expect(client.getCompletedTasksByProject("project-1")).rejects.toThrow("repeated page");
+      expect(fetcher.fetch).toHaveBeenCalledTimes(2);
+    });
+
+    it("rejects a repeated full page even when Todoist reorders its events", async () => {
+      const repeatedPage = Array.from({ length: 200 }, (_, index) =>
+        makeCompletedTaskEntry({ id: `completed-${index}` }),
+      );
+      const fetcher = makeFetcher();
+      fetcher.fetch
+        .mockResolvedValueOnce(makeCompletedPaginatedResponse(repeatedPage))
+        .mockResolvedValueOnce(makeCompletedPaginatedResponse([...repeatedPage].reverse()));
       const client = new TodoistApiClient("test-token", fetcher);
 
       await expect(client.getCompletedTasksByProject("project-1")).rejects.toThrow("repeated page");
@@ -537,8 +615,8 @@ describe("TodoistApiClient", () => {
           makeCompletedPaginatedResponse([makeCompletedTaskEntry({ id: "completed" })]),
         );
         await expect(Promise.all([first, second])).resolves.toMatchObject([
-          [{ id: "completed" }],
-          [{ id: "completed" }],
+          { tasks: [{ id: "completed" }], completionEvents: [{ taskId: "completed" }] },
+          { tasks: [{ id: "completed" }], completionEvents: [{ taskId: "completed" }] },
         ]);
         expect(fetcher.fetch).toHaveBeenCalledTimes(1);
       } finally {

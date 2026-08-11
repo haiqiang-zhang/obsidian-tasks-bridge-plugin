@@ -4,6 +4,8 @@ import { type CSSProperties, useId } from "react";
 import type { ProjectSyncStatus } from "@/project-sync";
 import { ObsidianIcon } from "@/ui/components/obsidian-icon";
 
+import { CompletionHeatmap } from "./CompletionHeatmap";
+import type { CompletionHeatmapRange } from "./completionHeatmapModel";
 import type { ProjectOverviewModel, ProjectOverviewNode } from "./projectOverviewModel";
 
 export type ProjectOverviewProps = {
@@ -12,7 +14,9 @@ export type ProjectOverviewProps = {
   status: ProjectSyncStatus;
   configured: boolean;
   collapsed: boolean;
+  completionHeatmapRange: CompletionHeatmapRange;
   onCollapsedChange: (collapsed: boolean) => void;
+  onCompletionHeatmapRangeChange: (range: CompletionHeatmapRange) => void;
 };
 
 type ProgressStyle = CSSProperties & {
@@ -27,7 +31,9 @@ export const ProjectOverview: React.FC<ProjectOverviewProps> = ({
   status,
   configured,
   collapsed,
+  completionHeatmapRange,
   onCollapsedChange,
+  onCompletionHeatmapRangeChange,
 }) => {
   const instanceId = useId();
   const headingId = `${instanceId}-heading`;
@@ -76,7 +82,13 @@ export const ProjectOverview: React.FC<ProjectOverviewProps> = ({
       <div className="todoist-bases-project-overview-content" hidden={collapsed} id={bodyId}>
         {model === null && <ProjectOverviewState configured={configured} status={status} />}
         {model !== null && !available && <UnavailableRoot />}
-        {model !== null && available && <ProjectOverviewBody model={model} />}
+        {model !== null && available && (
+          <ProjectOverviewBody
+            completionHeatmapRange={completionHeatmapRange}
+            model={model}
+            onCompletionHeatmapRangeChange={onCompletionHeatmapRangeChange}
+          />
+        )}
       </div>
     </section>
   );
@@ -189,16 +201,27 @@ const UnavailableRoot: React.FC = () => (
   </output>
 );
 
-const ProjectOverviewBody: React.FC<{ model: ProjectOverviewModel }> = ({ model }) => (
+const ProjectOverviewBody: React.FC<{
+  model: ProjectOverviewModel;
+  completionHeatmapRange: CompletionHeatmapRange;
+  onCompletionHeatmapRangeChange: (range: CompletionHeatmapRange) => void;
+}> = ({ model, completionHeatmapRange, onCompletionHeatmapRangeChange }) => (
   <div className="todoist-bases-project-overview-body">
-    <div className="todoist-bases-project-overview-summary-panel">
-      <CompletionRing
-        completed={model.counts.completed}
-        rate={model.completionRate}
-        total={model.taskCount}
+    <div className="todoist-bases-project-overview-summary-column">
+      <div className="todoist-bases-project-overview-summary-panel">
+        <CompletionRing
+          completed={model.counts.completed}
+          rate={model.completionRate}
+          total={model.taskCount}
+        />
+        <OverviewMetrics model={model} />
+        <TaskLegend active={model.counts.active} completed={model.counts.completed} />
+      </div>
+      <CompletionHeatmap
+        events={model.completionEvents}
+        onRangeChange={onCompletionHeatmapRangeChange}
+        range={completionHeatmapRange}
       />
-      <OverviewMetrics model={model} />
-      <TaskLegend active={model.counts.active} completed={model.counts.completed} />
     </div>
 
     <div className="todoist-bases-project-overview-breakdown">

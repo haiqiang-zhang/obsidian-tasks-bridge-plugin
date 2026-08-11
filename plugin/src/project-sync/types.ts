@@ -1,7 +1,9 @@
 import type { Project } from "@/api/domain/project";
+import type { ProjectCompletionEvent } from "@/api/domain/task";
 import type { Task } from "@/data/task";
 import type { ProjectSyncMapping } from "@/settings";
 
+export type { ProjectCompletionEvent } from "@/api/domain/task";
 export type { ProjectSyncMapping } from "@/settings";
 
 export type ProjectSyncConfig = {
@@ -12,6 +14,7 @@ export type ProjectSyncConfig = {
 export type ProjectTaskPage = {
   activeTasks: Task[];
   completedTasks: Task[];
+  completionEvents: ProjectCompletionEvent[];
 };
 
 export interface ProjectSyncSource {
@@ -42,6 +45,7 @@ export type ProjectSyncProjectStatistics = Readonly<{
   name: string;
   childOrder: number;
   directCounts: ProjectSyncStatisticsCounts;
+  directCompletionEvents: readonly ProjectCompletionEvent[];
 }>;
 
 export type ProjectSyncStatisticsScope = Readonly<{

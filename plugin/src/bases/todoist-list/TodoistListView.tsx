@@ -10,6 +10,7 @@ import { createRoot, type Root } from "react-dom/client";
 
 import type { ProjectSyncStatisticsSnapshot } from "@/project-sync";
 
+import { type CompletionHeatmapRange, isCompletionHeatmapRange } from "./completionHeatmapModel";
 import { buildTodoistListModel } from "./model";
 import { TodoistList } from "./TodoistList";
 import type {
@@ -28,6 +29,8 @@ const densityConfigKey = "todoistDensity";
 const showDescriptionsConfigKey = "todoistShowDescriptions";
 const showSectionsConfigKey = "todoistShowSections";
 const projectOverviewCollapsedConfigKey = "tasksProjectOverviewCollapsed";
+const completionHeatmapRangeConfigKey = "tasksCompletionHeatmapRange";
+const defaultCompletionHeatmapRange: CompletionHeatmapRange = "last-year";
 
 export const tasksListViewOptions = (): ViewOption[] => [
   {
@@ -139,6 +142,9 @@ export class TasksListView extends BasesView implements HoverParent {
     });
     const rootProjectId = readOptionalString(this.config.get(rootProjectConfigKey));
     const projectOverviewCollapsed = this.config.get(projectOverviewCollapsedConfigKey) === true;
+    const completionHeatmapRange = readCompletionHeatmapRange(
+      this.config.get(completionHeatmapRangeConfigKey),
+    );
     const options = this.readOptions();
     const navigation: TodoistListNavigation = {
       openFile: (filePath, newLeaf) => {
@@ -163,6 +169,10 @@ export class TasksListView extends BasesView implements HoverParent {
         onProjectOverviewCollapsedChange={(collapsed) =>
           this.config.set(projectOverviewCollapsedConfigKey, collapsed)
         }
+        completionHeatmapRange={completionHeatmapRange}
+        onCompletionHeatmapRangeChange={(range) =>
+          this.config.set(completionHeatmapRangeConfigKey, range)
+        }
         onRootProjectChange={(projectId) => this.config.set(rootProjectConfigKey, projectId)}
         options={options}
         projectOverviewCollapsed={projectOverviewCollapsed}
@@ -186,3 +196,6 @@ export class TasksListView extends BasesView implements HoverParent {
 
 const readOptionalString = (value: unknown): string | null =>
   typeof value === "string" && value.trim() !== "" ? value : null;
+
+const readCompletionHeatmapRange = (value: unknown): CompletionHeatmapRange =>
+  isCompletionHeatmapRange(value) ? value : defaultCompletionHeatmapRange;

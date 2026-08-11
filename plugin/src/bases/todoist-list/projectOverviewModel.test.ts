@@ -1,11 +1,22 @@
 import { describe, expect, it } from "vitest";
 
-import type { ProjectSyncStatisticsSnapshot } from "@/project-sync";
+import type { ProjectCompletionEvent, ProjectSyncStatisticsSnapshot } from "@/project-sync";
 
 import { buildProjectOverviewModel } from "./projectOverviewModel";
 
 type Scope = ProjectSyncStatisticsSnapshot["scopes"][number];
 type StatisticsProject = Scope["projects"][number];
+
+const completionEvent = (
+  id: string,
+  projectId: string,
+  completedAt = "2026-08-10T06:00:00.000Z",
+): ProjectCompletionEvent => ({
+  id,
+  taskId: `task-${id}`,
+  projectId,
+  completedAt,
+});
 
 const project = (
   id: string,
@@ -14,12 +25,14 @@ const project = (
   active = 0,
   completed = 0,
   name = id,
+  directCompletionEvents: ProjectCompletionEvent[] = [],
 ): StatisticsProject => ({
   id,
   parentId,
   name,
   childOrder,
   directCounts: { active, completed },
+  directCompletionEvents,
 });
 
 const scope = (mappingId: string, rootProjectId: string, projects: StatisticsProject[]): Scope => ({
@@ -80,13 +93,17 @@ describe("buildProjectOverviewModel", () => {
   });
 
   it("crops an arbitrary child to that project and all of its descendants", () => {
+    const rootEvent = completionEvent("root-event", "root");
+    const siblingEvent = completionEvent("sibling-event", "sibling");
+    const childEvent = completionEvent("child-event", "child");
+    const grandchildEvent = completionEvent("grandchild-event", "grandchild");
     const model = buildProjectOverviewModel(
       snapshot([
         scope("study", "root", [
-          project("root", null, 0, 1, 0, "Root"),
-          project("sibling", "root", 0, 4, 0, "Sibling"),
-          project("child", "root", 1, 2, 1, "Child"),
-          project("grandchild", "child", 0, 0, 2, "Grandchild"),
+          project("root", null, 0, 1, 0, "Root", [rootEvent]),
+          project("sibling", "root", 0, 4, 0, "Sibling", [siblingEvent]),
+          project("child", "root", 1, 2, 1, "Child", [childEvent]),
+          project("grandchild", "child", 0, 0, 2, "Grandchild", [grandchildEvent]),
         ]),
       ]),
       "child",
@@ -102,6 +119,8 @@ describe("buildProjectOverviewModel", () => {
     });
     expect(model?.roots.map(({ id }) => id)).toEqual(["child"]);
     expect(model?.roots[0]?.children.map(({ id }) => id)).toEqual(["grandchild"]);
+    expect(model?.roots[0]?.directCompletionEvents).toEqual([childEvent]);
+    expect(model?.completionEvents).toEqual([childEvent, grandchildEvent]);
     expect(model?.projectOptions.map(({ id }) => id)).toEqual([
       "root",
       "sibling",
@@ -172,13 +191,18 @@ describe("buildProjectOverviewModel", () => {
   });
 
   it("ignores duplicate, orphaned, and cyclic projects without mutating the snapshot", () => {
+    const rootEvent = completionEvent("root-event", "root");
+    const validEvent = completionEvent("valid-event", "valid");
+    const duplicateProjectEvent = completionEvent("duplicate-project-event", "valid");
+    const orphanEvent = completionEvent("orphan-event", "orphan");
+    const cycleEvent = completionEvent("cycle-event", "cycle-a");
     const input = snapshot([
       scope("study", "root", [
-        project("root", "outside-scope", 0, 1, 0, "Root"),
-        project("valid", "root", 0, 0, 1, "Valid"),
-        project("valid", "root", 9, 99, 99, "Duplicate ignored"),
-        project("orphan", "missing", 0, 5, 5, "Orphan"),
-        project("cycle-a", "cycle-b", 0, 5, 5, "Cycle A"),
+        project("root", "outside-scope", 0, 1, 0, "Root", [rootEvent]),
+        project("valid", "root", 0, 0, 1, "Valid", [validEvent, validEvent]),
+        project("valid", "root", 9, 99, 99, "Duplicate ignored", [duplicateProjectEvent]),
+        project("orphan", "missing", 0, 5, 5, "Orphan", [orphanEvent]),
+        project("cycle-a", "cycle-b", 0, 5, 5, "Cycle A", [cycleEvent]),
         project("cycle-b", "cycle-a", 0, 5, 5, "Cycle B"),
       ]),
     ]);
@@ -192,7 +216,54 @@ describe("buildProjectOverviewModel", () => {
       projectCount: 2,
     });
     expect(model?.projectOptions.map(({ id }) => id)).toEqual(["root", "valid"]);
+    expect(model?.completionEvents).toEqual([rootEvent, validEvent]);
+    expect(model?.roots[0]?.children[0]?.directCompletionEvents).toEqual([validEvent]);
+    expect(model?.completionEvents[0]).not.toBe(rootEvent);
+    expect(model?.roots[0]?.children[0]?.directCompletionEvents[0]).not.toBe(validEvent);
     expect(JSON.stringify(input)).toBe(before);
+  });
+
+  it("deduplicates completion events across all retained roots by event ID", () => {
+    const sharedFirst = completionEvent("shared", "personal", "2026-08-08T06:00:00.000Z");
+    const sharedDuplicate = completionEvent("shared", "work", "2026-08-09T06:00:00.000Z");
+    const personalEvent = completionEvent("personal-only", "personal");
+    const workEvent = completionEvent("work-only", "work");
+    const model = buildProjectOverviewModel(
+      snapshot([
+        scope("personal", "personal", [
+          project("personal", null, 0, 0, 2, "Personal", [sharedFirst, personalEvent]),
+        ]),
+        scope("work", "work", [
+          project("work", null, 1, 0, 2, "Work", [sharedDuplicate, workEvent]),
+        ]),
+      ]),
+      null,
+    );
+
+    expect(model?.roots.map(({ id }) => id)).toEqual(["personal", "work"]);
+    expect(model?.completionEvents).toEqual([sharedFirst, personalEvent, workEvent]);
+    expect(model?.completionEvents[0]).not.toBe(sharedFirst);
+  });
+
+  it("keeps only the first retained occurrence of a duplicated project across roots", () => {
+    const retainedEvent = completionEvent("retained", "shared");
+    const duplicateEvent = completionEvent("duplicate", "shared");
+    const model = buildProjectOverviewModel(
+      snapshot([
+        scope("parent", "parent", [
+          project("parent", null, 0, 0, 0, "Parent"),
+          project("shared", "parent", 0, 0, 1, "Shared", [retainedEvent]),
+        ]),
+        scope("duplicate", "shared", [
+          project("shared", null, 1, 0, 1, "Shared duplicate", [duplicateEvent]),
+        ]),
+      ]),
+      null,
+    );
+
+    expect(model?.roots.map(({ id }) => id)).toEqual(["parent"]);
+    expect(model?.projectCount).toBe(2);
+    expect(model?.completionEvents).toEqual([retainedEvent]);
   });
 
   it("returns null when no completed Project Sync snapshot exists", () => {

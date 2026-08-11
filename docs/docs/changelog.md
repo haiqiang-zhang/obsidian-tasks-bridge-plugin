@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### ✨ Features
+
+- Added a GitHub-style daily completion heatmap to the Tasks List Project overview. It covers the selected root and all descendants, offers recent ranges and available calendar years, preserves recurring and reopened-task completion events, and uses responsive, keyboard-accessible Obsidian-native controls.
+
 ## v2.8.2 (2026-08-12)
 
 ### 🐛 Fixes

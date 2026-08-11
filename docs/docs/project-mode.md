@@ -153,6 +153,7 @@ Expand **Project overview** above the task list to see statistics for the select
 
 - total, active, and completed task counts;
 - completion percentage and a status breakdown;
+- a GitHub-style heatmap of daily completion activity;
 - the number of projects in the selected hierarchy;
 - the time of the latest complete Project sync; and
 - a nested project breakdown in which each project's counts include all of its descendants.
@@ -160,6 +161,10 @@ Expand **Project overview** above the task list to see statistics for the select
 These statistics come from the latest complete Project Sync snapshot, not from the files currently visible in the Base. The snapshot retains the complete synchronized project catalog, so child projects remain in the breakdown even when they contain no tasks or all of their task notes are excluded by Base filters. A failed or interrupted refresh does not replace the last complete snapshot.
 
 Select the **Project overview** header to collapse or expand the panel. That choice is saved for the individual Base view. Before the first complete Project sync, the panel displays a waiting state instead of partial statistics. If Project Sync is not configured, disabled, or the initial sync fails, it shows that state directly instead of leaving an indefinite loading indicator.
+
+The completion heatmap initially shows the last year. Use its native range menu to switch among the last 4 weeks, 3 months, 6 months, the last year, or any calendar year from the earliest synchronized completion through the current year. The chosen range is saved for the individual Base view. Month and weekday labels, Obsidian tooltips, a Less-to-More intensity legend, horizontal scrolling on narrow screens, and keyboard navigation follow the familiar GitHub contribution-calendar interaction. Select one day to inspect its count, or select a second day while holding **Shift** to summarize the complete date range between them.
+
+The heatmap counts completion occurrences for the selected root and all of its synchronized descendants. A recurring task completed several times therefore contributes once for each completion event, and a reopened task keeps its earlier completion activity. The completion ring is intentionally different: it summarizes the tasks that are currently completed in the latest snapshot. Choosing **All projects** combines completion events from every synchronized mapping and deduplicates them by Todoist event ID.
 
 :::info Project statistics and Base results use different scopes
 

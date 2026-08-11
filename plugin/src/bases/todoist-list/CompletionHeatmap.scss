@@ -1,0 +1,353 @@
+.tasks-bridge-completion-heatmap {
+  --tasks-bridge-heatmap-cell-size: 11px;
+  --tasks-bridge-heatmap-hit-size: var(--tasks-bridge-heatmap-cell-size);
+  --tasks-bridge-heatmap-level-0: var(--background-secondary);
+  --tasks-bridge-heatmap-level-1: color-mix(
+    in oklch,
+    var(--interactive-accent) 28%,
+    var(--background-primary)
+  );
+  --tasks-bridge-heatmap-level-2: color-mix(
+    in oklch,
+    var(--interactive-accent) 48%,
+    var(--background-primary)
+  );
+  --tasks-bridge-heatmap-level-3: color-mix(
+    in oklch,
+    var(--interactive-accent) 72%,
+    var(--background-primary)
+  );
+  --tasks-bridge-heatmap-level-4: var(--interactive-accent);
+
+  container: tasks-bridge-completion-heatmap / inline-size;
+  min-width: 0;
+  padding: var(--size-4-4);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  background: var(--background-primary);
+  color: var(--text-normal);
+  font-family: var(--font-interface);
+  font-size: var(--font-ui-smaller);
+}
+
+.tasks-bridge-completion-heatmap-header {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--size-4-3);
+  margin-block-end: var(--size-4-3);
+}
+
+.tasks-bridge-completion-heatmap-heading-group {
+  min-width: 0;
+
+  h3,
+  p {
+    margin: 0;
+  }
+
+  h3 {
+    color: var(--text-normal);
+    font-size: var(--font-ui-small);
+    font-weight: var(--font-semibold);
+    line-height: var(--line-height-tight);
+  }
+
+  p {
+    margin-block-start: var(--size-2-1);
+    color: var(--text-muted);
+    font-size: var(--font-ui-smaller);
+    font-variant-numeric: tabular-nums;
+    line-height: var(--line-height-tight);
+  }
+}
+
+.tasks-bridge-completion-heatmap-range {
+  flex: 0 0 auto;
+
+  select.dropdown {
+    max-width: 11rem;
+    min-height: var(--input-height);
+    color: var(--text-normal);
+    font-family: var(--font-interface);
+    font-size: var(--font-ui-smaller);
+  }
+}
+
+.tasks-bridge-completion-heatmap-viewport {
+  direction: ltr;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-block: var(--size-2-1) var(--size-4-2);
+  overscroll-behavior-inline: contain;
+  scrollbar-gutter: stable;
+  touch-action: pan-x pan-y;
+}
+
+.tasks-bridge-completion-heatmap-grid {
+  width: max-content;
+  border-spacing: 3px;
+  border-collapse: separate;
+  color: var(--text-muted);
+  font-family: var(--font-interface);
+  font-size: var(--font-ui-smaller);
+  font-variant-numeric: tabular-nums;
+  table-layout: fixed;
+}
+
+.tasks-bridge-completion-heatmap-corner,
+.tasks-bridge-completion-heatmap-weekday {
+  position: sticky;
+  z-index: 2;
+  inset-inline-start: 0;
+  width: var(--size-4-7, 28px);
+  min-width: var(--size-4-7, 28px);
+  background: var(--background-primary);
+}
+
+.tasks-bridge-completion-heatmap-month,
+.tasks-bridge-completion-heatmap-weekday {
+  height: var(--tasks-bridge-heatmap-cell-size);
+  padding: 0;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  font-weight: var(--font-normal);
+  line-height: var(--tasks-bridge-heatmap-cell-size);
+  text-align: start;
+  white-space: nowrap;
+}
+
+.tasks-bridge-completion-heatmap-month {
+  position: relative;
+  vertical-align: bottom;
+
+  > span[aria-hidden="true"] {
+    position: absolute;
+    inset-block-end: 0;
+    inset-inline-start: 0;
+  }
+}
+
+.tasks-bridge-completion-heatmap-weekday {
+  padding-inline-end: var(--size-2-2);
+
+  > span[aria-hidden="true"] {
+    visibility: hidden;
+  }
+
+  > span[data-visible="true"] {
+    visibility: visible;
+  }
+}
+
+.tasks-bridge-completion-heatmap-day,
+.tasks-bridge-completion-heatmap-outside {
+  width: var(--tasks-bridge-heatmap-hit-size);
+  min-width: var(--tasks-bridge-heatmap-hit-size);
+  height: var(--tasks-bridge-heatmap-hit-size);
+  padding: 0;
+  border: 0;
+}
+
+.tasks-bridge-completion-heatmap-day {
+  cursor: pointer;
+  outline: none;
+  vertical-align: middle;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.tasks-bridge-completion-heatmap-day-square,
+.tasks-bridge-completion-heatmap-legend-cell {
+  display: block;
+  width: var(--tasks-bridge-heatmap-cell-size);
+  height: var(--tasks-bridge-heatmap-cell-size);
+  border: 1px solid color-mix(in oklch, var(--text-normal) 8%, transparent);
+  border-radius: 2px;
+  background: var(--tasks-bridge-heatmap-level-0);
+}
+
+.tasks-bridge-completion-heatmap-day-square {
+  margin: auto;
+}
+
+.tasks-bridge-completion-heatmap-day[data-level="1"]
+  .tasks-bridge-completion-heatmap-day-square,
+.tasks-bridge-completion-heatmap-legend-cell[data-level="1"] {
+  background: var(--tasks-bridge-heatmap-level-1);
+}
+
+.tasks-bridge-completion-heatmap-day[data-level="2"]
+  .tasks-bridge-completion-heatmap-day-square,
+.tasks-bridge-completion-heatmap-legend-cell[data-level="2"] {
+  background: var(--tasks-bridge-heatmap-level-2);
+}
+
+.tasks-bridge-completion-heatmap-day[data-level="3"]
+  .tasks-bridge-completion-heatmap-day-square,
+.tasks-bridge-completion-heatmap-legend-cell[data-level="3"] {
+  background: var(--tasks-bridge-heatmap-level-3);
+}
+
+.tasks-bridge-completion-heatmap-day[data-level="4"]
+  .tasks-bridge-completion-heatmap-day-square,
+.tasks-bridge-completion-heatmap-legend-cell[data-level="4"] {
+  background: var(--tasks-bridge-heatmap-level-4);
+}
+
+.tasks-bridge-completion-heatmap-day:hover .tasks-bridge-completion-heatmap-day-square {
+  border-color: var(--background-modifier-border-hover);
+  filter: brightness(1.05);
+}
+
+.tasks-bridge-completion-heatmap-day:focus-visible
+  .tasks-bridge-completion-heatmap-day-square {
+  outline: 2px solid var(--background-modifier-border-focus);
+  outline-offset: 1px;
+}
+
+.tasks-bridge-completion-heatmap-grid[data-has-selection="true"]
+  .tasks-bridge-completion-heatmap-day[aria-selected="false"]
+  .tasks-bridge-completion-heatmap-day-square {
+  opacity: 0.42;
+}
+
+.tasks-bridge-completion-heatmap-day[aria-selected="true"]
+  .tasks-bridge-completion-heatmap-day-square {
+  box-shadow: 0 0 0 1px var(--text-accent);
+}
+
+.tasks-bridge-completion-heatmap-footer {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--size-4-3);
+  padding-block-start: var(--size-4-2);
+  border-block-start: 1px solid var(--background-modifier-border);
+  color: var(--text-muted);
+}
+
+.tasks-bridge-completion-heatmap-selection {
+  display: block;
+  overflow: hidden;
+  min-width: 0;
+  margin: 0;
+  font-size: var(--font-ui-smaller);
+  font-variant-numeric: tabular-nums;
+  line-height: var(--line-height-tight);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tasks-bridge-completion-heatmap-legend {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--size-2-1);
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller);
+}
+
+.tasks-bridge-completion-heatmap-empty {
+  margin: var(--size-4-2) 0 0;
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller);
+  line-height: var(--line-height-tight);
+}
+
+.tasks-bridge-completion-heatmap-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  clip: rect(0, 0, 0, 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+@container tasks-bridge-completion-heatmap (max-width: 30rem) {
+  .tasks-bridge-completion-heatmap-footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .tasks-bridge-completion-heatmap-selection {
+    white-space: normal;
+  }
+
+  .tasks-bridge-completion-heatmap-legend {
+    align-self: flex-end;
+  }
+}
+
+@container tasks-bridge-completion-heatmap (max-width: 22rem) {
+  .tasks-bridge-completion-heatmap-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .tasks-bridge-completion-heatmap-range select.dropdown {
+    width: 100%;
+    max-width: none;
+  }
+}
+
+@media (pointer: coarse) {
+  .tasks-bridge-completion-heatmap {
+    --tasks-bridge-heatmap-cell-size: 13px;
+    --tasks-bridge-heatmap-hit-size: 20px;
+  }
+
+  .tasks-bridge-completion-heatmap-grid {
+    border-spacing: 4px;
+  }
+}
+
+@media (forced-colors: active) {
+  .tasks-bridge-completion-heatmap-day-square,
+  .tasks-bridge-completion-heatmap-legend-cell {
+    border-color: CanvasText;
+    background: Canvas;
+    forced-color-adjust: none;
+  }
+
+  .tasks-bridge-completion-heatmap-day[data-level="1"]
+    .tasks-bridge-completion-heatmap-day-square,
+  .tasks-bridge-completion-heatmap-legend-cell[data-level="1"] {
+    background: radial-gradient(CanvasText 15%, Canvas 16%);
+  }
+
+  .tasks-bridge-completion-heatmap-day[data-level="2"]
+    .tasks-bridge-completion-heatmap-day-square,
+  .tasks-bridge-completion-heatmap-legend-cell[data-level="2"] {
+    background: radial-gradient(CanvasText 32%, Canvas 33%);
+  }
+
+  .tasks-bridge-completion-heatmap-day[data-level="3"]
+    .tasks-bridge-completion-heatmap-day-square,
+  .tasks-bridge-completion-heatmap-legend-cell[data-level="3"] {
+    background: radial-gradient(CanvasText 50%, Canvas 51%);
+  }
+
+  .tasks-bridge-completion-heatmap-day[data-level="4"]
+    .tasks-bridge-completion-heatmap-day-square,
+  .tasks-bridge-completion-heatmap-legend-cell[data-level="4"] {
+    background: CanvasText;
+  }
+
+  .tasks-bridge-completion-heatmap-day:focus-visible
+    .tasks-bridge-completion-heatmap-day-square {
+    outline-color: Highlight;
+  }
+
+  .tasks-bridge-completion-heatmap-day[aria-selected="true"]
+    .tasks-bridge-completion-heatmap-day-square {
+    border-color: Highlight;
+    box-shadow: 0 0 0 2px Highlight;
+  }
+}

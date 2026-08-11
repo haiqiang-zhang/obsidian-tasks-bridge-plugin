@@ -4,6 +4,7 @@ import { makeProject, makeTask } from "@/factories/data";
 
 import { ProjectFolderSyncService } from "./service";
 import type {
+  ProjectCompletionEvent,
   ProjectSyncConfig,
   ProjectSyncMapping,
   ProjectSyncResult,
@@ -48,6 +49,20 @@ const makeVault = (overrides: Partial<ProjectSyncVault> = {}): ProjectSyncVault 
   ...overrides,
 });
 
+const projectTaskPage = (overrides: Partial<ProjectTaskPage> = {}): ProjectTaskPage => ({
+  activeTasks: [],
+  completedTasks: [],
+  completionEvents: [],
+  ...overrides,
+});
+
+const completionEvent = (
+  id: string,
+  taskId: string,
+  projectId: string,
+  completedAt: string,
+): ProjectCompletionEvent => ({ id, taskId, projectId, completedAt });
+
 describe("ProjectFolderSyncService", () => {
   it("validates first, scans every mapping sequentially, and mutates only after all fetches", async () => {
     const root = makeProject("root", { name: "Root" });
@@ -60,7 +75,7 @@ describe("ProjectFolderSyncService", () => {
         events.push(`${projectId}:start`);
         await Promise.resolve();
         events.push(`${projectId}:end`);
-        return { activeTasks: [], completedTasks: [] };
+        return projectTaskPage();
       }),
     };
     const vault = makeVault({
@@ -130,7 +145,7 @@ describe("ProjectFolderSyncService", () => {
     const service = new ProjectFolderSyncService(
       {
         listProjects: () => [first, second],
-        fetchProjectTasks: async () => ({ activeTasks: [], completedTasks: [] }),
+        fetchProjectTasks: async () => projectTaskPage(),
       },
       vault,
       config(mapping(first.id), mapping(second.id)),
@@ -161,7 +176,8 @@ describe("ProjectFolderSyncService", () => {
     const service = new ProjectFolderSyncService(
       {
         listProjects: () => [root],
-        fetchProjectTasks: async () => ({ activeTasks: [active], completedTasks: [completed] }),
+        fetchProjectTasks: async () =>
+          projectTaskPage({ activeTasks: [active], completedTasks: [completed] }),
       },
       makeVault({ reconcile }),
       config(),
@@ -189,24 +205,52 @@ describe("ProjectFolderSyncService", () => {
     const pages = new Map<string, ProjectTaskPage>([
       [
         root.id,
-        {
+        projectTaskPage({
           activeTasks: [
             makeTask("root-active-1", { project: root }),
             makeTask("root-active-2", { project: root }),
           ],
           completedTasks: [makeTask("root-completed", { project: root })],
-        },
+          completionEvents: [
+            completionEvent(
+              "root-completion",
+              "root-completed",
+              root.id,
+              "2026-08-08T08:00:00.000Z",
+            ),
+          ],
+        }),
       ],
-      [child.id, { activeTasks: [], completedTasks: [] }],
+      [child.id, projectTaskPage()],
       [
         grandchild.id,
-        {
+        projectTaskPage({
           activeTasks: [makeTask("grandchild-active", { project: grandchild })],
           completedTasks: [
             makeTask("grandchild-completed-1", { project: grandchild }),
             makeTask("grandchild-completed-2", { project: grandchild }),
           ],
-        },
+          completionEvents: [
+            completionEvent(
+              "grandchild-completion-1",
+              "grandchild-completed-1",
+              grandchild.id,
+              "2026-08-09T08:00:00.000Z",
+            ),
+            completionEvent(
+              "grandchild-completion-2",
+              "grandchild-completed-2",
+              grandchild.id,
+              "2026-08-10T08:00:00.000Z",
+            ),
+            completionEvent(
+              "grandchild-completion-2",
+              "grandchild-completed-2",
+              grandchild.id,
+              "2026-08-10T08:00:00.000Z",
+            ),
+          ],
+        }),
       ],
     ]);
     const reconcile = vi.fn<ProjectSyncVault["reconcile"]>(async () => successResult());
@@ -242,6 +286,14 @@ describe("ProjectFolderSyncService", () => {
               name: "Root",
               childOrder: 1,
               directCounts: { active: 2, completed: 1 },
+              directCompletionEvents: [
+                completionEvent(
+                  "root-completion",
+                  "root-completed",
+                  root.id,
+                  "2026-08-08T08:00:00.000Z",
+                ),
+              ],
             },
             {
               id: child.id,
@@ -249,6 +301,7 @@ describe("ProjectFolderSyncService", () => {
               name: "Child",
               childOrder: 2,
               directCounts: { active: 0, completed: 0 },
+              directCompletionEvents: [],
             },
             {
               id: grandchild.id,
@@ -256,11 +309,51 @@ describe("ProjectFolderSyncService", () => {
               name: "Grandchild",
               childOrder: 3,
               directCounts: { active: 1, completed: 2 },
+              directCompletionEvents: [
+                completionEvent(
+                  "grandchild-completion-1",
+                  "grandchild-completed-1",
+                  grandchild.id,
+                  "2026-08-09T08:00:00.000Z",
+                ),
+                completionEvent(
+                  "grandchild-completion-2",
+                  "grandchild-completed-2",
+                  grandchild.id,
+                  "2026-08-10T08:00:00.000Z",
+                ),
+              ],
             },
           ],
         },
       ],
     });
+  });
+
+  it("rejects a completion event returned for a different project before Vault mutation", async () => {
+    const root = makeProject("root");
+    const child = makeProject("child", { parentId: root.id });
+    const vault = makeVault();
+    const service = new ProjectFolderSyncService(
+      {
+        listProjects: () => [root, child],
+        fetchProjectTasks: async (projectId) =>
+          projectTaskPage({
+            completionEvents:
+              projectId === root.id
+                ? [completionEvent("wrong-project", "task-1", child.id, "2026-08-10T08:00:00.000Z")]
+                : [],
+          }),
+      },
+      vault,
+      config(mapping(root.id)),
+    );
+
+    await expect(service.sync()).rejects.toThrow(
+      "returned project 'child' while scanning project 'root'",
+    );
+    expect(vault.reconcile).not.toHaveBeenCalled();
+    expect(service.getStatisticsSnapshot()).toBeNull();
   });
 
   it("publishes one complete statistics scope for each mapping", async () => {
@@ -272,11 +365,11 @@ describe("ProjectFolderSyncService", () => {
     const service = new ProjectFolderSyncService(
       {
         listProjects: () => [first, firstChild, second],
-        fetchProjectTasks: async (projectId) => ({
-          activeTasks:
-            projectId === second.id ? [makeTask("second-active", { project: second })] : [],
-          completedTasks: [],
-        }),
+        fetchProjectTasks: async (projectId) =>
+          projectTaskPage({
+            activeTasks:
+              projectId === second.id ? [makeTask("second-active", { project: second })] : [],
+          }),
       },
       makeVault(),
       config(firstMapping, secondMapping),
@@ -318,10 +411,7 @@ describe("ProjectFolderSyncService", () => {
           if (shouldFail) {
             throw new Error("network failed");
           }
-          return {
-            activeTasks: [makeTask("active", { project: root })],
-            completedTasks: [],
-          };
+          return projectTaskPage({ activeTasks: [makeTask("active", { project: root })] });
         },
       },
       makeVault(),
@@ -344,7 +434,7 @@ describe("ProjectFolderSyncService", () => {
     const service = new ProjectFolderSyncService(
       {
         listProjects: () => [root],
-        fetchProjectTasks: async () => ({ activeTasks: [], completedTasks: [] }),
+        fetchProjectTasks: async () => projectTaskPage(),
       },
       makeVault(),
       originalConfig,
@@ -404,7 +494,7 @@ describe("ProjectFolderSyncService", () => {
     const service = new ProjectFolderSyncService(
       {
         listProjects: () => [first, second],
-        fetchProjectTasks: async () => ({ activeTasks: [], completedTasks: [] }),
+        fetchProjectTasks: async () => projectTaskPage(),
       },
       makeVault({ reconcile }),
       config(mapping(first.id), mapping(second.id)),
@@ -418,7 +508,7 @@ describe("ProjectFolderSyncService", () => {
 
   it("rejects invalid Vault mappings before making a Todoist task request", async () => {
     const root = makeProject("root");
-    const fetchProjectTasks = vi.fn(async () => ({ activeTasks: [], completedTasks: [] }));
+    const fetchProjectTasks = vi.fn(async () => projectTaskPage());
     const vault = makeVault({
       validateConfig: vi.fn(() => {
         throw new Error("folder does not exist");
@@ -449,7 +539,7 @@ describe("ProjectFolderSyncService", () => {
   });
 
   it("rejects an incomplete mapping before Vault or Todoist access", async () => {
-    const fetchProjectTasks = vi.fn(async () => ({ activeTasks: [], completedTasks: [] }));
+    const fetchProjectTasks = vi.fn(async () => projectTaskPage());
     const vault = makeVault();
     const service = new ProjectFolderSyncService(
       { listProjects: () => [], fetchProjectTasks },
@@ -465,7 +555,7 @@ describe("ProjectFolderSyncService", () => {
   it("rejects overlapping Todoist scopes before fetching either mapping", async () => {
     const root = makeProject("root", { name: "Root" });
     const child = makeProject("child", { name: "Child", parentId: root.id });
-    const fetchProjectTasks = vi.fn(async () => ({ activeTasks: [], completedTasks: [] }));
+    const fetchProjectTasks = vi.fn(async () => projectTaskPage());
     const vault = makeVault();
     const service = new ProjectFolderSyncService(
       { listProjects: () => [root, child], fetchProjectTasks },
@@ -489,7 +579,7 @@ describe("ProjectFolderSyncService", () => {
           if (projectId === second.id) {
             throw new Error("network failed");
           }
-          return { activeTasks: [], completedTasks: [] };
+          return projectTaskPage();
         },
       },
       vault,
@@ -504,14 +594,14 @@ describe("ProjectFolderSyncService", () => {
     const first = makeProject("first");
     const second = makeProject("second");
     const fetchProjectTasks = vi.fn(
-      async (projectId: string): Promise<ProjectTaskPage> => ({
-        activeTasks: [
-          makeTask("shared-task", {
-            project: projectId === first.id ? first : second,
-          }),
-        ],
-        completedTasks: [],
-      }),
+      async (projectId: string): Promise<ProjectTaskPage> =>
+        projectTaskPage({
+          activeTasks: [
+            makeTask("shared-task", {
+              project: projectId === first.id ? first : second,
+            }),
+          ],
+        }),
     );
     const vault = makeVault();
     const service = new ProjectFolderSyncService(
@@ -533,7 +623,7 @@ describe("ProjectFolderSyncService", () => {
     });
     const fetchProjectTasks = vi.fn(async () => {
       await gate;
-      return { activeTasks: [], completedTasks: [] };
+      return projectTaskPage();
     });
     const vault = makeVault();
     const service = new ProjectFolderSyncService(
@@ -563,7 +653,7 @@ describe("ProjectFolderSyncService", () => {
         listProjects: () => [root],
         fetchProjectTasks: async () => {
           await gate;
-          return { activeTasks: [], completedTasks: [] };
+          return projectTaskPage();
         },
       },
       vault,
@@ -587,7 +677,7 @@ describe("ProjectFolderSyncService", () => {
     });
     const fetchProjectTasks = vi.fn(async () => {
       await gate;
-      return { activeTasks: [], completedTasks: [] };
+      return projectTaskPage();
     });
     const vault = makeVault();
     const service = new ProjectFolderSyncService(
@@ -615,12 +705,12 @@ describe("ProjectFolderSyncService", () => {
       release = resolve;
     });
     const fetchProjectTasks = vi
-      .fn<() => Promise<{ activeTasks: never[]; completedTasks: never[] }>>()
+      .fn<() => Promise<ProjectTaskPage>>()
       .mockImplementationOnce(async () => {
         await gate;
-        return { activeTasks: [], completedTasks: [] };
+        return projectTaskPage();
       })
-      .mockResolvedValue({ activeTasks: [], completedTasks: [] });
+      .mockResolvedValue(projectTaskPage());
     const vault = makeVault();
     const service = new ProjectFolderSyncService(
       { listProjects: () => [root], fetchProjectTasks },
@@ -641,7 +731,7 @@ describe("ProjectFolderSyncService", () => {
 
   it("does not start synchronization after disposal", async () => {
     const root = makeProject("root");
-    const fetchProjectTasks = vi.fn(async () => ({ activeTasks: [], completedTasks: [] }));
+    const fetchProjectTasks = vi.fn(async () => projectTaskPage());
     const vault = makeVault();
     const service = new ProjectFolderSyncService(
       { listProjects: () => [root], fetchProjectTasks },
@@ -665,7 +755,7 @@ describe("ProjectFolderSyncService", () => {
     });
     const fetchProjectTasks = vi.fn(async () => {
       await gate;
-      return { activeTasks: [], completedTasks: [] };
+      return projectTaskPage();
     });
     const vault = makeVault();
     const service = new ProjectFolderSyncService(

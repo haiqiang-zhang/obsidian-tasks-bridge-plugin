@@ -112,6 +112,11 @@ export const completedTaskEntrySchema = z
 
 export type CompletedTaskEntry = z.infer<typeof completedTaskEntrySchema>;
 
+/** A single Todoist completion occurrence, including repeated completions of the same task. */
+export type ProjectCompletionEvent = Readonly<
+  Pick<CompletedTaskEntry, "id" | "taskId" | "projectId" | "completedAt">
+>;
+
 export type Task = z.infer<typeof taskSchema> & {
   completedAt?: string | null;
 };

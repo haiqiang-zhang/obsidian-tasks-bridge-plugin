@@ -1,4 +1,4 @@
-import type { ProjectSyncStatisticsSnapshot } from "@/project-sync";
+import type { ProjectCompletionEvent, ProjectSyncStatisticsSnapshot } from "@/project-sync";
 
 import type { TodoistListProjectOption } from "./types";
 
@@ -13,6 +13,7 @@ export type ProjectOverviewNode = {
   pathIds: string[];
   pathNames: string[];
   directCounts: ProjectOverviewCounts;
+  directCompletionEvents: ProjectCompletionEvent[];
   counts: ProjectOverviewCounts;
   children: ProjectOverviewNode[];
   taskCount: number;
@@ -27,6 +28,7 @@ export type ProjectOverviewModel = {
   projectOptions: TodoistListProjectOption[];
   roots: ProjectOverviewNode[];
   counts: ProjectOverviewCounts;
+  completionEvents: ProjectCompletionEvent[];
   taskCount: number;
   projectCount: number;
   completionRate: number | null;
@@ -43,6 +45,39 @@ type ScopeOverview = {
 };
 
 const emptyCounts = (): ProjectOverviewCounts => ({ active: 0, completed: 0 });
+
+const deduplicateCompletionEvents = (
+  events: readonly ProjectCompletionEvent[],
+): ProjectCompletionEvent[] => {
+  const result: ProjectCompletionEvent[] = [];
+  const seen = new Set<string>();
+  for (const event of events) {
+    if (seen.has(event.id)) {
+      continue;
+    }
+    seen.add(event.id);
+    result.push({ ...event });
+  }
+  return result;
+};
+
+const collectCompletionEvents = (
+  roots: readonly ProjectOverviewNode[],
+): ProjectCompletionEvent[] => {
+  const directEvents: ProjectCompletionEvent[] = [];
+  const visit = (node: ProjectOverviewNode): void => {
+    directEvents.push(...node.directCompletionEvents);
+    for (const child of node.children) {
+      visit(child);
+    }
+  };
+
+  for (const root of roots) {
+    visit(root);
+  }
+
+  return deduplicateCompletionEvents(directEvents);
+};
 
 const addCounts = (
   target: ProjectOverviewCounts,
@@ -71,7 +106,8 @@ const compareProjects = (left: StatisticsProject, right: StatisticsProject): num
 
 /**
  * Builds a presentation-only statistics tree from the last complete Project Sync snapshot.
- * The input remains untouched, and every returned count is cloned before aggregation.
+ * The input remains untouched, and returned counts and completion events are cloned before
+ * aggregation.
  */
 export const buildProjectOverviewModel = (
   snapshot: ProjectSyncStatisticsSnapshot | null,
@@ -101,6 +137,7 @@ export const buildProjectOverviewModel = (
     (result, project) => addCounts(result, project.counts),
     emptyCounts(),
   );
+  const completionEvents = collectCompletionEvents(roots);
   const totalTasks = taskCount(counts);
 
   return {
@@ -110,6 +147,7 @@ export const buildProjectOverviewModel = (
     projectOptions,
     roots,
     counts,
+    completionEvents,
     taskCount: totalTasks,
     projectCount: roots.reduce((total, project) => total + project.projectCount, 0),
     completionRate: completionRate(counts),
@@ -182,6 +220,7 @@ const buildScopeOverview = (scope: StatisticsScope): ScopeOverview | null => {
   const buildNode = (project: StatisticsProject): ProjectOverviewNode => {
     const path = resolvePath(project.id) ?? [project];
     const directCounts = { ...project.directCounts };
+    const directCompletionEvents = deduplicateCompletionEvents(project.directCompletionEvents);
     const children = (childrenByParentId.get(project.id) ?? []).map(buildNode);
     const counts = children.reduce((result, child) => addCounts(result, child.counts), {
       ...directCounts,
@@ -192,6 +231,7 @@ const buildScopeOverview = (scope: StatisticsScope): ScopeOverview | null => {
       pathIds: path.map(({ id }) => id),
       pathNames: path.map(({ name }) => name),
       directCounts,
+      directCompletionEvents,
       counts,
       children,
       taskCount: taskCount(counts),
@@ -287,6 +327,7 @@ const aggregateNode = (
   children: ProjectOverviewNode[],
 ): ProjectOverviewNode => {
   const directCounts = { ...source.directCounts };
+  const directCompletionEvents = deduplicateCompletionEvents(source.directCompletionEvents);
   const counts = children.reduce((result, child) => addCounts(result, child.counts), {
     ...directCounts,
   });
@@ -296,6 +337,7 @@ const aggregateNode = (
     pathIds: [...source.pathIds],
     pathNames: [...source.pathNames],
     directCounts,
+    directCompletionEvents,
     counts,
     children,
     taskCount: taskCount(counts),

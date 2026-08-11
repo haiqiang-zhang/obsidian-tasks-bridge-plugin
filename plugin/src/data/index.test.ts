@@ -54,7 +54,10 @@ const makeMockApi = (): TodoistApiClient => {
   return {
     getTasks: vi.fn().mockResolvedValue([]),
     getActiveTasksByProject: vi.fn().mockResolvedValue([]),
-    getCompletedTasksByProject: vi.fn().mockResolvedValue([]),
+    getCompletedTasksByProject: vi.fn().mockResolvedValue({
+      tasks: [],
+      completionEvents: [],
+    }),
     getCompletedTasksPage: vi.fn().mockResolvedValue({
       tasks: [],
       request: newestCompletedRequest,
@@ -120,20 +123,36 @@ describe("TodoistAdapter", () => {
           makeApiTask({ id: "transitioned", projectId: project.id, checked: false }),
         ];
       });
-      vi.mocked(mockApi.getCompletedTasksByProject).mockResolvedValue([
-        makeApiTask({
-          id: "transitioned",
-          projectId: project.id,
-          checked: true,
-          completedAt: "2026-08-10T04:30:00.000Z",
-        }),
-        makeApiTask({
-          id: "completed-only",
-          projectId: project.id,
-          checked: true,
-          completedAt: "2026-08-09T04:30:00.000Z",
-        }),
-      ]);
+      vi.mocked(mockApi.getCompletedTasksByProject).mockResolvedValue({
+        tasks: [
+          makeApiTask({
+            id: "transitioned",
+            projectId: project.id,
+            checked: true,
+            completedAt: "2026-08-10T04:30:00.000Z",
+          }),
+          makeApiTask({
+            id: "completed-only",
+            projectId: project.id,
+            checked: true,
+            completedAt: "2026-08-09T04:30:00.000Z",
+          }),
+        ],
+        completionEvents: [
+          {
+            id: "completion-transitioned",
+            taskId: "transitioned",
+            projectId: project.id,
+            completedAt: "2026-08-10T04:30:00.000Z",
+          },
+          {
+            id: "completion-completed-only",
+            taskId: "completed-only",
+            projectId: project.id,
+            completedAt: "2026-08-09T04:30:00.000Z",
+          },
+        ],
+      });
       try {
         await adapter.initialize(mockApi);
 
@@ -161,6 +180,20 @@ describe("TodoistAdapter", () => {
             }),
           ]),
         );
+        expect(snapshot.completionEvents).toEqual([
+          {
+            id: "completion-transitioned",
+            taskId: "transitioned",
+            projectId: project.id,
+            completedAt: "2026-08-10T04:30:00.000Z",
+          },
+          {
+            id: "completion-completed-only",
+            taskId: "completed-only",
+            projectId: project.id,
+            completedAt: "2026-08-09T04:30:00.000Z",
+          },
+        ]);
       } finally {
         vi.useRealTimers();
       }
@@ -172,14 +205,24 @@ describe("TodoistAdapter", () => {
       vi.mocked(mockApi.getActiveTasksByProject).mockResolvedValue([
         makeApiTask({ id: "reopened", projectId: project.id, checked: false }),
       ]);
-      vi.mocked(mockApi.getCompletedTasksByProject).mockResolvedValue([
-        makeApiTask({
-          id: "reopened",
-          projectId: project.id,
-          checked: false,
-          completedAt: null,
-        }),
-      ]);
+      vi.mocked(mockApi.getCompletedTasksByProject).mockResolvedValue({
+        tasks: [
+          makeApiTask({
+            id: "reopened",
+            projectId: project.id,
+            checked: false,
+            completedAt: null,
+          }),
+        ],
+        completionEvents: [
+          {
+            id: "completion-before-reopen",
+            taskId: "reopened",
+            projectId: project.id,
+            completedAt: "2026-08-09T04:30:00.000Z",
+          },
+        ],
+      });
       await adapter.initialize(mockApi);
 
       const snapshot = await adapter.getProjectTasks(project.id);
@@ -188,6 +231,14 @@ describe("TodoistAdapter", () => {
         expect.objectContaining({ id: "reopened", project, completedAt: null }),
       ]);
       expect(snapshot.completedTasks).toEqual([]);
+      expect(snapshot.completionEvents).toEqual([
+        {
+          id: "completion-before-reopen",
+          taskId: "reopened",
+          projectId: project.id,
+          completedAt: "2026-08-09T04:30:00.000Z",
+        },
+      ]);
     });
 
     it("rejects a project task snapshot if the Todoist account changes", async () => {
@@ -195,7 +246,7 @@ describe("TodoistAdapter", () => {
       vi.mocked(mockApi.sync).mockResolvedValue(makeSyncResponse({ projects: [project] }));
       vi.mocked(mockApi.getCompletedTasksByProject).mockImplementation(async () => {
         adapter.reset();
-        return [];
+        return { tasks: [], completionEvents: [] };
       });
       await adapter.initialize(mockApi);
 

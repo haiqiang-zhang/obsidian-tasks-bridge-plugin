@@ -11,6 +11,7 @@ import {
 import type { ProjectSyncStatisticsSnapshot, ProjectSyncStatus } from "@/project-sync";
 import { ObsidianIcon } from "@/ui/components/obsidian-icon";
 
+import type { CompletionHeatmapRange } from "./completionHeatmapModel";
 import { scopeTodoistListGroups } from "./model";
 import { ProjectOverview } from "./ProjectOverview";
 import { buildProjectOverviewModel } from "./projectOverviewModel";
@@ -42,7 +43,9 @@ export type TodoistListProps = {
   projectSyncConfigured: boolean;
   projectSyncStatus: ProjectSyncStatus;
   projectOverviewCollapsed: boolean;
+  completionHeatmapRange: CompletionHeatmapRange;
   onProjectOverviewCollapsedChange: (collapsed: boolean) => void;
+  onCompletionHeatmapRangeChange: (range: CompletionHeatmapRange) => void;
   onRootProjectChange: (projectId: string | null) => void;
 };
 
@@ -56,17 +59,21 @@ export const TodoistList: React.FC<TodoistListProps> = ({
   projectSyncConfigured,
   projectSyncStatus,
   projectOverviewCollapsed,
+  completionHeatmapRange,
   onProjectOverviewCollapsedChange,
+  onCompletionHeatmapRangeChange,
   onRootProjectChange,
 }) => {
   const listRef = useRef<HTMLDivElement>(null);
   const [selectedRoot, setSelectedRoot] = useState(rootProjectId);
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
   const [overviewCollapsed, setOverviewCollapsed] = useState(projectOverviewCollapsed);
+  const [heatmapRange, setHeatmapRange] = useState(completionHeatmapRange);
   const [ready, setReady] = useState(() => readReady(actions));
 
   useEffect(() => setSelectedRoot(rootProjectId), [rootProjectId]);
   useEffect(() => setOverviewCollapsed(projectOverviewCollapsed), [projectOverviewCollapsed]);
+  useEffect(() => setHeatmapRange(completionHeatmapRange), [completionHeatmapRange]);
   useEffect(() => {
     const refresh = () => setReady(readReady(actions));
     refresh();
@@ -116,6 +123,11 @@ export const TodoistList: React.FC<TodoistListProps> = ({
   const changeOverviewCollapsed = (nextCollapsed: boolean) => {
     setOverviewCollapsed(nextCollapsed);
     onProjectOverviewCollapsedChange(nextCollapsed);
+  };
+
+  const changeHeatmapRange = (nextRange: CompletionHeatmapRange) => {
+    setHeatmapRange(nextRange);
+    onCompletionHeatmapRangeChange(nextRange);
   };
 
   const toggleCollapsed = (key: string) => {
@@ -179,9 +191,11 @@ export const TodoistList: React.FC<TodoistListProps> = ({
 
       <ProjectOverview
         collapsed={overviewCollapsed}
+        completionHeatmapRange={heatmapRange}
         configured={projectSyncConfigured}
         model={projectOverviewModel}
         onCollapsedChange={changeOverviewCollapsed}
+        onCompletionHeatmapRangeChange={changeHeatmapRange}
         scopeLabel={projectOverviewScopeLabel}
         status={projectSyncStatus}
       />

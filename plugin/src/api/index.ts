@@ -7,6 +7,7 @@ import { syncResponseSchema } from "@/api/domain/sync";
 import type {
   CompletedTaskEntry,
   CreateTaskParams,
+  ProjectCompletionEvent,
   Task,
   TaskId,
   UpdateTaskParams,
@@ -31,6 +32,8 @@ const TODOIST_SERVICE_LAUNCH_AT = Date.parse("2007-01-01T00:00:00.000Z");
 
 export const COMPLETED_TASKS_WINDOW_MONTHS = 3;
 
+export type { ProjectCompletionEvent } from "@/api/domain/task";
+
 export type CompletedTasksPageRequest = {
   since: string;
   until: string;
@@ -44,13 +47,21 @@ export type CompletedTasksPage = {
   nextPage: CompletedTasksPageRequest | null;
 };
 
+export type CompletedProjectTasks = Readonly<{
+  tasks: readonly Task[];
+  completionEvents: readonly ProjectCompletionEvent[];
+}>;
+
 export class TodoistApiClient {
   private readonly token: string;
   private readonly fetcher: WebFetcher;
   private readonly taskQueriesInFlight = new Map<string, Promise<Task[]>>();
   private readonly completedTaskPagesInFlight = new Map<string, Promise<CompletedTasksPage>>();
   private readonly activeProjectTasksInFlight = new Map<ProjectId, Promise<Task[]>>();
-  private readonly completedProjectTasksInFlight = new Map<string, Promise<Task[]>>();
+  private readonly completedProjectTasksInFlight = new Map<
+    string,
+    Promise<CompletedProjectTasks>
+  >();
 
   constructor(token: string, fetcher: WebFetcher) {
     this.token = token;
@@ -97,7 +108,10 @@ export class TodoistApiClient {
     }
   }
 
-  public async getCompletedTasksByProject(projectId: ProjectId, until?: string): Promise<Task[]> {
+  public async getCompletedTasksByProject(
+    projectId: ProjectId,
+    until?: string,
+  ): Promise<CompletedProjectTasks> {
     const requestKey = JSON.stringify({ projectId, until: until ?? null });
     const existingRequest = this.completedProjectTasksInFlight.get(requestKey);
     if (existingRequest !== undefined) {
@@ -212,12 +226,12 @@ export class TodoistApiClient {
   private async fetchAllCompletedTasksByProject(
     projectId: ProjectId,
     until: string,
-  ): Promise<Task[]> {
+  ): Promise<CompletedProjectTasks> {
     const responseSchema = z.object({
       items: z.array(completedTaskEntrySchema),
     });
     const entriesByTaskId = new Map<TaskId, CompletedTaskEntry>();
-    const seenPages = new Set<string>();
+    const completionEventsById = new Map<string, ProjectCompletionEvent>();
     let offset = 0;
 
     while (true) {
@@ -231,16 +245,17 @@ export class TodoistApiClient {
         },
       });
       const page = parseApiResponse(responseSchema, response.body);
-      const pageSignature = page.items.map((entry) => entry.id).join("\u0000");
-
-      if (page.items.length === Number(PROJECT_TASKS_PAGE_LIMIT)) {
-        if (seenPages.has(pageSignature)) {
-          throw new Error("Todoist completed-task pagination returned a repeated page");
-        }
-        seenPages.add(pageSignature);
-      }
+      const eventCountBeforePage = completionEventsById.size;
 
       for (const entry of page.items) {
+        if (!completionEventsById.has(entry.id)) {
+          completionEventsById.set(entry.id, {
+            id: entry.id,
+            taskId: entry.taskId,
+            projectId: entry.projectId,
+            completedAt: entry.completedAt,
+          });
+        }
         const existingEntry = entriesByTaskId.get(entry.taskId);
         if (
           existingEntry === undefined ||
@@ -250,12 +265,22 @@ export class TodoistApiClient {
         }
       }
 
+      if (
+        page.items.length === Number(PROJECT_TASKS_PAGE_LIMIT) &&
+        completionEventsById.size === eventCountBeforePage
+      ) {
+        throw new Error("Todoist completed-task pagination returned a repeated page");
+      }
+
       if (page.items.length < Number(PROJECT_TASKS_PAGE_LIMIT)) {
-        return Array.from(entriesByTaskId.values(), (entry) => ({
-          ...entry.itemObject,
-          addedAt: entry.itemObject.addedAt ?? entry.completedAt,
-          completedAt: entry.itemObject.checked ? entry.completedAt : null,
-        }));
+        return {
+          tasks: Array.from(entriesByTaskId.values(), (entry) => ({
+            ...entry.itemObject,
+            addedAt: entry.itemObject.addedAt ?? entry.completedAt,
+            completedAt: entry.itemObject.checked ? entry.completedAt : null,
+          })),
+          completionEvents: [...completionEventsById.values()],
+        };
       }
 
       offset += page.items.length;

@@ -35,6 +35,7 @@ const makeNode = (
       active: active - childCounts.active,
       completed: completed - childCounts.completed,
     },
+    directCompletionEvents: [],
     counts: { active, completed },
     children,
     taskCount,
@@ -78,6 +79,7 @@ const makeModel = (overrides: Partial<ProjectOverviewModel> = {}): ProjectOvervi
     taskCount: 3,
     projectCount: 3,
     completionRate: 2 / 3,
+    completionEvents: [],
     ...overrides,
   };
 };
@@ -87,9 +89,11 @@ describe("ProjectOverview", () => {
     render(
       <ProjectOverview
         collapsed={false}
+        completionHeatmapRange="last-year"
         configured={true}
         model={makeModel()}
         onCollapsedChange={vi.fn()}
+        onCompletionHeatmapRangeChange={vi.fn()}
         scopeLabel="Root"
         status={idleStatus}
       />,
@@ -133,9 +137,11 @@ describe("ProjectOverview", () => {
     const { rerender } = render(
       <ProjectOverview
         collapsed={false}
+        completionHeatmapRange="last-year"
         configured={true}
         model={makeModel()}
         onCollapsedChange={onCollapsedChange}
+        onCompletionHeatmapRangeChange={vi.fn()}
         scopeLabel="Root"
         status={idleStatus}
       />,
@@ -149,9 +155,11 @@ describe("ProjectOverview", () => {
     rerender(
       <ProjectOverview
         collapsed={true}
+        completionHeatmapRange="last-year"
         configured={true}
         model={makeModel()}
         onCollapsedChange={onCollapsedChange}
+        onCompletionHeatmapRangeChange={vi.fn()}
         scopeLabel="Root"
         status={idleStatus}
       />,
@@ -165,9 +173,11 @@ describe("ProjectOverview", () => {
     render(
       <ProjectOverview
         collapsed={false}
+        completionHeatmapRange="last-year"
         configured={true}
         model={makeModel()}
         onCollapsedChange={vi.fn()}
+        onCompletionHeatmapRangeChange={vi.fn()}
         scopeLabel="Root"
         status={idleStatus}
       />,
@@ -206,9 +216,11 @@ describe("ProjectOverview", () => {
     render(
       <ProjectOverview
         collapsed={false}
+        completionHeatmapRange="last-year"
         configured={true}
         model={null}
         onCollapsedChange={vi.fn()}
+        onCompletionHeatmapRangeChange={vi.fn()}
         scopeLabel="All synchronized projects"
         status={idleStatus}
       />,
@@ -230,9 +242,11 @@ describe("ProjectOverview", () => {
     render(
       <ProjectOverview
         collapsed={false}
+        completionHeatmapRange="last-year"
         configured={false}
         model={null}
         onCollapsedChange={vi.fn()}
+        onCompletionHeatmapRangeChange={vi.fn()}
         scopeLabel="All synchronized projects"
         status={{ state: "disabled" }}
       />,
@@ -247,9 +261,11 @@ describe("ProjectOverview", () => {
     render(
       <ProjectOverview
         collapsed={false}
+        completionHeatmapRange="last-year"
         configured={true}
         model={null}
         onCollapsedChange={vi.fn()}
+        onCompletionHeatmapRangeChange={vi.fn()}
         scopeLabel="All synchronized projects"
         status={{ state: "disabled" }}
       />,
@@ -267,9 +283,11 @@ describe("ProjectOverview", () => {
     render(
       <ProjectOverview
         collapsed={false}
+        completionHeatmapRange="last-year"
         configured={true}
         model={null}
         onCollapsedChange={vi.fn()}
+        onCompletionHeatmapRangeChange={vi.fn()}
         scopeLabel="All synchronized projects"
         status={{
           state: "error",
@@ -289,6 +307,7 @@ describe("ProjectOverview", () => {
     render(
       <ProjectOverview
         collapsed={false}
+        completionHeatmapRange="last-year"
         configured={true}
         model={makeModel({
           rootProjectId: "removed-root",
@@ -301,6 +320,7 @@ describe("ProjectOverview", () => {
           completionRate: null,
         })}
         onCollapsedChange={vi.fn()}
+        onCompletionHeatmapRangeChange={vi.fn()}
         scopeLabel="Selected root project"
         status={idleStatus}
       />,
@@ -319,6 +339,7 @@ describe("ProjectOverview", () => {
     render(
       <ProjectOverview
         collapsed={false}
+        completionHeatmapRange="last-year"
         configured={true}
         model={makeModel({
           rootProjectId: "empty",
@@ -337,6 +358,7 @@ describe("ProjectOverview", () => {
           completionRate: null,
         })}
         onCollapsedChange={vi.fn()}
+        onCompletionHeatmapRangeChange={vi.fn()}
         scopeLabel="Empty project"
         status={idleStatus}
       />,

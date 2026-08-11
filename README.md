@@ -52,7 +52,7 @@ Compared with the upstream Todoist Sync codebase, this fork adds:
 - Time-zone-correct same-day due-date handling.
 - Optional completed-task display with complete cursor pagination and user-controlled three-month history expansion.
 - Independent multi-project sync with validated folder mappings, resumable root-folder moves, nested child-project folders, one Markdown file per task, complete active and completed history, and flat `todoist_*` properties for Obsidian Bases.
-- A native-styled **Tasks List** Base view with Project → Section → Task → Subtask hierarchy, arbitrary project roots, native filters/sorts/groups/property order, and controlled Todoist task actions.
+- A native-styled **Tasks List** Base view with Project → Section → Task → Subtask hierarchy, arbitrary project roots, a GitHub-style daily completion heatmap, native filters/sorts/groups/property order, and controlled Todoist task actions.
 - Symlink-safe production builds that preserve the plugin's existing `data.json`.
 
 ## Acknowledgements

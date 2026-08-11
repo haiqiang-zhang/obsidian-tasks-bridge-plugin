@@ -149,6 +149,7 @@ const makeProjectStatistics = (
   name,
   childOrder,
   directCounts: { active, completed },
+  directCompletionEvents: [],
 });
 
 const makeStatisticsSnapshot = (
@@ -186,8 +187,10 @@ const renderList = (
   ) => (
     <TodoistList
       actions={actions}
+      completionHeatmapRange="last-year"
       model={currentModel}
       navigation={navigation}
+      onCompletionHeatmapRangeChange={vi.fn()}
       onProjectOverviewCollapsedChange={onProjectOverviewCollapsedChange}
       onRootProjectChange={onRootProjectChange}
       options={{ density: "comfortable", showDescriptions: true, showSections: true }}

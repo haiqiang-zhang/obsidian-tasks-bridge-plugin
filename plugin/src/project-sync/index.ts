@@ -24,6 +24,7 @@ export {
 } from "./paths";
 export { ProjectFolderSyncService } from "./service";
 export type {
+  ProjectCompletionEvent,
   ProjectSyncConfig,
   ProjectSyncConflict,
   ProjectSyncMapping,

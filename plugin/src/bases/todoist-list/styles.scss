@@ -190,8 +190,16 @@
   display: grid;
   min-width: 0;
   padding: var(--size-4-5);
-  grid-template-columns: minmax(14rem, 0.72fr) minmax(20rem, 1.28fr);
+  grid-template-columns: minmax(30rem, 0.9fr) minmax(28rem, 1.1fr);
   gap: var(--size-4-5);
+}
+
+.todoist-bases-project-overview-summary-column {
+  display: grid;
+  min-width: 0;
+  align-self: start;
+  align-content: start;
+  gap: var(--size-4-4);
 }
 
 .todoist-bases-project-overview-summary-panel {
@@ -990,6 +998,19 @@
   }
 }
 
+@container todoist-bases-list (max-width: 1060px) {
+  .todoist-bases-project-overview-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .todoist-bases-project-overview-breakdown {
+    padding-block-start: var(--size-4-4);
+    padding-inline-start: 0;
+    border-block-start: 1px solid var(--background-modifier-border);
+    border-inline-start: 0;
+  }
+}
+
 @container todoist-bases-list (max-width: 760px) {
   .todoist-bases-list-toolbar {
     flex-wrap: wrap;
@@ -1023,16 +1044,6 @@
     padding-inline-start: calc(var(--size-4-6) + var(--size-4-2));
   }
 
-  .todoist-bases-project-overview-body {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .todoist-bases-project-overview-breakdown {
-    padding-block-start: var(--size-4-4);
-    padding-inline-start: 0;
-    border-block-start: 1px solid var(--background-modifier-border);
-    border-inline-start: 0;
-  }
 }
 
 @container todoist-bases-list (max-width: 460px) {

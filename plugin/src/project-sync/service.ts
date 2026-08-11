@@ -2,6 +2,7 @@ import type { Project } from "@/api/domain/project";
 
 import { selectProjectHierarchy } from "./hierarchy";
 import type {
+  ProjectCompletionEvent,
   ProjectSyncConfig,
   ProjectSyncMapping,
   ProjectSyncResult,
@@ -29,6 +30,12 @@ type PendingSnapshot = {
   rootProjectId: string;
   projects: Project[];
   tasks: SnapshotTask[];
+  completionEvents: ProjectCompletionEvent[];
+};
+
+type FetchedMappingTasks = {
+  tasks: SnapshotTask[];
+  completionEvents: ProjectCompletionEvent[];
 };
 
 export class ProjectFolderSyncService {
@@ -183,12 +190,13 @@ export class ProjectFolderSyncService {
       const pendingSnapshots: PendingSnapshot[] = [];
 
       for (const plan of plans) {
-        const tasks = await this.fetchMappingTasks(plan, generation);
+        const { tasks, completionEvents } = await this.fetchMappingTasks(plan, generation);
         pendingSnapshots.push({
           mapping: plan.mapping,
           rootProjectId: requireProject(plan.mapping).projectId,
           projects: plan.projects,
           tasks,
+          completionEvents,
         });
       }
 
@@ -199,10 +207,13 @@ export class ProjectFolderSyncService {
       // multi-project run into a partial write.
       this.vault.validateConfig(config);
       const syncedAt = new Date().toISOString();
-      const snapshots = pendingSnapshots.map(({ mapping, rootProjectId, projects, tasks }) => ({
-        mapping,
-        snapshot: { rootProjectId, projects, tasks, syncedAt } satisfies ProjectSyncSnapshot,
-      }));
+      const snapshots = pendingSnapshots.map(
+        ({ mapping, rootProjectId, projects, tasks, completionEvents }) => ({
+          mapping,
+          completionEvents,
+          snapshot: { rootProjectId, projects, tasks, syncedAt } satisfies ProjectSyncSnapshot,
+        }),
+      );
       const mappingRoots = snapshots.flatMap(({ mapping, snapshot }) => [
         {
           mappingId: mapping.id,
@@ -270,10 +281,14 @@ export class ProjectFolderSyncService {
     });
   }
 
-  private async fetchMappingTasks(plan: MappingPlan, generation: number): Promise<SnapshotTask[]> {
+  private async fetchMappingTasks(
+    plan: MappingPlan,
+    generation: number,
+  ): Promise<FetchedMappingTasks> {
     const selectedIds = new Set(plan.projects.map((project) => project.id));
     const activeById = new Map<string, SnapshotTask>();
     const completedById = new Map<string, SnapshotTask>();
+    const completionEventsById = new Map<string, ProjectCompletionEvent>();
 
     for (const project of plan.projects) {
       this.assertCurrent(generation);
@@ -288,6 +303,12 @@ export class ProjectFolderSyncService {
         this.assertTaskProject(task.project.id, project.id, selectedIds);
         completedById.set(task.id, { task, completed: true });
       }
+      for (const event of page.completionEvents) {
+        this.assertTaskProject(event.projectId, project.id, selectedIds);
+        if (!completionEventsById.has(event.id)) {
+          completionEventsById.set(event.id, { ...event });
+        }
+      }
     }
 
     const tasksById = new Map(completedById);
@@ -296,7 +317,7 @@ export class ProjectFolderSyncService {
     }
     const tasks = [...tasksById.values()];
     tasks.sort((left, right) => left.task.id.localeCompare(right.task.id));
-    return tasks;
+    return { tasks, completionEvents: [...completionEventsById.values()] };
   }
 
   private assertCurrent(generation: number): void {
@@ -361,13 +382,17 @@ const makeStatisticsSnapshot = (
   snapshots: readonly {
     mapping: ProjectSyncMapping;
     snapshot: ProjectSyncSnapshot;
+    completionEvents: readonly ProjectCompletionEvent[];
   }[],
   syncedAt: string,
 ): ProjectSyncStatisticsSnapshot => ({
   syncedAt,
-  scopes: snapshots.map(({ mapping, snapshot }) => {
+  scopes: snapshots.map(({ mapping, snapshot, completionEvents }) => {
     const directCounts = new Map<string, { active: number; completed: number }>(
       snapshot.projects.map((project) => [project.id, { active: 0, completed: 0 }]),
+    );
+    const directCompletionEvents = new Map<string, ProjectCompletionEvent[]>(
+      snapshot.projects.map((project) => [project.id, []]),
     );
 
     for (const snapshotTask of snapshot.tasks) {
@@ -384,6 +409,16 @@ const makeStatisticsSnapshot = (
       }
     }
 
+    for (const event of completionEvents) {
+      const events = directCompletionEvents.get(event.projectId);
+      if (events === undefined) {
+        throw new Error(
+          `Todoist completion event '${event.id}' belongs to a project outside its statistics scope`,
+        );
+      }
+      events.push({ ...event });
+    }
+
     return {
       mappingId: mapping.id,
       rootProjectId: snapshot.rootProjectId,
@@ -393,12 +428,17 @@ const makeStatisticsSnapshot = (
         if (counts === undefined) {
           throw new Error(`Todoist project '${project.id}' is missing from its statistics scope`);
         }
+        const completionEvents = directCompletionEvents.get(project.id);
+        if (completionEvents === undefined) {
+          throw new Error(`Todoist project '${project.id}' is missing completion activity`);
+        }
         return {
           id: project.id,
           parentId: project.parentId,
           name: project.name,
           childOrder: project.childOrder,
           directCounts: { active: counts.active, completed: counts.completed },
+          directCompletionEvents: completionEvents.map((event) => ({ ...event })),
         };
       }),
     };

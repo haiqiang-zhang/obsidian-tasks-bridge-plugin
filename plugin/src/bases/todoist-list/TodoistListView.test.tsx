@@ -104,7 +104,10 @@ const observableProjectStatistics = (
   };
 };
 
-const makeController = (projectOverviewCollapsed = false) => {
+const makeController = (
+  projectOverviewCollapsed = false,
+  completionHeatmapRange: unknown = "last-3-months",
+) => {
   const groupedData = [{ entries: [], hasKey: () => false }];
   const config = {
     get: vi.fn((key: string) => {
@@ -116,6 +119,9 @@ const makeController = (projectOverviewCollapsed = false) => {
       }
       if (key === "tasksProjectOverviewCollapsed") {
         return projectOverviewCollapsed;
+      }
+      if (key === "tasksCompletionHeatmapRange") {
+        return completionHeatmapRange;
       }
       return undefined;
     }),
@@ -182,6 +188,7 @@ describe("TasksListView", () => {
       showSections: true,
     });
     expect(element.props.projectOverviewCollapsed).toBe(true);
+    expect(element.props.completionHeatmapRange).toBe("last-3-months");
     expect(element.props.projectSyncConfigured).toBe(true);
     expect(element.props.projectSyncStatus).toEqual({ state: "idle" });
 
@@ -189,6 +196,8 @@ describe("TasksListView", () => {
     expect(config.set).toHaveBeenCalledWith("todoistRootProjectId", "child-project");
     element.props.onProjectOverviewCollapsedChange(true);
     expect(config.set).toHaveBeenCalledWith("tasksProjectOverviewCollapsed", true);
+    element.props.onCompletionHeatmapRangeChange("year:2025");
+    expect(config.set).toHaveBeenCalledWith("tasksCompletionHeatmapRange", "year:2025");
 
     element.props.navigation.openFile("Todoist/task.md", true);
     expect(workspace.openLinkText).toHaveBeenCalledWith("Todoist/task.md", "", true);
@@ -271,6 +280,22 @@ describe("TasksListView", () => {
     await Promise.resolve();
 
     expect(runtime.render).toHaveBeenCalledTimes(2);
+  });
+
+  it("falls back to Last year when the persisted heatmap range is invalid", async () => {
+    const { controller } = makeController(false, "unsupported-range");
+    const parentEl = document.createElement("div");
+    const view = createTasksListViewRegistration(actions(), projectStatistics()).factory(
+      controller,
+      parentEl,
+    ) as TasksListView;
+
+    view.onDataUpdated();
+    await Promise.resolve();
+
+    const element = runtime.render.mock.calls[0]?.[0] as ReactElement<TodoistListProps>;
+    expect(element.props.completionHeatmapRange).toBe("last-year");
+    view.onunload();
   });
 
   it("coalesces pending updates and skips a queued render after unload", async () => {
