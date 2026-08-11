@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v2.8.1 (2026-08-11)
+
 ### 🐛 Fixes
 
 - Realigned the Project overview header with the native Obsidian Bases layout, including vertically centered controls, balanced left and right metadata, and responsive narrow-width alignment.
