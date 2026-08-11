@@ -32,7 +32,8 @@ Task filenames use the sanitized Todoist task title. When tasks in the same fold
 6. Enable **Include child projects** if you want to reproduce the complete descendant hierarchy below that folder.
 7. Add more mappings for any other independent Todoist project trees.
 8. Enable **Project sync**.
-9. Select **Sync now** to create the initial projections immediately.
+9. Under **Automatic Project sync device**, select **Use this device** on exactly one device.
+10. Select **Sync now** to create the initial projections immediately.
 
 The settings validate every mapping inline. A mapping is rejected if it is incomplete, refers to a missing Vault folder or unavailable Todoist project, duplicates another Todoist project, overlaps another mapped Vault folder, or selects a project already covered by another mapping's included child hierarchy. Folder overlap checks are case-insensitive and cover equal, parent, and descendant paths.
 
@@ -84,6 +85,7 @@ The synchronized files remain a one-way projection. Changes made to plugin-manag
 | `todoist_labels` | List of Todoist label names |
 | `todoist_priority` | Todoist priority from `P1` to `P4` |
 | `todoist_created_at` | Task creation date and time |
+| `todoist_updated_at` | Todoist's source revision time when the API provides it |
 | `todoist_completed_at` | Completion date and time |
 | `todoist_due_date` | Due date |
 | `todoist_due_datetime` | Due date and time when the task has a scheduled time |
@@ -178,7 +180,7 @@ Because filtering happens before the hierarchy is rebuilt, a filtered-out parent
 
 ### Open, complete, reopen, and edit tasks
 
-Select a task title to open its Markdown note. Task actions operate on Todoist first and then run Project sync so the managed note reflects the server result:
+Select a task title to open its Markdown note. Task actions always operate on Todoist first. If the current device is the selected writer and the Vault is quiet, Tasks Bridge then projects the result immediately. Other devices leave the synchronized Markdown note to the writer's next automatic interval or a later manual sync:
 
 - **Complete** completes an active task in Todoist.
 - **Reopen** reopens a completed task in Todoist.
@@ -186,20 +188,29 @@ Select a task title to open its Markdown note. Task actions operate on Todoist f
 
 The project and section are shown as context in the editor but cannot be moved by this first Tasks List view. Recurring due rules are kept unchanged unless you explicitly replace the due date. A completed task must be reopened before it can be edited. Stale and out-of-scope tasks remain read-only until a later synchronization restores an actionable status; actions are also unavailable while Todoist is not ready.
 
-Do not edit plugin-managed `todoist_*` fields as a substitute for these actions. Project sync remains the authoritative projection writer and replaces local changes to managed fields during synchronization. If Todoist accepts an action but the immediate Vault refresh fails, the remote change is still saved. Do not repeat the remote action in response to that warning; use **Sync Todoist projects** to refresh its note later.
+Do not edit plugin-managed `todoist_*` fields as a substitute for these actions. Project sync remains the authoritative projection writer and replaces local changes to managed fields during synchronization. If Todoist accepts an action but immediate projection is skipped, deferred, or fails, the remote change is still saved. Do not repeat the remote action; use **Sync Todoist projects** to refresh its note later.
 
 ## Synchronization timing
 
-When project sync is enabled and every mapping is valid, all mappings synchronize once after Todoist data becomes available at startup. This startup synchronization does not depend on the global **Auto-refresh** setting.
+Tasks Bridge never writes Project sync Markdown files immediately at startup. Obsidian does not expose a public API that reports when Obsidian Sync has completely finished downloading a Vault, so startup projection could otherwise race a remote copy of the same note.
 
-Periodic Project sync requires both **Enable project sync** and global **Auto-refresh** to be enabled. It uses the shared **Auto-refresh interval** from the plugin settings.
+Automatic Project sync requires all of the following:
+
+- **Enable project sync** is enabled and every mapping is valid;
+- global **Auto-refresh** is enabled;
+- exactly one device is selected under **Automatic Project sync device**; and
+- the mapped folders have been quiet for at least 30 seconds after startup, a mapping or writer change, or a relevant Vault create, modify, rename, or delete event.
+
+Each device generates its identity in vault-specific local storage, and the selected writer ID is copied into plugin settings. The assignment reaches other devices only when Obsidian Sync's **Vault configuration sync** includes the community plugin and therefore synchronizes the plugin `data.json`; enable **Active community plugin list** and **Installed community plugin list** on every device. Otherwise, you must manually ensure that exactly one device is selected. A device never claims ownership automatically. If you select **Use this device instead**, the new device waits for the quiet period, and updated devices stop automatic projection as soon as they receive the setting through Obsidian Sync. This is a conservative single-writer protocol, not a network lock: an offline old writer cannot see the transfer until it reconnects. Update or disable older Tasks Bridge versions on every synced device before assigning a writer.
+
+If a relevant Vault event arrives after an automatic run has started, Tasks Bridge invalidates that run and waits for another complete 30-second quiet period. Exact path scopes distinguish the plugin's own atomic mutations from unrelated user or Obsidian Sync activity, so a run neither cancels itself nor ignores changes elsewhere in a mapped tree.
 
 You can start it manually at any time with either:
 
 - **Settings → Tasks Bridge → Project sync → Sync now**; or
 - the **Sync Todoist projects** command.
 
-Manual synchronization does not depend on global **Auto-refresh**.
+Manual synchronization does not depend on global **Auto-refresh** or the automatic writer assignment. Wait for Obsidian Sync to finish before using it, and do not run it on multiple devices at the same time.
 
 Overlapping requests are combined, so repeatedly starting a sync does not create concurrent writers. Todoist data is fetched before any mapping is reconciled with the Vault, so a failed or incomplete fetch cannot apply a partial multi-project snapshot.
 
@@ -210,12 +221,16 @@ Each mapped Vault folder is an independent projection boundary, but the plugin d
 - Only notes carrying the plugin's ownership properties are updated or moved. Unrelated notes are never adopted, including when a managed task transfers between configured mappings.
 - An unrelated file at a required path is reported as a conflict and is never overwritten.
 - User-authored body text outside the managed comments and non-managed frontmatter properties are retained.
+- Managed frontmatter and the managed body are revalidated against the live file and written together with one atomic `Vault.process()` operation. If Obsidian Sync changes the note's task, mapping, root, project, or newer Todoist revision between scan and write, the older projection is rejected instead of overwriting it.
+- File creation and rename destinations are checked again immediately before the operation. A path that appears during synchronization becomes a reported conflict and is never overwritten.
+- A damaged or structurally unreadable likely-managed YAML document fences new file creation for that mapping during the run, preventing an unsafe `Task (2).md` replacement.
+- If a live note has `todoist_updated_at` but Todoist returns a revisionless snapshot, semantic changes are blocked. Missing-task bookkeeping also compares the live source and sync revisions inside the atomic write, so an older empty snapshot cannot mark a newer note as missing.
 - A failed or incomplete Todoist fetch is not applied as a successful snapshot.
 - A task missing from one complete successful snapshot is retained with `todoist_sync_missing_count: 1`. If it is absent from the next complete snapshot as well, its status becomes `stale` and `todoist_stale_since` is recorded. Stale notes are never automatically trashed or deleted.
 - If a stale task reappears, its current Todoist data is restored, the missing count returns to zero, and `todoist_stale_since` is removed.
 - If **Include child projects** is turned off, previously synchronized descendant tasks are retained and marked `out_of_scope`. They are not deleted. Re-enabling descendants restores their current Todoist state on the next sync.
 - If a task moves from one currently configured project mapping to another, its existing managed note is moved to the destination mapping so user-authored content is retained and a duplicate note is not created.
-- If you change a mapping's **Vault folder**, the plugin remembers every previous projection root and moves its managed notes into the new root. Interrupted or deferred moves resume on a later sync; previous roots are forgotten only after every registered root is available and no owned notes remain there. A pending move is shown in that mapping's Settings card.
+- If you change a mapping's **Vault folder**, the plugin remembers every previous projection root and moves its managed notes into the new root. Interrupted or deferred moves resume on a later sync. Historical roots remain registered so a note delivered late by Obsidian Sync can still be recognized and moved instead of becoming an orphan or duplicate; the mapping's Settings card lists these monitored roots.
 - A managed task note that is open in any editor, including a split or pop-out window, is never rewritten in the background. If it needs changes, that note is reported as deferred and retried by a later sync after it has been closed.
 - If the managed-body comments were removed, the plugin adds a fresh managed section without discarding the existing body. Duplicated or malformed comments are reported as a conflict, and no body text is replaced.
 - Removing a mapping or disabling project sync does not silently delete its previous projection.

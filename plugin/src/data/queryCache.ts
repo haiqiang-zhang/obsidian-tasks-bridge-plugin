@@ -21,6 +21,10 @@ const TODOIST_SERVICE_LAUNCH_AT = "2007-01-01T00:00:00.000Z";
 const cachedTaskSchema = z.object({
   id: taskIdSchema,
   createdAt: z.string(),
+  updatedAt: z
+    .string()
+    .refine((value) => !Number.isNaN(Date.parse(value)))
+    .optional(),
   completedAt: z.string().nullable().optional(),
   content: z.string(),
   description: z.string(),

@@ -5,7 +5,10 @@ import type TodoistPlugin from "@/index";
 import { ObsidianProjectSyncVault, ProjectFolderSyncService } from "@/project-sync";
 import { ModalHandler } from "@/services/modals";
 import { TodoistProjectSyncSource } from "@/services/projectSyncSource";
-import { ProjectTaskCommandService } from "@/services/projectTaskCommands";
+import {
+  ProjectTaskCommandService,
+  type ProjectTaskProjectionCoordinator,
+} from "@/services/projectTaskCommands";
 import { VaultTokenAccessor } from "@/services/tokenAccessor";
 import { useSettingsStore } from "@/settings";
 
@@ -26,20 +29,31 @@ export const makeServices = (plugin: TodoistPlugin): Services => {
   const settings = useSettingsStore.getState();
   const projectSync = new ProjectFolderSyncService(
     new TodoistProjectSyncSource(todoist),
-    new ObsidianProjectSyncVault(plugin.app.vault, plugin.app.fileManager, () => {
-      const paths = new Set<string>();
-      plugin.app.workspace.iterateAllLeaves((leaf) => {
-        if (leaf.view instanceof MarkdownView && leaf.view.file !== null) {
-          paths.add(leaf.view.file.path);
-        }
-      });
-      return paths;
-    }),
+    new ObsidianProjectSyncVault(
+      plugin.app.vault,
+      plugin.app.fileManager,
+      () => {
+        const paths = new Set<string>();
+        plugin.app.workspace.iterateAllLeaves((leaf) => {
+          if (leaf.view instanceof MarkdownView && leaf.view.file !== null) {
+            paths.add(leaf.view.file.path);
+          }
+        });
+        return paths;
+      },
+      async (affectedPaths, operation) =>
+        await plugin.runProjectSyncVaultMutation(affectedPaths, operation),
+    ),
     {
       enabled: settings.projectSyncEnabled,
       mappings: settings.projectSyncMappings,
     },
   );
+  const projectTaskProjectionCoordinator: ProjectTaskProjectionCoordinator = {
+    runAutomaticProjection: (operation) => plugin.runAutomaticProjectProjection(operation),
+    runInternalMutation: async (affectedPaths, operation) =>
+      await plugin.runProjectSyncVaultMutation(affectedPaths, operation),
+  };
 
   return {
     modals: new ModalHandler(plugin),
@@ -52,6 +66,7 @@ export const makeServices = (plugin: TodoistPlugin): Services => {
       plugin.app.metadataCache,
       todoist,
       projectSync,
+      projectTaskProjectionCoordinator,
     ),
   };
 };

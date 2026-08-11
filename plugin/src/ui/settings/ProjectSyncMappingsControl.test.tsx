@@ -221,9 +221,11 @@ describe("ProjectSyncMappingsControl", () => {
 
     renderControl([pending]);
 
-    expect(screen.getByText("Pending folder move")).toBeInTheDocument();
+    expect(screen.getByText("Historical Sync roots")).toBeInTheDocument();
     expect(
-      screen.getByText("Waiting to migrate managed notes from: Todoist/Old Work"),
+      screen.getByText(
+        "Monitoring for late Obsidian Sync files and migrating managed notes from: Todoist/Old Work",
+      ),
     ).toBeInTheDocument();
   });
 

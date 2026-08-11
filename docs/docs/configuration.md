@@ -23,7 +23,7 @@ Project sync is an independent, one-way Todoist-to-Vault projection. You can con
 
 ### Enable project sync
 
-Enables synchronization for every valid project mapping. An enabled configuration synchronizes once at startup, can be synchronized manually at any time, and participates in periodic synchronization when the global **Auto-refresh** setting is also enabled. Disabling the mode stops synchronization and leaves existing Markdown files in place.
+Enables synchronization for every valid project mapping. An enabled configuration can be synchronized manually at any time and participates in periodic synchronization when global **Auto-refresh** is enabled and this device is the selected automatic writer. Tasks Bridge does not write Project sync notes immediately at startup. Disabling the mode stops synchronization and leaves existing Markdown files in place.
 
 ### Project mappings
 
@@ -63,6 +63,26 @@ Runs every project mapping immediately. The button is available only after proje
 
 Project mode retrieves the full completed-task history available from Todoist's project endpoint. It does not use the progressive **Load earlier** controls from query blocks. Query-block filters, caching, and rendering settings remain independent of these mappings.
 
+### Automatic Project sync device
+
+Select exactly one device to write Project sync Markdown files automatically. Each device generates an identifier in Obsidian's vault-specific local storage. Only the identifier selected as the writer is copied into plugin `data.json`.
+
+Obsidian Sync propagates this assignment only when **Vault configuration sync** includes Tasks Bridge's community-plugin data, so the plugin `data.json` reaches every device. In **Settings → Sync**, enable **Active community plugin list** and **Installed community plugin list** on every device. If you do not sync the plugin data, each device keeps an independent assignment; manually ensure that only one device is selected as the writer.
+
+- **Use this device** assigns an unowned Vault to the current device.
+- **Use this device instead** explicitly transfers automatic projection from another device.
+- **Stop using this device** leaves automatic projection unassigned.
+
+On devices running this version, the single-writer design prevents multiple devices from automatically editing the same Markdown projection through Obsidian Sync. Manual **Sync now** remains available on every device, so wait for Obsidian Sync to finish and never run manual Project sync concurrently on multiple devices.
+
+Editing, completing, or reopening a task from a non-writer device still updates Todoist. That device does not directly rewrite the synchronized Markdown projection. The selected writer updates it on the next automatic interval after Obsidian Sync activity settles, or you can run a manual sync when Auto-refresh is disabled.
+
+:::warning Upgrade every synced device
+
+Before assigning a writer, update Tasks Bridge on every device that uses the same synced Vault, or disable the older plugin there. A pre-fix version does not understand the writer assignment, may still place its query cache in synchronized `data.json`, and may continue automatic Markdown projection. Also include Tasks Bridge plugin data in **Vault configuration sync** if you want the assignment to propagate automatically.
+
+:::
+
 ## Auto-refresh
 
 ### Auto-refresh enabled
@@ -70,13 +90,15 @@ Project mode retrieves the full completed-task history available from Todoist's 
 When enabled, periodic refreshes apply to both synchronization modes:
 
 - query blocks that do not define their own `autorefresh` value; and
-- Project sync when **Enable project sync** is also enabled and every mapping is valid.
+- Project sync when **Enable project sync** is also enabled, every mapping is valid, and this device is the selected automatic writer.
 
-Project sync at startup and manual synchronization through **Sync now** or the **Sync Todoist projects** command remain available when global auto-refresh is disabled.
+Manual synchronization through **Sync now** or the **Sync Todoist projects** command remains available when global auto-refresh is disabled.
 
 ### Auto-refresh interval
 
-This defines the shared interval, in seconds, for automatic query-block and Project sync refreshes. A query block can define an explicit [`autorefresh`](./query-blocks#autorefresh) value, which overrides the shared interval for that block only. Project sync always uses the shared interval.
+This defines the shared interval, in seconds, for automatic query-block refreshes and Project sync on the selected writer device. A query block can define an explicit [`autorefresh`](./query-blocks#autorefresh) value, which overrides the shared interval for that block only. Project sync always uses the shared interval.
+
+Query cache entries are stored in Obsidian's vault-specific, device-local storage. They are not written to the synchronized plugin `data.json`, so background query refreshes cannot overwrite settings received from another device. Tasks Bridge also implements Obsidian's external-settings callback so synchronized setting changes take effect without reloading the plugin.
 
 ## Rendering
 

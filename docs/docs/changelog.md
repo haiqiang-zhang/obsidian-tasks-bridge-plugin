@@ -12,6 +12,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### 🐛 Fixes
+
+- Prevented Auto-refresh from creating Obsidian Sync conflicts between updated devices: query caches now stay in vault-specific device-local storage, synchronized settings hot-reload through `onExternalSettingsChange()`, and default query blocks are no longer refreshed by two independent timers.
+- Made Project sync projection updates atomic and revision-aware, with live identity validation, in-flight Vault activity fencing, and safe create/rename race handling instead of overwriting files changed by Sync.
+- Prevented stale mutation refreshes, malformed managed YAML, revisionless snapshots, and stale missing-task snapshots from restoring or duplicating older task state.
+
+### 🔁 Changes
+
+- Automatic Project sync now requires one explicitly selected writer device, waits for mapped folders to be quiet after startup or Vault activity, and never writes projection files immediately at startup. Project task actions on other devices update Todoist without writing the synchronized Markdown projection. Historical projection roots remain monitored for files delivered late by Obsidian Sync. Manual Project sync remains available on every device; every synced device must be updated or have the older plugin disabled before relying on the writer protocol. Obsidian Sync's **Vault configuration sync** must include Tasks Bridge plugin data to propagate the assignment through `data.json`; otherwise users must manually keep the writer assignment exclusive to one device.
+
 ## v2.8.1 (2026-08-11)
 
 ### 🐛 Fixes

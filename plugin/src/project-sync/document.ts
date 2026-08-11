@@ -29,6 +29,7 @@ export const MANAGED_FRONTMATTER_KEYS = [
   "todoist_labels",
   "todoist_priority",
   "todoist_created_at",
+  "todoist_updated_at",
   "todoist_completed_at",
   "todoist_due_date",
   "todoist_due_datetime",
@@ -90,6 +91,10 @@ export const makeTaskFrontmatter = (
 
   if (mappingId !== undefined) {
     frontmatter.todoist_sync_mapping_id = mappingId;
+  }
+
+  if (task.updatedAt !== undefined) {
+    frontmatter.todoist_updated_at = task.updatedAt;
   }
 
   if (task.parentId !== undefined) {
@@ -212,6 +217,35 @@ export const renderNewTaskDocument = (
 ): string => {
   const yaml = dumpYaml(frontmatter, { lineWidth: -1, noRefs: true });
   return `---\n${yaml}---\n${managedBody}\n`;
+};
+
+/**
+ * Rebuild the managed portions of an existing task note as one document value.
+ *
+ * Callers are responsible for parsing and validating the live frontmatter immediately before
+ * invoking this helper. Keeping the frontmatter and managed body in one returned value lets the
+ * Vault adapter persist both changes with a single atomic `Vault.process()` operation while the
+ * user-owned portion of the note remains untouched.
+ */
+export const replaceManagedTaskDocument = (
+  content: string,
+  currentFrontmatter: ManagedFrontmatter,
+  desiredFrontmatter: ManagedFrontmatter,
+  managedBody: string,
+  contentStart: number,
+): { content: string; changed: boolean } => {
+  const bodyUpdate = replaceManagedBody(content, managedBody, contentStart);
+  const nextFrontmatter = { ...currentFrontmatter };
+  const frontmatterChanged = applyManagedFrontmatter(nextFrontmatter, desiredFrontmatter);
+  if (!frontmatterChanged && !bodyUpdate.changed) {
+    return { content, changed: false };
+  }
+
+  const yaml = dumpYaml(nextFrontmatter, { lineWidth: -1, noRefs: true });
+  return {
+    content: `---\n${yaml}---${bodyUpdate.content.slice(contentStart)}`,
+    changed: true,
+  };
 };
 
 export const readManagedNoteIdentity = (

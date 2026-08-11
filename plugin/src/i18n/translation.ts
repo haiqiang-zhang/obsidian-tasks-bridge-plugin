@@ -2,6 +2,7 @@ export type Translations = {
   notices: {
     migrationFailed: string;
     projectSyncDisabled: string;
+    projectSyncInterrupted: string;
     projectSyncComplete: (
       created: number,
       updated: number,
@@ -79,6 +80,16 @@ export type Translations = {
       includeSubprojects: {
         label: string;
         description: string;
+      };
+      automaticWriter: {
+        label: string;
+        description: string;
+        statusThisDevice: string;
+        statusAnotherDevice: string;
+        statusUnassigned: string;
+        useThisDevice: string;
+        takeOver: string;
+        stopUsingThisDevice: string;
       };
       validation: {
         projectRequired: string;

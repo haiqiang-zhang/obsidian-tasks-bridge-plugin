@@ -2,22 +2,27 @@ import type { App, PluginManifest } from "obsidian";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { TodoistListActions, TodoistListTaskRecord } from "@/bases/todoist-list";
+import { makeSettings } from "@/factories/settings";
 import type { ProjectSyncResult } from "@/project-sync";
 import { ProjectTaskProjectionError } from "@/services/projectTaskCommands";
 
 const runtime = vi.hoisted(() => ({
   addSettingTab: vi.fn(),
   loadData: vi.fn(),
+  loadLocalStorage: vi.fn(),
   makeServices: vi.fn(),
   notices: [] as unknown[],
   registerCommands: vi.fn(),
   registerBasesView: vi.fn(),
+  registerEvent: vi.fn(),
   registerInterval: vi.fn(),
   registerMarkdownCodeBlockProcessor: vi.fn(),
   saveData: vi.fn(),
+  saveLocalStorage: vi.fn(),
   settings: {
     current: {} as Record<string, unknown>,
   },
+  vaultOn: vi.fn(),
 }));
 
 vi.mock("obsidian", () => ({
@@ -45,6 +50,10 @@ vi.mock("obsidian", () => ({
 
     public registerInterval(id: number): void {
       runtime.registerInterval(id);
+    }
+
+    public registerEvent(eventRef: unknown): void {
+      runtime.registerEvent(eventRef);
     }
 
     public registerBasesView(id: string, registration: unknown): void {
@@ -118,6 +127,7 @@ vi.mock("@/i18n", () => ({
         conflicts: number,
       ) => `Project sync complete: ${created}/${updated}/${moved}/${stale}/${conflicts}`,
       projectSyncDisabled: "Project sync is disabled",
+      projectSyncInterrupted: "Project sync was interrupted",
       projectSyncFailed: (message: string) => `Project sync failed: ${message}`,
     },
   }),
@@ -175,11 +185,16 @@ type LifecycleInternals = {
   runScheduledSync(): Promise<void>;
 };
 
+type VaultActivityListener = (file: { path: string }, oldPath?: string) => void;
+
 const defaultSettings = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
+  apiTokenSecretId: "swt-todoist-api-token",
   autoRefreshInterval: 60,
   autoRefreshToggle: false,
   projectSyncEnabled: false,
   projectSyncMappings: [],
+  projectSyncWriterId: null,
+  tokenStorage: "secrets",
   version: 1,
   ...overrides,
 });
@@ -249,6 +264,11 @@ const deferred = <T>(): Deferred<T> => {
 const makePlugin = (services: TestServices, onLayoutReady = vi.fn()) => {
   runtime.makeServices.mockReturnValue(services);
   const app = {
+    loadLocalStorage: runtime.loadLocalStorage,
+    saveLocalStorage: runtime.saveLocalStorage,
+    vault: {
+      on: runtime.vaultOn,
+    },
     workspace: {
       onLayoutReady,
     },
@@ -260,12 +280,24 @@ const makePlugin = (services: TestServices, onLayoutReady = vi.fn()) => {
 const internals = (plugin: TodoistPlugin): LifecycleInternals =>
   plugin as unknown as LifecycleInternals;
 
+const vaultActivityListener = (eventName: string): VaultActivityListener => {
+  const registration = runtime.vaultOn.mock.calls.find(([event]) => event === eventName);
+  if (registration === undefined) {
+    throw new Error(`Vault listener '${eventName}' was not registered`);
+  }
+  return registration[1] as VaultActivityListener;
+};
+
 describe("TodoistPlugin async lifecycle", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     runtime.notices.length = 0;
     runtime.settings.current = defaultSettings();
     runtime.loadData.mockResolvedValue(defaultSettings());
+    runtime.loadLocalStorage.mockImplementation((key: string) =>
+      key === "tasks-bridge:device-id:v1" ? "device-a" : null,
+    );
+    runtime.vaultOn.mockReturnValue({});
     runtime.saveData.mockResolvedValue(undefined);
     vi.stubGlobal("crypto", {
       subtle: {
@@ -426,6 +458,330 @@ describe("TodoistPlugin async lifecycle", () => {
     expect(lastSave).not.toHaveProperty("removedLegacyOption");
   });
 
+  it("migrates the legacy synchronized query cache into vault-local storage", async () => {
+    const services = makeServices();
+    const legacyQueryCache = {
+      version: 2,
+      credentialFingerprint: "credential-a",
+      entries: { '{"filter":"today"}': { tasks: [], updatedAt: "2026-08-11T10:00:00.000Z" } },
+    };
+    runtime.loadData.mockResolvedValueOnce({
+      ...defaultSettings(),
+      queryCache: legacyQueryCache,
+    });
+    const plugin = makePlugin(services);
+
+    await plugin.loadOptions();
+
+    expect(runtime.loadLocalStorage).toHaveBeenCalledWith("tasks-bridge:query-cache:v2");
+    expect(plugin.queryCache.load).toHaveBeenCalledWith(legacyQueryCache);
+    expect(runtime.saveLocalStorage).toHaveBeenCalledWith("tasks-bridge:query-cache:v2", {});
+    const lastSave = runtime.saveData.mock.calls[runtime.saveData.mock.calls.length - 1]?.[0];
+    expect(lastSave).not.toHaveProperty("queryCache");
+  });
+
+  it("does not rewrite an already canonical settings file during startup", async () => {
+    const services = makeServices();
+    runtime.loadData.mockResolvedValueOnce(makeSettings());
+    const plugin = makePlugin(services);
+
+    await plugin.loadOptions();
+
+    expect(runtime.saveData).not.toHaveBeenCalled();
+  });
+
+  it("prefers the device-local query cache over a legacy cache received through Sync", async () => {
+    const services = makeServices();
+    const localQueryCache = { version: 2, credentialFingerprint: "local", entries: {} };
+    const syncedQueryCache = { version: 2, credentialFingerprint: "synced", entries: {} };
+    runtime.loadLocalStorage.mockReturnValueOnce(localQueryCache);
+    runtime.loadData.mockResolvedValueOnce({
+      ...defaultSettings(),
+      queryCache: syncedQueryCache,
+    });
+    const plugin = makePlugin(services);
+
+    await plugin.loadOptions();
+
+    expect(plugin.queryCache.load).toHaveBeenCalledWith(localQueryCache);
+    expect(runtime.saveLocalStorage).not.toHaveBeenCalled();
+    const lastSave = runtime.saveData.mock.calls[runtime.saveData.mock.calls.length - 1]?.[0];
+    expect(lastSave).not.toHaveProperty("queryCache");
+  });
+
+  it("persists query-cache mutations only in device-local storage", async () => {
+    const services = makeServices();
+    const plugin = makePlugin(services);
+    vi.mocked(plugin.queryCache.set).mockReturnValueOnce(true);
+    vi.mocked(plugin.queryCache.completeTaskInAll).mockReturnValueOnce(true);
+    vi.mocked(plugin.queryCache.removeTaskFromAll).mockReturnValueOnce(true);
+    const updatedAt = new Date("2026-08-11T10:00:00.000Z");
+
+    await plugin.writeQueryCache("today", [], updatedAt);
+    await plugin.completeTaskInAllQueryCaches("task-1", updatedAt);
+    await plugin.removeTaskFromAllQueryCaches("task-1", updatedAt);
+
+    expect(runtime.saveLocalStorage).toHaveBeenCalledTimes(3);
+    expect(runtime.saveLocalStorage).toHaveBeenCalledWith("tasks-bridge:query-cache:v2", {});
+    expect(runtime.saveData).not.toHaveBeenCalled();
+  });
+
+  it("reloads externally synchronized settings without importing their query cache", async () => {
+    const services = makeServices();
+    const plugin = makePlugin(services);
+    await plugin.loadOptions();
+    vi.mocked(plugin.queryCache.load).mockClear();
+    runtime.saveData.mockClear();
+    services.projectSync.setConfig.mockClear();
+    const intervalId = 53 as unknown as ReturnType<typeof window.setInterval>;
+    const setInterval = vi.spyOn(window, "setInterval").mockReturnValue(intervalId);
+    runtime.loadData.mockResolvedValueOnce({
+      ...defaultSettings({
+        autoRefreshInterval: 30,
+        autoRefreshToggle: true,
+        projectSyncEnabled: true,
+        projectSyncMappings: [
+          {
+            id: "mapping-work",
+            project: { projectId: "work", projectName: "Work" },
+            folder: "Tasks/Work",
+            includeSubprojects: true,
+            previousFolders: [],
+          },
+        ],
+      }),
+      queryCache: { version: 2, credentialFingerprint: "another-device", entries: {} },
+    });
+
+    await plugin.onExternalSettingsChange();
+
+    expect(runtime.settings.current).toMatchObject({
+      autoRefreshInterval: 30,
+      autoRefreshToggle: true,
+      projectSyncEnabled: true,
+    });
+    expect(services.projectSync.setConfig).toHaveBeenLastCalledWith({
+      enabled: true,
+      mappings: [
+        expect.objectContaining({
+          id: "mapping-work",
+          folder: "Tasks/Work",
+          project: { projectId: "work", projectName: "Work" },
+        }),
+      ],
+    });
+    expect(setInterval).toHaveBeenCalledWith(expect.any(Function), 30_000);
+    expect(plugin.queryCache.load).not.toHaveBeenCalled();
+    expect(runtime.saveLocalStorage).not.toHaveBeenCalled();
+    const lastSave = runtime.saveData.mock.calls[runtime.saveData.mock.calls.length - 1]?.[0];
+    expect(lastSave).not.toHaveProperty("queryCache");
+  });
+
+  it("preserves newer settings when an older device omits fields it does not know", async () => {
+    const services = makeServices();
+    const plugin = makePlugin(services);
+    runtime.settings.current = defaultSettings({
+      debugLogging: false,
+      projectSyncWriterId: "device-a",
+      version: 4,
+    });
+    runtime.loadData.mockResolvedValueOnce({
+      autoRefreshInterval: 45,
+      autoRefreshToggle: true,
+      debugLogging: true,
+      projectSyncEnabled: false,
+      projectSyncMappings: [],
+      tokenStorage: "secrets",
+      version: 3,
+    });
+
+    await plugin.onExternalSettingsChange();
+
+    expect(runtime.settings.current).toMatchObject({
+      autoRefreshInterval: 45,
+      autoRefreshToggle: true,
+      debugLogging: true,
+      projectSyncWriterId: "device-a",
+      version: 4,
+    });
+    const lastSave = runtime.saveData.mock.calls[runtime.saveData.mock.calls.length - 1]?.[0];
+    expect(lastSave).toMatchObject({ projectSyncWriterId: "device-a", version: 4 });
+  });
+
+  it("honors an explicit external writer release", async () => {
+    const services = makeServices();
+    runtime.settings.current = defaultSettings({
+      projectSyncWriterId: "device-a",
+      version: 4,
+    });
+    runtime.loadData.mockResolvedValueOnce(
+      defaultSettings({ projectSyncWriterId: null, version: 4 }),
+    );
+    const plugin = makePlugin(services);
+
+    await plugin.onExternalSettingsChange();
+
+    expect(runtime.settings.current.projectSyncWriterId).toBeNull();
+    expect(services.projectSync.invalidate).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the legacy Project mapping migration path for external settings", async () => {
+    const services = makeServices();
+    runtime.settings.current = defaultSettings({
+      projectSyncMappings: [
+        {
+          id: "current-mapping",
+          project: { projectId: "current", projectName: "Current" },
+          folder: "Tasks/Current",
+          includeSubprojects: false,
+          previousFolders: [],
+        },
+      ],
+      version: 4,
+    });
+    runtime.loadData.mockResolvedValueOnce({
+      projectSyncEnabled: true,
+      projectSyncFolder: "Todoist Projects",
+      projectSyncIncludeSubprojects: true,
+      projectSyncProject: { projectId: "root", projectName: "Root/Project" },
+      version: 3,
+    });
+    const plugin = makePlugin(services);
+
+    await plugin.onExternalSettingsChange();
+
+    expect(runtime.settings.current.projectSyncMappings).toEqual([
+      expect.objectContaining({
+        folder: "Todoist Projects/Root-Project",
+        includeSubprojects: true,
+        project: { projectId: "root", projectName: "Root/Project" },
+      }),
+    ]);
+    expect(runtime.settings.current.version).toBe(4);
+  });
+
+  it("does not echo an already canonical external settings update back to Sync", async () => {
+    const services = makeServices();
+    const plugin = makePlugin(services);
+    await plugin.loadOptions();
+    runtime.saveData.mockClear();
+    runtime.loadData.mockResolvedValueOnce(makeSettings({ renderDateIcon: false, version: 1 }));
+
+    await plugin.onExternalSettingsChange();
+
+    expect(runtime.settings.current.renderDateIcon).toBe(false);
+    expect(runtime.saveData).not.toHaveBeenCalled();
+  });
+
+  it("reloads the active Todoist credential when external token settings change", async () => {
+    const services = makeServices();
+    services.token.read.mockResolvedValueOnce("external-token");
+    const plugin = makePlugin(services);
+    await plugin.loadOptions();
+    services.projectSync.clearStatisticsSnapshot.mockClear();
+    services.projectSync.invalidate.mockClear();
+    services.todoist.reset.mockClear();
+    runtime.loadData.mockResolvedValueOnce(makeSettings({ tokenStorage: "file" }));
+
+    await plugin.onExternalSettingsChange();
+
+    expect(services.projectSync.clearStatisticsSnapshot).toHaveBeenCalledOnce();
+    expect(services.projectSync.invalidate).toHaveBeenCalledOnce();
+    expect(services.todoist.reset).toHaveBeenCalledOnce();
+    await vi.waitFor(() =>
+      expect(services.todoist.initialize).toHaveBeenCalledWith(
+        expect.objectContaining({ token: "external-token" }),
+      ),
+    );
+  });
+
+  it("orders an external settings reload between an older save and a later local update", async () => {
+    const services = makeServices();
+    const plugin = makePlugin(services);
+    const firstSave = deferred<void>();
+    runtime.saveData
+      .mockImplementationOnce(async () => await firstSave.promise)
+      .mockResolvedValue(undefined);
+
+    const olderLocalWrite = plugin.writeOptions({ debugLogging: true });
+    await vi.waitFor(() => expect(runtime.saveData).toHaveBeenCalledTimes(1));
+
+    runtime.loadData.mockResolvedValueOnce({
+      ...defaultSettings(),
+      debugLogging: false,
+      fadeToggle: true,
+    });
+    const externalReload = plugin.onExternalSettingsChange();
+    const laterLocalWrite = plugin.writeOptions({ fadeToggle: false });
+
+    firstSave.resolve(undefined);
+    await Promise.all([olderLocalWrite, externalReload, laterLocalWrite]);
+
+    expect(runtime.saveData).toHaveBeenCalledTimes(3);
+    expect(runtime.settings.current).toMatchObject({ debugLogging: false, fadeToggle: false });
+    const lastSave = runtime.saveData.mock.calls[runtime.saveData.mock.calls.length - 1]?.[0];
+    expect(lastSave).toMatchObject({
+      debugLogging: false,
+      fadeToggle: false,
+    });
+    expect(lastSave).not.toHaveProperty("queryCache");
+  });
+
+  it("restores external settings received during a startup canonicalization save", async () => {
+    const services = makeServices();
+    const firstSave = deferred<void>();
+    runtime.loadData.mockResolvedValueOnce({
+      ...defaultSettings(),
+      removedLegacyOption: "drop me",
+    });
+    runtime.saveData
+      .mockImplementationOnce(async () => await firstSave.promise)
+      .mockResolvedValue(undefined);
+    const plugin = makePlugin(services);
+
+    const startupLoad = plugin.loadOptions();
+    await vi.waitFor(() => expect(runtime.saveData).toHaveBeenCalledOnce());
+
+    const externalSettings = makeSettings({ debugLogging: true, version: 1 });
+    runtime.loadData.mockResolvedValueOnce(externalSettings);
+    const externalReload = plugin.onExternalSettingsChange();
+
+    firstSave.resolve(undefined);
+    await Promise.all([startupLoad, externalReload]);
+
+    expect(runtime.settings.current.debugLogging).toBe(true);
+    expect(runtime.saveData).toHaveBeenCalledTimes(2);
+    expect(runtime.saveData.mock.calls[1]?.[0]).toEqual(externalSettings);
+  });
+
+  it("restores a newer external file received during an external normalization save", async () => {
+    const services = makeServices();
+    const firstSave = deferred<void>();
+    runtime.loadData.mockResolvedValueOnce({
+      ...defaultSettings(),
+      debugLogging: false,
+      obsoleteExternalField: true,
+    });
+    runtime.saveData
+      .mockImplementationOnce(async () => await firstSave.promise)
+      .mockResolvedValue(undefined);
+    const plugin = makePlugin(services);
+
+    const firstExternalReload = plugin.onExternalSettingsChange();
+    await vi.waitFor(() => expect(runtime.saveData).toHaveBeenCalledOnce());
+
+    const newestExternalSettings = makeSettings({ debugLogging: true, version: 1 });
+    runtime.loadData.mockResolvedValueOnce(newestExternalSettings);
+    const newestExternalReload = plugin.onExternalSettingsChange();
+
+    firstSave.resolve(undefined);
+    await Promise.all([firstExternalReload, newestExternalReload]);
+
+    expect(runtime.settings.current.debugLogging).toBe(true);
+    expect(runtime.saveData).toHaveBeenCalledTimes(2);
+    expect(runtime.saveData.mock.calls[1]?.[0]).toEqual(newestExternalSettings);
+  });
+
   it("disables an incomplete legacy mapping until the user remaps it", async () => {
     const services = makeServices();
     runtime.loadData.mockResolvedValueOnce({
@@ -513,11 +869,23 @@ describe("TodoistPlugin async lifecycle", () => {
     expect(JSON.stringify(warning.mock.calls)).toContain("Todoist/Project/Task.md");
   });
 
-  it("compacts previous projection roots only after the Vault reports migration complete", async () => {
+  it("reports an interrupted manual Project sync separately from a disabled configuration", async () => {
+    const services = makeServices();
+    services.projectSync.getConfig.mockReturnValue({ enabled: true, mappings: [] });
+    services.projectSync.sync.mockResolvedValueOnce(null);
+    const plugin = makePlugin(services);
+
+    await expect(plugin.syncProjectFolderNow()).resolves.toBeNull();
+
+    expect(runtime.notices).toEqual(["Project sync was interrupted"]);
+  });
+
+  it("retains previous projection roots after migration to catch late Sync files", async () => {
     const services = makeServices();
     const stored = {
       ...defaultSettings(),
       projectSyncEnabled: true,
+      projectSyncWriterId: "device-a",
       projectSyncMappings: [
         {
           id: "mapping-work",
@@ -542,26 +910,20 @@ describe("TodoistPlugin async lifecycle", () => {
       expect.objectContaining({
         id: "mapping-work",
         folder: "Todoist/New Work",
-        previousFolders: [],
+        previousFolders: ["Todoist/Old Work"],
       }),
     ]);
   });
 
-  it("reports startup conflicts in both the console and a notice", async () => {
+  it("never projects Markdown files during Todoist client startup", async () => {
     const services = makeServices();
-    const result = emptyResult();
-    result.conflicts.push({ message: "Conflict", taskId: "startup-task" });
-    services.projectSync.sync.mockResolvedValueOnce(result);
-    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const plugin = makePlugin(services);
 
     await plugin.updateApiToken("token");
 
-    expect(warning).toHaveBeenCalledWith(
-      "Startup Todoist project sync completed with conflicts:",
-      result.conflicts,
-    );
-    expect(runtime.notices).toEqual(["Project sync complete: 0/0/0/0/1"]);
+    expect(services.todoist.initialize).toHaveBeenCalledOnce();
+    expect(services.projectSync.sync).not.toHaveBeenCalled();
+    expect(runtime.notices).toEqual([]);
   });
 
   it.each([
@@ -658,33 +1020,195 @@ describe("TodoistPlugin async lifecycle", () => {
     await internals(plugin).runScheduledSync();
 
     expect(services.todoist.sync).not.toHaveBeenCalled();
+    expect(services.todoist.syncMetadata).not.toHaveBeenCalled();
     expect(services.projectSync.sync).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["no device", null],
+    ["another device", "device-b"],
+  ])("never automatically projects on %s", async (_label, projectSyncWriterId) => {
+    const services = makeServices();
+    runtime.settings.current = defaultSettings({
+      autoRefreshToggle: true,
+      projectSyncEnabled: true,
+      projectSyncWriterId,
+    });
+    const plugin = makePlugin(services);
+
+    await internals(plugin).runScheduledSync();
+
+    expect(services.todoist.syncMetadata).toHaveBeenCalledOnce();
+    expect(services.projectSync.sync).not.toHaveBeenCalled();
+  });
+
+  it("waits for the Project folders to become quiet after startup", async () => {
+    let now = 1000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const services = makeServices();
+    const stored = defaultSettings({
+      autoRefreshToggle: true,
+      projectSyncEnabled: true,
+      projectSyncWriterId: "device-a",
+      projectSyncMappings: [
+        {
+          id: "mapping-work",
+          project: { projectId: "work", projectName: "Work" },
+          folder: "Tasks/Work",
+          includeSubprojects: true,
+          previousFolders: [],
+        },
+      ],
+    });
+    runtime.loadData.mockResolvedValueOnce(stored);
+    runtime.settings.current = stored;
+    vi.spyOn(window, "setInterval").mockReturnValue(
+      51 as unknown as ReturnType<typeof window.setInterval>,
+    );
+    const plugin = makePlugin(services);
+    await plugin.onload();
+
+    await internals(plugin).runScheduledSync();
+    expect(services.projectSync.sync).not.toHaveBeenCalled();
+
+    now += 30_000;
+    await internals(plugin).runScheduledSync();
+    expect(services.projectSync.sync).toHaveBeenCalledOnce();
+  });
+
+  it("invalidates an in-flight Project sync when external mapped Vault activity arrives", async () => {
+    let now = 1000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const services = makeServices();
+    const stored = defaultSettings({
+      autoRefreshToggle: true,
+      projectSyncEnabled: true,
+      projectSyncWriterId: "device-a",
+      projectSyncMappings: [
+        {
+          id: "mapping-work",
+          project: { projectId: "work", projectName: "Work" },
+          folder: "Tasks/Work",
+          includeSubprojects: true,
+          previousFolders: [],
+        },
+      ],
+    });
+    runtime.loadData.mockResolvedValueOnce(stored);
+    runtime.settings.current = stored;
+    const plugin = makePlugin(services);
+    await plugin.onload();
+    services.projectSync.invalidate.mockClear();
+
+    now += 30_000;
+    vaultActivityListener("modify")({ path: "Tasks/Work/Remote task.md" });
+
+    expect(services.projectSync.invalidate).toHaveBeenCalledOnce();
+    await internals(plugin).runScheduledSync();
+    expect(services.projectSync.sync).not.toHaveBeenCalled();
+
+    now += 30_000;
+    await internals(plugin).runScheduledSync();
+    expect(services.projectSync.sync).toHaveBeenCalledOnce();
+  });
+
+  it("invalidates Project sync when an ancestor of a mapped folder is renamed", async () => {
+    const services = makeServices();
+    const stored = defaultSettings({
+      projectSyncEnabled: true,
+      projectSyncWriterId: "device-a",
+      projectSyncMappings: [
+        {
+          id: "mapping-work",
+          project: { projectId: "work", projectName: "Work" },
+          folder: "Tasks/Work",
+          includeSubprojects: true,
+          previousFolders: [],
+        },
+      ],
+    });
+    runtime.loadData.mockResolvedValueOnce(stored);
+    runtime.settings.current = stored;
+    const plugin = makePlugin(services);
+    await plugin.onload();
+    services.projectSync.invalidate.mockClear();
+
+    vaultActivityListener("rename")({ path: "Archived Tasks" }, "Tasks");
+
+    expect(services.projectSync.invalidate).toHaveBeenCalledOnce();
+  });
+
+  it("does not treat an exact path-scoped plugin mutation as external Sync activity", async () => {
+    let now = 1000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const services = makeServices();
+    const stored = defaultSettings({
+      projectSyncEnabled: true,
+      projectSyncWriterId: "device-a",
+      projectSyncMappings: [
+        {
+          id: "mapping-work",
+          project: { projectId: "work", projectName: "Work" },
+          folder: "Tasks/Work",
+          includeSubprojects: true,
+          previousFolders: [],
+        },
+      ],
+    });
+    runtime.loadData.mockResolvedValueOnce(stored);
+    runtime.settings.current = stored;
+    const plugin = makePlugin(services);
+    await plugin.onload();
+    services.projectSync.invalidate.mockClear();
+    now += 30_000;
+    const modify = vaultActivityListener("modify");
+
+    const result = await plugin.runAutomaticProjectProjection(async () => {
+      return await plugin.runProjectSyncVaultMutation(["Tasks/Work/Task.md"], async () => {
+        modify({ path: "Tasks/Work/Task.md" });
+        return 42;
+      });
+    });
+
+    expect(result).toEqual({ performed: true, value: 42 });
+    expect(services.projectSync.invalidate).not.toHaveBeenCalled();
+
+    const interrupted = await plugin.runAutomaticProjectProjection(async (assertValid) => {
+      modify({ path: "Tasks/Work/Task.md" });
+      assertValid();
+      return 99;
+    });
+
+    expect(interrupted).toEqual({ performed: false });
+    expect(services.projectSync.invalidate).toHaveBeenCalledOnce();
   });
 
   it("coalesces overlapping scheduled ticks into one refresh", async () => {
     const services = makeServices();
     const todoistSync = deferred<boolean>();
-    services.todoist.sync.mockImplementationOnce(async () => await todoistSync.promise);
+    services.todoist.syncMetadata.mockImplementationOnce(async () => await todoistSync.promise);
     services.projectSync.sync.mockResolvedValueOnce(emptyResult());
     runtime.settings.current = defaultSettings({
       autoRefreshToggle: true,
       projectSyncEnabled: true,
+      projectSyncWriterId: "device-a",
     });
     const plugin = makePlugin(services);
 
     const first = internals(plugin).runScheduledSync();
     const second = internals(plugin).runScheduledSync();
-    await vi.waitFor(() => expect(services.todoist.sync).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(services.todoist.syncMetadata).toHaveBeenCalledOnce());
 
     expect(second).toBe(first);
     todoistSync.resolve(true);
     await Promise.all([first, second]);
 
-    expect(services.todoist.sync).toHaveBeenCalledOnce();
+    expect(services.todoist.syncMetadata).toHaveBeenCalledOnce();
+    expect(services.todoist.sync).not.toHaveBeenCalled();
     expect(services.projectSync.sync).toHaveBeenCalledOnce();
   });
 
-  it("refreshes query-block subscriptions without Project sync when Project sync is disabled", async () => {
+  it("refreshes only shared metadata when Project sync is disabled", async () => {
     const services = makeServices();
     runtime.settings.current = defaultSettings({
       autoRefreshToggle: true,
@@ -694,27 +1218,29 @@ describe("TodoistPlugin async lifecycle", () => {
 
     await internals(plugin).runScheduledSync();
 
-    expect(services.todoist.sync).toHaveBeenCalledOnce();
-    expect(services.todoist.syncMetadata).not.toHaveBeenCalled();
+    expect(services.todoist.syncMetadata).toHaveBeenCalledOnce();
+    expect(services.todoist.sync).not.toHaveBeenCalled();
     expect(services.projectSync.sync).not.toHaveBeenCalled();
   });
 
   it("does not run Project sync when the metadata refresh fails", async () => {
     const services = makeServices();
-    services.todoist.sync.mockResolvedValueOnce(false);
+    services.todoist.syncMetadata.mockResolvedValueOnce(false);
     runtime.settings.current = defaultSettings({
       autoRefreshToggle: true,
       projectSyncEnabled: true,
+      projectSyncWriterId: "device-a",
     });
     const plugin = makePlugin(services);
 
     await internals(plugin).runScheduledSync();
 
-    expect(services.todoist.sync).toHaveBeenCalledOnce();
+    expect(services.todoist.syncMetadata).toHaveBeenCalledOnce();
+    expect(services.todoist.sync).not.toHaveBeenCalled();
     expect(services.projectSync.sync).not.toHaveBeenCalled();
   });
 
-  it("keeps startup and manual Project sync independent of Auto-refresh", async () => {
+  it("keeps manual Project sync independent of Auto-refresh without a startup projection", async () => {
     const services = makeServices();
     const result = emptyResult();
     services.projectSync.sync.mockResolvedValue(result);
@@ -729,7 +1255,7 @@ describe("TodoistPlugin async lifecycle", () => {
 
     expect(services.todoist.initialize).toHaveBeenCalledOnce();
     expect(services.todoist.sync).toHaveBeenCalledOnce();
-    expect(services.projectSync.sync).toHaveBeenCalledTimes(2);
+    expect(services.projectSync.sync).toHaveBeenCalledOnce();
     expect(services.todoist.syncMetadata).not.toHaveBeenCalled();
   });
 
@@ -741,6 +1267,7 @@ describe("TodoistPlugin async lifecycle", () => {
     runtime.settings.current = defaultSettings({
       autoRefreshToggle: true,
       projectSyncEnabled: true,
+      projectSyncWriterId: "device-a",
     });
     const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const plugin = makePlugin(services);
@@ -767,6 +1294,7 @@ describe("TodoistPlugin async lifecycle", () => {
     runtime.settings.current = defaultSettings({
       autoRefreshToggle: true,
       projectSyncEnabled: true,
+      projectSyncWriterId: "device-a",
     });
     const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const plugin = makePlugin(services);
@@ -783,15 +1311,16 @@ describe("TodoistPlugin async lifecycle", () => {
   it("stops a scheduled continuation after unload", async () => {
     const services = makeServices();
     const todoistSync = deferred<boolean>();
-    services.todoist.sync.mockImplementationOnce(async () => await todoistSync.promise);
+    services.todoist.syncMetadata.mockImplementationOnce(async () => await todoistSync.promise);
     runtime.settings.current = defaultSettings({
       autoRefreshToggle: true,
       projectSyncEnabled: true,
+      projectSyncWriterId: "device-a",
     });
     const plugin = makePlugin(services);
 
     const scheduled = internals(plugin).runScheduledSync();
-    await vi.waitFor(() => expect(services.todoist.sync).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(services.todoist.syncMetadata).toHaveBeenCalledTimes(1));
     plugin.onunload();
     todoistSync.resolve(true);
     await scheduled;

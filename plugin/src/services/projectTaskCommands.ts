@@ -24,6 +24,25 @@ export type ProjectTaskMutationResult = {
   projection: Promise<void>;
 };
 
+export type ProjectTaskAutomaticProjectionResult<T> =
+  | { performed: false }
+  | { performed: true; value: T };
+
+/**
+ * Owns the device-local policy for automatic Markdown projection.
+ *
+ * The command service deliberately knows nothing about settings, device IDs, or Vault activity.
+ * A coordinator must return `performed: false` without invoking `operation` when this device is
+ * not currently allowed to write (for example, while Obsidian Sync is active or when another
+ * device is the configured writer).
+ */
+export interface ProjectTaskProjectionCoordinator {
+  runAutomaticProjection<T>(
+    operation: (assertValid: () => void) => Promise<T>,
+  ): Promise<ProjectTaskAutomaticProjectionResult<T>>;
+  runInternalMutation<T>(affectedPaths: readonly string[], operation: () => Promise<T>): Promise<T>;
+}
+
 type ManagedProjectTaskStatus = "active" | "completed";
 
 type ManagedProjectTaskTarget = {
@@ -56,6 +75,7 @@ export class ProjectTaskCommandService {
   private readonly metadataCache: MetadataCache;
   private readonly todoist: TodoistAdapter;
   private readonly projectSync: ProjectFolderSyncService;
+  private readonly projectionCoordinator: ProjectTaskProjectionCoordinator;
 
   constructor(
     vault: Vault,
@@ -63,12 +83,14 @@ export class ProjectTaskCommandService {
     metadataCache: MetadataCache,
     todoist: TodoistAdapter,
     projectSync: ProjectFolderSyncService,
+    projectionCoordinator: ProjectTaskProjectionCoordinator,
   ) {
     this.vault = vault;
     this.fileManager = fileManager;
     this.metadataCache = metadataCache;
     this.todoist = todoist;
     this.projectSync = projectSync;
+    this.projectionCoordinator = projectionCoordinator;
   }
 
   public isReady(): boolean {
@@ -203,26 +225,62 @@ export class ProjectTaskCommandService {
     completedAt?: Date,
   ): ProjectTaskMutationResult {
     const syncedAt = new Date().toISOString();
-    const projection = this.projectStatus(target, status, syncedAt, completedAt).catch(
+    const projection = this.projectStatusAndReconcile(target, status, syncedAt, completedAt).catch(
       (error: unknown) => {
         throw new ProjectTaskProjectionError(error);
       },
     );
-
-    this.queueCanonicalSync(projection);
     return { projection };
+  }
+
+  private async projectStatusAndReconcile(
+    target: ManagedProjectTaskTarget,
+    status: ManagedProjectTaskStatus,
+    syncedAt: string,
+    completedAt?: Date,
+  ): Promise<void> {
+    await this.projectionCoordinator.runAutomaticProjection(async (assertValid) => {
+      assertValid();
+      let targetedProjectionError: unknown;
+      let targetedProjectionFailed = false;
+      try {
+        await this.projectionCoordinator.runInternalMutation(
+          this.automaticProjectionPaths(target.file.path),
+          async () => await this.projectStatus(target, status, syncedAt, assertValid, completedAt),
+        );
+      } catch (error: unknown) {
+        targetedProjectionFailed = true;
+        targetedProjectionError = error;
+      }
+
+      // A canonical reconciliation is still useful when the targeted write failed after the
+      // Todoist mutation. Keep its failure in the background, as before, while preserving the
+      // more actionable targeted-write error for the caller.
+      assertValid();
+      try {
+        await this.projectSync.sync();
+      } catch (error: unknown) {
+        console.error("Background Project sync failed after a Todoist task status change:", error);
+      }
+
+      if (targetedProjectionFailed) {
+        throw targetedProjectionError;
+      }
+    });
   }
 
   private async projectStatus(
     target: ManagedProjectTaskTarget,
     status: ManagedProjectTaskStatus,
     syncedAt: string,
+    assertValid: () => void,
     completedAt?: Date,
   ): Promise<void> {
     // Invalidate first so a snapshot captured before the Todoist response cannot overwrite this
     // targeted projection. The canonical refresh is queued only after this atomic write settles.
     this.projectSync.invalidate();
     await this.fileManager.processFrontMatter(target.file, (frontmatter: unknown) => {
+      assertValid();
       if (!isRecord(frontmatter)) {
         throw new Error(`Invalid frontmatter in '${target.file.path}'`);
       }
@@ -258,35 +316,33 @@ export class ProjectTaskCommandService {
     }
   }
 
-  private queueCanonicalSync(projection: Promise<void>): void {
-    void projection
-      .then(
-        () => this.projectSync.sync(),
-        () => this.projectSync.sync(),
-      )
-      .catch((error: unknown) => {
-        console.error("Background Project sync failed after a Todoist task status change:", error);
-      });
-  }
-
   private async syncAfterRemoteMutation(taskId: string): Promise<void> {
     try {
-      // A sync that started before the mutation may still be in flight. Invalidate its generation
-      // before requesting the follow-up run so stale data can never absorb this refresh.
-      this.projectSync.invalidate();
-      const result = await this.projectSync.sync();
-      if (result === null) {
-        throw new Error("Project sync did not produce a Vault projection");
-      }
-      const blockedProjection = result.conflicts.find(
-        (conflict) => conflict.taskId === taskId && conflict.projectionBlocked === true,
-      );
-      if (blockedProjection !== undefined) {
-        throw new Error(blockedProjection.message);
-      }
+      await this.projectionCoordinator.runAutomaticProjection(async (assertValid) => {
+        assertValid();
+        // A sync that started before the mutation may still be in flight. Invalidate its
+        // generation only on the device that is allowed to perform this automatic projection.
+        this.projectSync.invalidate();
+        assertValid();
+        const result = await this.projectSync.sync();
+        assertValid();
+        if (result === null) {
+          throw new Error("Project sync did not produce a Vault projection");
+        }
+        const blockedProjection = result.conflicts.find(
+          (conflict) => conflict.taskId === taskId && conflict.projectionBlocked === true,
+        );
+        if (blockedProjection !== undefined) {
+          throw new Error(blockedProjection.message);
+        }
+      });
     } catch (error: unknown) {
       throw new ProjectTaskProjectionError(error);
     }
+  }
+
+  private automaticProjectionPaths(targetPath: string): string[] {
+    return [normalizePath(targetPath)];
   }
 }
 

@@ -17,10 +17,19 @@ import { QueryCache } from "@/data/queryCache";
 import type { CompletedTasksProgress } from "@/data/subscriptions";
 import type { Task } from "@/data/task";
 import { secondsToMillis } from "@/infra/time";
-import type { ProjectSyncConfig, ProjectSyncResult } from "@/project-sync";
+import {
+  isAutomaticProjectSyncWriter,
+  isProjectSyncPath,
+  ProjectSyncActivityTracker,
+  type ProjectSyncConfig,
+  type ProjectSyncResult,
+} from "@/project-sync";
 import { QueryInjector } from "@/query/injector";
 import { makeServices, type Services } from "@/services";
-import { ProjectTaskProjectionError } from "@/services/projectTaskCommands";
+import {
+  type ProjectTaskAutomaticProjectionResult,
+  ProjectTaskProjectionError,
+} from "@/services/projectTaskCommands";
 import {
   normalizeAutoRefreshInterval,
   normalizeSettings,
@@ -31,6 +40,12 @@ import { SettingsTab } from "@/ui/settings";
 
 const hexadecimalRadix = 16;
 const byteHexWidth = 2;
+const deviceIdRadix = 36;
+const randomFractionPrefixLength = 2;
+const queryCacheStorageKey = "tasks-bridge:query-cache:v2";
+const deviceIdStorageKey = "tasks-bridge:device-id:v1";
+
+export type ProjectSyncWriterState = "unassigned" | "this-device" | "another-device";
 
 type AsyncGeneration = {
   apiToken: number;
@@ -42,12 +57,16 @@ export default class TodoistPlugin extends Plugin {
   public readonly services: Services;
   public readonly queryCache = new QueryCache();
 
-  private saveQueue: Promise<void> = Promise.resolve();
+  private settingsQueue: Promise<void> = Promise.resolve();
+  private settingsOperationGeneration = 0;
+  private completedSettingsOperationGeneration = 0;
   private apiTokenUpdateQueue: Promise<void> = Promise.resolve();
   private apiTokenGeneration = 0;
   private projectSyncConfigGeneration = 0;
   private autoRefreshIntervalId: number | undefined;
   private scheduledSyncInFlight: Promise<void> | undefined;
+  private readonly projectSyncActivity = new ProjectSyncActivityTracker();
+  private deviceId: string | undefined;
   private disposed = false;
 
   constructor(app: App, pluginManifest: PluginManifest) {
@@ -57,6 +76,9 @@ export default class TodoistPlugin extends Plugin {
 
   async onload() {
     setLanguage(document.documentElement.lang);
+    // Obsidian doesn't expose a public "Sync is idle" signal. Treat startup as recent Vault
+    // activity so automatic projection cannot race remote files that are still arriving.
+    this.projectSyncActivity.recordActivity();
     await this.loadOptions();
     if (this.disposed) {
       return;
@@ -81,12 +103,14 @@ export default class TodoistPlugin extends Plugin {
     this.addSettingTab(new SettingsTab(this.app, this));
 
     registerCommands(this);
+    this.registerProjectSyncVaultActivityListeners();
     this.applyAutoRefreshSchedule();
 
     this.app.workspace.onLayoutReady(async () => {
       if (this.disposed) {
         return;
       }
+      this.projectSyncActivity.recordActivity();
 
       try {
         await this.applyMigrations();
@@ -196,19 +220,30 @@ export default class TodoistPlugin extends Plugin {
   }
 
   async loadOptions(): Promise<void> {
-    const storedData: unknown = await this.loadData();
-    if (this.disposed) {
-      return;
-    }
-    const queryCache = isRecord(storedData) ? storedData.queryCache : undefined;
-    const options = normalizeSettings(storedData);
+    const storedDataRead = this.loadData();
+    await this.enqueueSettingsOperation(async () => {
+      const storedData: unknown = await storedDataRead;
+      if (this.disposed) {
+        return;
+      }
 
-    this.queryCache.load(queryCache);
-    useSettingsStore.setState(options, true);
+      const localQueryCache = this.app.loadLocalStorage(queryCacheStorageKey);
+      const legacyQueryCache = isRecord(storedData) ? storedData.queryCache : undefined;
+      this.queryCache.load(localQueryCache ?? legacyQueryCache);
+      if (localQueryCache === null && legacyQueryCache !== undefined) {
+        await this.persistQueryCache();
+      }
 
-    this.applyProjectSyncConfig();
+      const options = normalizeSettings(storedData);
+      useSettingsStore.setState(options, true);
+      this.applyProjectSyncConfig();
 
-    await this.persistData();
+      if (!hasCanonicalStoredSettings(storedData, options)) {
+        // Besides normalizing legacy settings, this removes the legacy queryCache field after it
+        // has been migrated to vault-specific, device-local storage.
+        await this.persistSettings();
+      }
+    });
   }
 
   async writeOptions(update: Partial<Settings>): Promise<void> {
@@ -216,24 +251,64 @@ export default class TodoistPlugin extends Plugin {
       return;
     }
 
-    const normalizedUpdate =
-      update.autoRefreshInterval === undefined
-        ? update
-        : {
-            ...update,
-            autoRefreshInterval: normalizeAutoRefreshInterval(update.autoRefreshInterval),
-          };
-    const previousSettings = useSettingsStore.getState();
-    useSettingsStore.setState(normalizedUpdate);
-    const nextSettings = useSettingsStore.getState();
-    this.applyProjectSyncConfig();
-    if (
-      previousSettings.autoRefreshToggle !== nextSettings.autoRefreshToggle ||
-      previousSettings.autoRefreshInterval !== nextSettings.autoRefreshInterval
-    ) {
-      this.applyAutoRefreshSchedule();
+    await this.enqueueSettingsOperation(async () => {
+      if (this.disposed) {
+        return;
+      }
+
+      const normalizedUpdate =
+        update.autoRefreshInterval === undefined
+          ? update
+          : {
+              ...update,
+              autoRefreshInterval: normalizeAutoRefreshInterval(update.autoRefreshInterval),
+            };
+      const previousSettings = useSettingsStore.getState();
+      useSettingsStore.setState(normalizedUpdate);
+      this.applySettingsRuntime(previousSettings);
+      await this.persistSettings();
+    });
+  }
+
+  onExternalSettingsChange(): Promise<void> {
+    if (this.disposed) {
+      return Promise.resolve();
     }
-    await this.persistData();
+
+    // Start the read before queueing. If a local save was already in flight when Sync replaced
+    // data.json, this captures Sync's version before that stale save can finish and overwrite it.
+    const storedDataRead = this.loadData();
+    const restoreAfterOlderSettingsOperation =
+      this.completedSettingsOperationGeneration < this.settingsOperationGeneration;
+    return this.enqueueSettingsOperation(async () => {
+      const storedData: unknown = await storedDataRead;
+      if (this.disposed) {
+        return;
+      }
+
+      const previousSettings = useSettingsStore.getState();
+      const nextSettings = normalizeSettings(
+        mergeExternalStoredSettings(storedData, previousSettings),
+      );
+      const credentialSettingsChanged = hasDifferentCredentialSettings(
+        previousSettings,
+        nextSettings,
+      );
+      useSettingsStore.setState(nextSettings, true);
+      this.applySettingsRuntime(previousSettings);
+      if (credentialSettingsChanged) {
+        this.reloadApiClientAfterExternalSettingsChange();
+      }
+
+      if (
+        restoreAfterOlderSettingsOperation ||
+        !hasCanonicalStoredSettings(storedData, nextSettings)
+      ) {
+        // Restore the captured external version after any older in-flight local save and ensure a
+        // legacy cache received from another device is not retained in the synchronized file.
+        await this.persistSettings();
+      }
+    });
   }
 
   async syncProjectFolderNow(): Promise<ProjectSyncResult | null> {
@@ -253,11 +328,14 @@ export default class TodoistPlugin extends Plugin {
         return null;
       }
       if (result === null) {
-        new Notice(t().notices.projectSyncDisabled);
+        new Notice(
+          this.services.projectSync.getConfig().enabled
+            ? t().notices.projectSyncInterrupted
+            : t().notices.projectSyncDisabled,
+        );
         return null;
       }
 
-      await this.compactSettledProjectSyncRoots(result);
       this.logProjectSyncConflicts(result, "Manual");
       new Notice(
         t().notices.projectSyncComplete(
@@ -280,6 +358,68 @@ export default class TodoistPlugin extends Plugin {
     }
   }
 
+  public async runAutomaticProjectProjection<T>(
+    operation: (assertValid: () => void) => Promise<T>,
+  ): Promise<ProjectTaskAutomaticProjectionResult<T>> {
+    const asyncGeneration = this.captureAsyncGeneration();
+    if (
+      !this.isAsyncGenerationCurrent(asyncGeneration) ||
+      !this.canRunAutomaticProjectProjection()
+    ) {
+      return { performed: false };
+    }
+
+    const activityGeneration = this.projectSyncActivity.generation();
+    const assertValid = () => {
+      if (
+        activityGeneration !== this.projectSyncActivity.generation() ||
+        !this.isAsyncGenerationCurrent(asyncGeneration) ||
+        !this.canRunAutomaticProjectProjection()
+      ) {
+        throw new AutomaticProjectProjectionInvalidatedError();
+      }
+    };
+
+    try {
+      assertValid();
+      return { performed: true, value: await operation(assertValid) };
+    } catch (error: unknown) {
+      if (error instanceof AutomaticProjectProjectionInvalidatedError) {
+        return { performed: false };
+      }
+      throw error;
+    }
+  }
+
+  public async runProjectSyncVaultMutation<T>(
+    affectedPaths: readonly string[],
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    return await this.projectSyncActivity.runInternalMutation(affectedPaths, operation);
+  }
+
+  getProjectSyncWriterState(): ProjectSyncWriterState {
+    const writerId = useSettingsStore.getState().projectSyncWriterId;
+    if (writerId === null) {
+      return "unassigned";
+    }
+    return isAutomaticProjectSyncWriter(writerId, this.getDeviceId())
+      ? "this-device"
+      : "another-device";
+  }
+
+  async setThisDeviceAsAutomaticProjectSyncWriter(): Promise<void> {
+    this.projectSyncActivity.recordActivity();
+    await this.writeOptions({ projectSyncWriterId: this.getDeviceId() });
+  }
+
+  async stopAutomaticProjectSyncOnThisDevice(): Promise<void> {
+    if (this.getProjectSyncWriterState() !== "this-device") {
+      return;
+    }
+    await this.writeOptions({ projectSyncWriterId: null });
+  }
+
   async writeQueryCache(
     filter: string,
     tasks: Task[],
@@ -293,7 +433,7 @@ export default class TodoistPlugin extends Plugin {
     if (!this.queryCache.set(filter, tasks, updatedAt, completedTasks, completedTasksProgress)) {
       return;
     }
-    await this.persistData();
+    await this.persistQueryCache();
   }
 
   async completeTaskInAllQueryCaches(taskId: TaskId, completedAt: Date): Promise<void> {
@@ -303,7 +443,7 @@ export default class TodoistPlugin extends Plugin {
     if (!this.queryCache.completeTaskInAll(taskId, completedAt)) {
       return;
     }
-    await this.persistData();
+    await this.persistQueryCache();
   }
 
   async removeTaskFromAllQueryCaches(taskId: TaskId, updatedAt: Date): Promise<void> {
@@ -313,7 +453,7 @@ export default class TodoistPlugin extends Plugin {
     if (!this.queryCache.removeTaskFromAll(taskId, updatedAt)) {
       return;
     }
-    await this.persistData();
+    await this.persistQueryCache();
   }
 
   async updateApiToken(token: string): Promise<void> {
@@ -354,7 +494,7 @@ export default class TodoistPlugin extends Plugin {
     const credentialChanged = this.queryCache.bindCredential(fingerprint);
 
     if (credentialChanged) {
-      await this.persistData();
+      await this.persistQueryCache();
       if (!this.isApiTokenGenerationCurrent(generation.apiToken)) {
         return;
       }
@@ -387,9 +527,9 @@ export default class TodoistPlugin extends Plugin {
     }
 
     try {
-      // Full sync keeps the original query-block mode on the same shared Auto-refresh schedule.
-      // Its return value still lets Project sync avoid projecting against stale project metadata.
-      const metadataSucceeded = await this.services.todoist.sync();
+      // QueryRoot owns query-block timers (including per-block overrides). This scheduler owns
+      // shared metadata and Project sync only, avoiding a second refresh of every mounted block.
+      const metadataSucceeded = await this.services.todoist.syncMetadata();
       if (
         !metadataSucceeded ||
         !this.isAsyncGenerationCurrent(generation) ||
@@ -397,7 +537,12 @@ export default class TodoistPlugin extends Plugin {
       ) {
         return;
       }
-      if (!useSettingsStore.getState().projectSyncEnabled) {
+      const settings = useSettingsStore.getState();
+      if (
+        !settings.projectSyncEnabled ||
+        !isAutomaticProjectSyncWriter(settings.projectSyncWriterId, this.getDeviceId()) ||
+        !this.projectSyncActivity.isQuiet()
+      ) {
         return;
       }
 
@@ -405,7 +550,6 @@ export default class TodoistPlugin extends Plugin {
       if (!this.isAsyncGenerationCurrent(generation) || result === null) {
         return;
       }
-      await this.compactSettledProjectSyncRoots(result);
       this.reportBackgroundProjectSyncConflicts(result, "Scheduled");
     } catch (error: unknown) {
       if (!this.isAsyncGenerationCurrent(generation)) {
@@ -448,30 +592,23 @@ export default class TodoistPlugin extends Plugin {
     );
   }
 
-  private async syncProjectFolderInBackground(generation: AsyncGeneration): Promise<void> {
-    if (!this.isAsyncGenerationCurrent(generation)) {
-      return;
+  private canRunAutomaticProjectProjection(): boolean {
+    if (this.disposed || !this.projectSyncActivity.isQuiet()) {
+      return false;
     }
 
-    try {
-      const result = await this.services.projectSync.sync();
-      if (!this.isAsyncGenerationCurrent(generation) || result === null) {
-        return;
-      }
-      await this.compactSettledProjectSyncRoots(result);
-      this.reportBackgroundProjectSyncConflicts(result, "Startup");
-    } catch (error: unknown) {
-      if (!this.isAsyncGenerationCurrent(generation)) {
-        return;
-      }
-      console.error("Todoist project sync failed:", error);
-    }
+    const settings = useSettingsStore.getState();
+    return (
+      settings.projectSyncEnabled &&
+      isAutomaticProjectSyncWriter(settings.projectSyncWriterId, this.getDeviceId())
+    );
   }
 
   private applyProjectSyncConfig(): void {
     const config = projectSyncConfigFromSettings(useSettingsStore.getState());
     if (!isSameProjectSyncConfig(this.services.projectSync.getConfig(), config)) {
       this.projectSyncConfigGeneration++;
+      this.projectSyncActivity.recordActivity();
     }
     this.services.projectSync.setConfig(config);
   }
@@ -489,32 +626,98 @@ export default class TodoistPlugin extends Plugin {
     }
 
     if (this.queryCache.bindCredential(fingerprint)) {
-      await this.persistData();
+      await this.persistQueryCache();
     }
   }
 
-  private persistData(): Promise<void> {
+  private reloadApiClientAfterExternalSettingsChange(): void {
+    const generation: AsyncGeneration = {
+      apiToken: ++this.apiTokenGeneration,
+      projectSyncConfig: this.projectSyncConfigGeneration,
+    };
+    this.services.projectSync.clearStatisticsSnapshot();
+    this.services.projectSync.invalidate();
+    this.services.todoist.reset();
+
+    void this.reloadApiClientForExternalSettings(generation).catch((error: unknown) => {
+      if (this.isApiTokenGenerationCurrent(generation.apiToken)) {
+        console.error("Failed to reload Todoist after an external settings change:", error);
+      }
+    });
+  }
+
+  private async reloadApiClientForExternalSettings(generation: AsyncGeneration): Promise<void> {
+    const token = await this.services.token.read();
+    if (!this.isApiTokenGenerationCurrent(generation.apiToken)) {
+      return;
+    }
+
+    const fingerprint = token === null ? null : await fingerprintCredential(token);
+    if (!this.isApiTokenGenerationCurrent(generation.apiToken)) {
+      return;
+    }
+    if (this.queryCache.bindCredential(fingerprint)) {
+      await this.persistQueryCache();
+      if (!this.isApiTokenGenerationCurrent(generation.apiToken)) {
+        return;
+      }
+    }
+
+    if (token !== null) {
+      await this.initializeApiClient(token, generation);
+    }
+  }
+
+  private applySettingsRuntime(previousSettings: Settings): void {
+    const nextSettings = useSettingsStore.getState();
+    this.applyProjectSyncConfig();
+    if (previousSettings.projectSyncWriterId !== nextSettings.projectSyncWriterId) {
+      // Ownership is part of automatic projection validity even though it is not part of the
+      // Todoist folder mapping itself. Invalidate any run started by the previous writer.
+      this.projectSyncConfigGeneration++;
+      this.services.projectSync.invalidate();
+      this.projectSyncActivity.recordActivity();
+    }
+    if (
+      previousSettings.autoRefreshToggle !== nextSettings.autoRefreshToggle ||
+      previousSettings.autoRefreshInterval !== nextSettings.autoRefreshInterval
+    ) {
+      this.applyAutoRefreshSchedule();
+    }
+  }
+
+  private enqueueSettingsOperation(operation: () => Promise<void>): Promise<void> {
+    const generation = ++this.settingsOperationGeneration;
+    const pending = this.settingsQueue
+      .catch(() => undefined)
+      .then(operation)
+      .finally(() => {
+        this.completedSettingsOperationGeneration = Math.max(
+          this.completedSettingsOperationGeneration,
+          generation,
+        );
+      });
+    this.settingsQueue = pending;
+    return pending;
+  }
+
+  private persistSettings(): Promise<void> {
     if (this.disposed) {
       return Promise.resolve();
     }
 
-    const pendingWrite = this.saveQueue
-      .catch(() => undefined)
-      .then(async () => {
-        if (this.disposed) {
-          return;
-        }
-        await this.saveData({
-          ...useSettingsStore.getState(),
-          queryCache: this.queryCache.serialize(),
-        });
-      });
-
-    this.saveQueue = pendingWrite;
-    return pendingWrite;
+    return this.saveData({ ...useSettingsStore.getState() });
   }
 
-  private static readonly settingsVersion = 3;
+  private persistQueryCache(): Promise<void> {
+    if (this.disposed) {
+      return Promise.resolve();
+    }
+    this.app.saveLocalStorage(queryCacheStorageKey, this.queryCache.serialize());
+    return Promise.resolve();
+  }
+
+  private static readonly settingsVersion = 4;
 
   private async applyMigrations(): Promise<void> {
     const migrations: Record<number, () => Promise<void>> = {
@@ -528,6 +731,9 @@ export default class TodoistPlugin extends Plugin {
       },
       3: async () => {
         // Stable mapping IDs and prior projection roots are added by settings normalization.
+      },
+      4: async () => {
+        // Automatic Project sync now requires one explicitly selected device writer.
       },
     };
 
@@ -561,34 +767,6 @@ export default class TodoistPlugin extends Plugin {
     }
 
     await this.services.todoist.initialize(new TodoistApiClient(token, new ObsidianFetcher()));
-    if (!this.isApiTokenGenerationCurrent(generation.apiToken)) {
-      return;
-    }
-
-    if (this.isAsyncGenerationCurrent(generation)) {
-      await this.syncProjectFolderInBackground(generation);
-    }
-  }
-
-  private async compactSettledProjectSyncRoots(result: ProjectSyncResult): Promise<void> {
-    if (result.settledMappingIds.length === 0 || this.disposed) {
-      return;
-    }
-    const settled = new Set(result.settledMappingIds);
-    const current = useSettingsStore.getState().projectSyncMappings;
-    if (!current.some((mapping) => settled.has(mapping.id) && mapping.previousFolders.length > 0)) {
-      return;
-    }
-
-    try {
-      await this.writeOptions({
-        projectSyncMappings: current.map((mapping) =>
-          settled.has(mapping.id) ? { ...mapping, previousFolders: [] } : mapping,
-        ),
-      });
-    } catch (error: unknown) {
-      console.error("Failed to compact settled Todoist project roots:", error);
-    }
   }
 
   private captureAsyncGeneration(): AsyncGeneration {
@@ -637,10 +815,89 @@ export default class TodoistPlugin extends Plugin {
 
     console.warn(`${origin} Todoist project sync completed with conflicts:`, result.conflicts);
   }
+
+  private registerProjectSyncVaultActivityListeners(): void {
+    const record = (path: string) => this.recordProjectSyncVaultActivity(path);
+    this.registerEvent(this.app.vault.on("create", (file) => record(file.path)));
+    this.registerEvent(this.app.vault.on("modify", (file) => record(file.path)));
+    this.registerEvent(this.app.vault.on("delete", (file) => record(file.path)));
+    this.registerEvent(
+      this.app.vault.on("rename", (file, oldPath) => {
+        this.recordProjectSyncVaultActivity(oldPath, file.path);
+      }),
+    );
+  }
+
+  private recordProjectSyncVaultActivity(...paths: string[]): void {
+    const mappings = useSettingsStore.getState().projectSyncMappings;
+    const relevantPaths = paths.filter((path) => isProjectSyncPath(path, mappings));
+    if (relevantPaths.length > 0 && this.projectSyncActivity.recordVaultActivity(relevantPaths)) {
+      // Abort an automatic reconcile that already passed the quiet-period gate. The next timer
+      // may start a fresh run only after Vault activity has settled again.
+      this.services.projectSync.invalidate();
+    }
+  }
+
+  private getDeviceId(): string {
+    if (this.deviceId !== undefined) {
+      return this.deviceId;
+    }
+
+    const stored = this.app.loadLocalStorage(deviceIdStorageKey);
+    if (typeof stored === "string" && stored.trim() !== "") {
+      this.deviceId = stored.trim();
+      return this.deviceId;
+    }
+
+    const randomUUID = globalThis.crypto?.randomUUID;
+    this.deviceId =
+      typeof randomUUID === "function"
+        ? randomUUID.call(globalThis.crypto)
+        : `device-${Date.now().toString(deviceIdRadix)}-${Math.random()
+            .toString(deviceIdRadix)
+            .slice(randomFractionPrefixLength)}`;
+    this.app.saveLocalStorage(deviceIdStorageKey, this.deviceId);
+    return this.deviceId;
+  }
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> => {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+};
+
+const hasCanonicalStoredSettings = (storedData: unknown, settings: Settings): boolean =>
+  isRecord(storedData) && JSON.stringify(storedData) === JSON.stringify(settings);
+
+const hasDifferentCredentialSettings = (left: Settings, right: Settings): boolean =>
+  left.apiTokenSecretId !== right.apiTokenSecretId || left.tokenStorage !== right.tokenStorage;
+
+const mergeExternalStoredSettings = (
+  storedData: unknown,
+  previousSettings: Settings,
+): Record<string, unknown> => {
+  if (!isRecord(storedData)) {
+    return { ...previousSettings };
+  }
+
+  const merged: Record<string, unknown> = { ...previousSettings, ...storedData };
+  const externalVersion =
+    typeof storedData.version === "number" && Number.isFinite(storedData.version)
+      ? Math.max(0, Math.floor(storedData.version))
+      : 0;
+  merged.version = Math.max(previousSettings.version, externalVersion);
+
+  // Preserve the legacy mapping migration path when an older device writes the old three-key
+  // representation. Otherwise the current projectSyncMappings value would mask those keys.
+  if (
+    !("projectSyncMappings" in storedData) &&
+    ("projectSyncFolder" in storedData ||
+      "projectSyncProject" in storedData ||
+      "projectSyncIncludeSubprojects" in storedData)
+  ) {
+    delete merged.projectSyncMappings;
+  }
+
+  return merged;
 };
 
 const projectSyncConfigFromSettings = (settings: Settings): ProjectSyncConfig => ({
@@ -673,3 +930,5 @@ const fingerprintCredential = async (token: string): Promise<string> => {
     byte.toString(hexadecimalRadix).padStart(byteHexWidth, "0"),
   ).join("");
 };
+
+class AutomaticProjectProjectionInvalidatedError extends Error {}

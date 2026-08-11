@@ -71,6 +71,30 @@
   min-width: 0;
 }
 
+.project-sync-writer-control {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--size-4-2);
+}
+
+.project-sync-writer-status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--size-4-1);
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+
+  &[data-state="this-device"] {
+    color: var(--text-success);
+  }
+
+  .obsidian-icon {
+    flex: 0 0 auto;
+  }
+}
+
 .setting-item:has(.project-sync-mappings-control) {
   align-items: flex-start;
   flex-direction: column;

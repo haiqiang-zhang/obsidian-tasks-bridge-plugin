@@ -10,6 +10,7 @@ import {
   makeManagedBody,
   makeTaskFrontmatter,
   replaceManagedBody,
+  replaceManagedTaskDocument,
 } from "./document";
 
 describe("project task documents", () => {
@@ -30,6 +31,7 @@ describe("project task documents", () => {
         project,
       }),
       description: "Read the transport requirements",
+      updatedAt: "2026-08-10T01:30:00.000Z",
     };
 
     expect(
@@ -51,6 +53,7 @@ describe("project task documents", () => {
       todoist_project_id_path: ["project-1"],
       todoist_labels: ["study"],
       todoist_priority: "P1",
+      todoist_updated_at: "2026-08-10T01:30:00.000Z",
       todoist_due_date: "2026-08-12",
       todoist_due_datetime: "2026-08-12T09:30:00.000Z",
       todoist_due_timezone: "Asia/Shanghai",
@@ -106,6 +109,30 @@ describe("project task documents", () => {
     expect(replaceManagedBody(before, replacement).content).toBe(
       `---\nuser: value\n---\n${replacement}\n\nUser notes`,
     );
+  });
+
+  it("updates frontmatter and the managed body as one document value", () => {
+    const content = `---\ntodoist_task_id: task-1\ntodoist_content: Old\nuser_property: keep me\n---\n${MANAGED_BODY_START}\nold\n${MANAGED_BODY_END}\n\nUser notes`;
+    const contentStart = content.indexOf("\n---", 4) + 4;
+    const replacement = `${MANAGED_BODY_START}\nnew\n${MANAGED_BODY_END}`;
+
+    const result = replaceManagedTaskDocument(
+      content,
+      {
+        todoist_task_id: "task-1",
+        todoist_content: "Old",
+        user_property: "keep me",
+      },
+      { todoist_task_id: "task-1", todoist_content: "New" },
+      replacement,
+      contentStart,
+    );
+
+    expect(result.changed).toBe(true);
+    expect(result.content).toContain("todoist_content: New");
+    expect(result.content).toContain("user_property: keep me");
+    expect(result.content).toContain(replacement);
+    expect(result.content).toContain("User notes");
   });
 
   it("inserts missing markers without discarding existing body content", () => {

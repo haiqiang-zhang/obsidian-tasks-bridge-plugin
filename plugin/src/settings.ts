@@ -108,6 +108,7 @@ const defaultSettings: Settings = {
 
   projectSyncEnabled: false,
   projectSyncMappings: [],
+  projectSyncWriterId: null,
 
   renderDateIcon: true,
   renderProjectIcon: true,
@@ -139,6 +140,8 @@ export type Settings = {
 
   projectSyncEnabled: boolean;
   projectSyncMappings: ProjectSyncMapping[];
+  /** Device-local ID selected as the only automatic writer for Project sync notes. */
+  projectSyncWriterId: string | null;
 
   renderDateIcon: boolean;
 
@@ -173,7 +176,12 @@ export const normalizeSettings = (value: unknown): Settings => {
   const storedKeys = new Set(Object.keys(stored));
 
   for (const key of Object.keys(defaultSettings) as Array<keyof Settings>) {
-    if (key !== "projectSyncEnabled" && key !== "projectSyncMappings" && storedKeys.has(key)) {
+    if (
+      key !== "projectSyncEnabled" &&
+      key !== "projectSyncMappings" &&
+      key !== "projectSyncWriterId" &&
+      storedKeys.has(key)
+    ) {
       normalizedRecord[key] = stored[key];
     }
   }
@@ -182,6 +190,10 @@ export const normalizeSettings = (value: unknown): Settings => {
   normalized.autoRefreshInterval = normalizeAutoRefreshInterval(stored.autoRefreshInterval);
 
   normalized.projectSyncEnabled = stored.projectSyncEnabled === true;
+  normalized.projectSyncWriterId =
+    typeof stored.projectSyncWriterId === "string" && stored.projectSyncWriterId.trim() !== ""
+      ? stored.projectSyncWriterId.trim()
+      : null;
   const mappings = normalizeStoredMappings(stored);
   normalized.projectSyncMappings = mappings.values;
   if (mappings.incompleteLegacyMapping || !hasCompleteProjectSyncMappings(mappings.values)) {

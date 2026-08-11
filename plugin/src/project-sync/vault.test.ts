@@ -44,8 +44,11 @@ class FakeVault {
   readonly files = new Map<string, { file: FakeFile; content: string }>();
   readonly folders = new Set<string>(["Sync"]);
   private readonly folderEntries = new Map<string, FakeFolder>();
+  beforeProcess: (() => void) | undefined;
+  beforeCreate: ((path: string) => void) | undefined;
   afterProcess: (() => void) | undefined;
   readonly process = vi.fn(async (file: TFile, update: (content: string) => string) => {
+    this.beforeProcess?.();
     const entry = this.files.get(file.path);
     if (entry === undefined) {
       throw new Error("Missing fake file");
@@ -95,6 +98,10 @@ class FakeVault {
   }
 
   async create(path: string, content: string): Promise<TFile> {
+    this.beforeCreate?.(path);
+    if (this.getAbstractFileByPath(path) !== null) {
+      throw new Error(`File already exists: ${path}`);
+    }
     return this.addFile(path, content);
   }
 
@@ -112,11 +119,14 @@ class FakeVault {
 
 class FakeFileManager {
   private readonly vault: FakeVault;
+  beforeProcessFrontMatter: (() => void) | undefined;
+  beforeRename: ((newPath: string) => void) | undefined;
   afterProcessFrontMatter: (() => void) | undefined;
   afterRename: (() => void) | undefined;
 
   readonly processFrontMatter = vi.fn(
     async (file: TFile, update: (frontmatter: Record<string, unknown>) => void) => {
+      this.beforeProcessFrontMatter?.();
       const entry = this.vault.files.get(file.path);
       if (entry === undefined) {
         throw new Error("Missing fake file");
@@ -131,9 +141,13 @@ class FakeFileManager {
   );
 
   readonly renameFile = vi.fn(async (file: TFile, newPath: string) => {
+    this.beforeRename?.(newPath);
     const entry = this.vault.files.get(file.path);
     if (entry === undefined) {
       throw new Error("Missing fake file");
+    }
+    if (this.vault.getAbstractFileByPath(newPath) !== null) {
+      throw new Error(`File already exists: ${newPath}`);
     }
     this.vault.files.delete(file.path);
     file.path = newPath;
@@ -238,6 +252,50 @@ describe("ObsidianProjectSyncVault", () => {
       todoist_project_path: ["Root", "Child"],
       todoist_project_id_path: ["root", "child"],
     });
+  });
+
+  it("scopes every Vault mutation to its exact affected paths", async () => {
+    const affectedPathSets: string[][] = [];
+    adapter = new ObsidianProjectSyncVault(
+      vault as unknown as Vault,
+      fileManager as unknown as FileManager,
+      () => new Set(),
+      async <T>(affectedPaths: readonly string[], operation: () => Promise<T>): Promise<T> => {
+        affectedPathSets.push([...affectedPaths]);
+        return await operation();
+      },
+    );
+    const root = makeProject("root", { name: "Root" });
+    const child = makeProject("child", { name: "Child", parentId: root.id });
+    const original = makeTask("task", { content: "Original", project: child });
+
+    await adapter.reconcile(
+      {
+        rootProjectId: root.id,
+        projects: [root, child],
+        tasks: [{ task: original, completed: false }],
+        syncedAt: "2026-08-10T00:00:00.000Z",
+      },
+      mapping,
+    );
+
+    expect(affectedPathSets).toContainEqual(["Sync/Child"]);
+    expect(affectedPathSets).toContainEqual(["Sync/Child/Original.md"]);
+
+    affectedPathSets.length = 0;
+    const renamed = makeTask("task", { content: "Renamed", project: child });
+    await adapter.reconcile(
+      {
+        rootProjectId: root.id,
+        projects: [root, child],
+        tasks: [{ task: renamed, completed: false }],
+        syncedAt: "2026-08-10T00:01:00.000Z",
+      },
+      mapping,
+    );
+
+    expect(affectedPathSets).toContainEqual(["Sync/Child/Original.md"]);
+    expect(affectedPathSets).toContainEqual(["Sync/Child/Original.md", "Sync/Child/Renamed.md"]);
   });
 
   it("backfills Bases task metadata in an existing managed note", async () => {
@@ -447,6 +505,46 @@ describe("ObsidianProjectSyncVault", () => {
     expect(vault.files.size).toBe(2);
     expect(vault.files.get(managedPath)?.file).toBe(managed?.file);
     expect(vault.files.has(managedPath.replace(" (2).md", " (3).md"))).toBe(false);
+  });
+
+  it("does not create a replacement task note while likely managed YAML is malformed", async () => {
+    const project = makeProject("root", { name: "Root" });
+    const task = makeTask("malformed-task", { content: "Task", project });
+    const path = "Sync/Task.md";
+    const malformed = [
+      "---",
+      "todoist_sync_managed: true",
+      "todoist_sync_mapping_id: mapping-root",
+      "todoist_sync_root_id: root",
+      "todoist_task_id: [malformed",
+      "---",
+      "User content",
+      "",
+    ].join("\n");
+    vault.addFile(path, malformed);
+
+    const result = await adapter.reconcile(
+      {
+        rootProjectId: project.id,
+        projects: [project],
+        tasks: [{ task, completed: false }],
+        syncedAt: "2026-08-10T00:00:00.000Z",
+      },
+      mapping,
+    );
+
+    expect(result).toMatchObject({ created: 0, updated: 0, moved: 0 });
+    expect(result.conflicts).toEqual([
+      expect.objectContaining({ path, message: expect.stringContaining("Could not parse") }),
+      expect.objectContaining({
+        taskId: task.id,
+        path,
+        projectionBlocked: true,
+        message: expect.stringContaining("creation was blocked"),
+      }),
+    ]);
+    expect(vault.files.get(path)?.content).toBe(malformed);
+    expect(vault.files.has("Sync/Task (2).md")).toBe(false);
   });
 
   it("moves an existing projection when a mapping root changes without duplicating the task", async () => {
@@ -675,7 +773,7 @@ describe("ObsidianProjectSyncVault", () => {
     });
   });
 
-  it("shares one managed-note Vault scan across every mapping in the same sync run", async () => {
+  it("shares one scan across mappings and rereads each note before mutating it", async () => {
     const first = makeProject("first", { name: "First" });
     const second = makeProject("second", { name: "Second" });
     const firstMapping: ProjectSyncMapping = {
@@ -730,7 +828,9 @@ describe("ObsidianProjectSyncVault", () => {
       scanToken,
     });
 
-    expect(read).toHaveBeenCalledTimes(2);
+    // Two reads build the shared scan; one additional live read per note prevents a stale scan from
+    // driving a frontmatter mutation after an external Obsidian Sync update.
+    expect(read).toHaveBeenCalledTimes(4);
   });
 
   it("does not stale a cached note after an earlier mapping moves it into the destination", async () => {
@@ -1080,10 +1180,434 @@ describe("ObsidianProjectSyncVault", () => {
     expect(vault.files.get(path)?.content).toBe(original);
   });
 
-  it.each([
-    "frontmatter",
-    "body",
-  ] as const)("checks cancellation after the %s mutation before starting the next stage", async (cancelAfter) => {
+  it("does not overwrite a note whose managed identity changes before the atomic update", async () => {
+    const project = makeProject("root", { name: "Root" });
+    const originalTask = makeTask("mutable", { content: "Original", project });
+    const changedTask = makeTask("mutable", { content: "Changed", project });
+    const path = "Sync/Original.md";
+    vault.addFile(
+      path,
+      renderNewTaskDocument(
+        makeTaskFrontmatter(
+          { task: originalTask, completed: false },
+          project.id,
+          testProjectPath(project),
+          "2026-08-09T00:00:00.000Z",
+          mapping.id,
+        ),
+        makeManagedBody(originalTask),
+      ),
+    );
+    vault.beforeProcess = () => {
+      const entry = vault.files.get(path);
+      if (entry !== undefined) {
+        entry.content = entry.content.replace("todoist_task_id: mutable", "todoist_task_id: other");
+      }
+    };
+
+    const result = await adapter.reconcile(
+      {
+        rootProjectId: project.id,
+        projects: [project],
+        tasks: [{ task: changedTask, completed: false }],
+        syncedAt: "2026-08-10T00:00:00.000Z",
+      },
+      mapping,
+    );
+
+    expect(result).toMatchObject({ updated: 0, moved: 0 });
+    expect(result.conflicts).toEqual([
+      expect.objectContaining({
+        taskId: originalTask.id,
+        path,
+        projectionBlocked: true,
+        message: expect.stringContaining("changed identity"),
+      }),
+    ]);
+    expect(parseFrontmatter(vault.files.get(path)?.content ?? "").todoist_task_id).toBe("other");
+    expect(vault.files.get(path)?.content).not.toContain("# Changed");
+    expect(fileManager.renameFile).not.toHaveBeenCalled();
+  });
+
+  it("does not overwrite a newer Todoist source revision", async () => {
+    const project = makeProject("root", { name: "Root" });
+    const currentTask = {
+      ...makeTask("revisioned", { content: "Current title", project }),
+      updatedAt: "2026-08-10T02:00:00.000Z",
+    };
+    const staleTask = {
+      ...makeTask("revisioned", { content: "Stale title", project }),
+      updatedAt: "2026-08-10T01:00:00.000Z",
+    };
+    const path = "Sync/Current title.md";
+    const original = renderNewTaskDocument(
+      makeTaskFrontmatter(
+        { task: currentTask, completed: false },
+        project.id,
+        testProjectPath(project),
+        "2026-08-10T02:00:00.000Z",
+        mapping.id,
+      ),
+      makeManagedBody(currentTask),
+    );
+    vault.addFile(path, original);
+
+    const result = await adapter.reconcile(
+      {
+        rootProjectId: project.id,
+        projects: [project],
+        tasks: [{ task: staleTask, completed: false }],
+        syncedAt: "2026-08-10T03:00:00.000Z",
+      },
+      mapping,
+    );
+
+    expect(result).toMatchObject({ updated: 0, moved: 0 });
+    expect(result.conflicts).toEqual([
+      expect.objectContaining({
+        taskId: staleTask.id,
+        path,
+        projectionBlocked: true,
+        message: expect.stringContaining("newer Todoist revision"),
+      }),
+    ]);
+    expect(vault.files.get(path)?.content).toBe(original);
+    expect(vault.process).not.toHaveBeenCalled();
+    expect(fileManager.renameFile).not.toHaveBeenCalled();
+  });
+
+  it("does not apply semantic changes from a snapshot without a source revision", async () => {
+    const project = makeProject("root", { name: "Root" });
+    const currentTask = {
+      ...makeTask("revisioned", { content: "Current title", project }),
+      updatedAt: "2026-08-10T02:00:00.000Z",
+    };
+    const unversionedTask = makeTask("revisioned", { content: "Unversioned title", project });
+    const path = "Sync/Current title.md";
+    const original = renderNewTaskDocument(
+      makeTaskFrontmatter(
+        { task: currentTask, completed: false },
+        project.id,
+        testProjectPath(project),
+        "2026-08-10T02:00:00.000Z",
+        mapping.id,
+      ),
+      makeManagedBody(currentTask),
+    );
+    vault.addFile(path, original);
+
+    const result = await adapter.reconcile(
+      {
+        rootProjectId: project.id,
+        projects: [project],
+        tasks: [{ task: unversionedTask, completed: false }],
+        syncedAt: "2026-08-10T03:00:00.000Z",
+      },
+      mapping,
+    );
+
+    expect(result).toMatchObject({ updated: 0, moved: 0 });
+    expect(result.conflicts).toEqual([
+      expect.objectContaining({
+        taskId: currentTask.id,
+        path,
+        projectionBlocked: true,
+        message: expect.stringContaining("incoming snapshot has none"),
+      }),
+    ]);
+    expect(vault.files.get(path)?.content).toBe(original);
+    expect(vault.files.has("Sync/Unversioned title.md")).toBe(false);
+    expect(vault.process).not.toHaveBeenCalled();
+    expect(fileManager.renameFile).not.toHaveBeenCalled();
+  });
+
+  it("leaves an unchanged revisioned note alone when the snapshot has no revision", async () => {
+    const project = makeProject("root", { name: "Root" });
+    const task = makeTask("revisioned", { content: "Current title", project });
+    const revisionedTask = { ...task, updatedAt: "2026-08-10T02:00:00.000Z" };
+    const path = "Sync/Current title.md";
+    const original = renderNewTaskDocument(
+      makeTaskFrontmatter(
+        { task: revisionedTask, completed: false },
+        project.id,
+        testProjectPath(project),
+        "2026-08-10T02:00:00.000Z",
+        mapping.id,
+      ),
+      makeManagedBody(revisionedTask),
+    );
+    vault.addFile(path, original);
+
+    const result = await adapter.reconcile(
+      {
+        rootProjectId: project.id,
+        projects: [project],
+        tasks: [{ task, completed: false }],
+        syncedAt: "2026-08-10T03:00:00.000Z",
+      },
+      mapping,
+    );
+
+    expect(result).toMatchObject({ updated: 0, moved: 0, unchanged: 1 });
+    expect(result.conflicts).toEqual([]);
+    expect(vault.files.get(path)?.content).toBe(original);
+    expect(vault.process).not.toHaveBeenCalled();
+  });
+
+  it("preserves a file that appears while a managed note is being created", async () => {
+    const project = makeProject("root", { name: "Root" });
+    const task = makeTask("create-race", { content: "Created remotely", project });
+    const path = "Sync/Created remotely.md";
+    vault.beforeCreate = (createdPath) => {
+      if (createdPath === path) {
+        vault.addFile(path, "Remote user-owned note\n");
+      }
+    };
+
+    const result = await adapter.reconcile(
+      {
+        rootProjectId: project.id,
+        projects: [project],
+        tasks: [{ task, completed: false }],
+        syncedAt: "2026-08-10T00:00:00.000Z",
+      },
+      mapping,
+    );
+
+    expect(result).toMatchObject({ created: 0, updated: 0, moved: 0 });
+    expect(result.conflicts).toEqual([
+      expect.objectContaining({ taskId: task.id, path, projectionBlocked: true }),
+    ]);
+    expect(vault.files.get(path)?.content).toBe("Remote user-owned note\n");
+  });
+
+  it("preserves a rename target that appears after the final path check", async () => {
+    const project = makeProject("root", { name: "Root" });
+    const originalTask = makeTask("rename-race", { content: "Original", project });
+    const changedTask = makeTask("rename-race", { content: "Changed", project });
+    const sourcePath = "Sync/Original.md";
+    const targetPath = "Sync/Changed.md";
+    vault.addFile(
+      sourcePath,
+      renderNewTaskDocument(
+        makeTaskFrontmatter(
+          { task: originalTask, completed: false },
+          project.id,
+          testProjectPath(project),
+          "2026-08-09T00:00:00.000Z",
+          mapping.id,
+        ),
+        makeManagedBody(originalTask),
+      ),
+    );
+    fileManager.beforeRename = (newPath) => {
+      if (newPath === targetPath) {
+        vault.addFile(targetPath, "Remote user-owned note\n");
+      }
+    };
+
+    const result = await adapter.reconcile(
+      {
+        rootProjectId: project.id,
+        projects: [project],
+        tasks: [{ task: changedTask, completed: false }],
+        syncedAt: "2026-08-10T00:00:00.000Z",
+      },
+      mapping,
+    );
+
+    expect(result).toMatchObject({ created: 0, moved: 0 });
+    expect(result.conflicts).toEqual([
+      expect.objectContaining({
+        taskId: changedTask.id,
+        path: sourcePath,
+        projectionBlocked: true,
+      }),
+    ]);
+    expect(vault.files.get(targetPath)?.content).toBe("Remote user-owned note\n");
+    expect(vault.files.has(sourcePath)).toBe(true);
+  });
+
+  it("does not mark a missing note after its identity changes externally", async () => {
+    const project = makeProject("root", { name: "Root" });
+    const task = makeTask("missing-race", { content: "Missing", project });
+    const path = "Sync/Missing.md";
+    vault.addFile(
+      path,
+      renderNewTaskDocument(
+        makeTaskFrontmatter(
+          { task, completed: false },
+          project.id,
+          testProjectPath(project),
+          "2026-08-09T00:00:00.000Z",
+          mapping.id,
+        ),
+        makeManagedBody(task),
+      ),
+    );
+    vault.beforeProcess = () => {
+      const entry = vault.files.get(path);
+      if (entry !== undefined) {
+        entry.content = entry.content.replace(
+          "todoist_task_id: missing-race",
+          "todoist_task_id: externally-changed",
+        );
+      }
+    };
+
+    const result = await adapter.reconcile(emptySnapshot(project), mapping);
+
+    expect(result).toMatchObject({ updated: 0, stale: 0 });
+    expect(result.conflicts).toEqual([
+      expect.objectContaining({ taskId: task.id, path, projectionBlocked: true }),
+    ]);
+    const frontmatter = parseFrontmatter(vault.files.get(path)?.content ?? "");
+    expect(frontmatter.todoist_task_id).toBe("externally-changed");
+    expect(frontmatter.todoist_sync_missing_count).toBe(0);
+  });
+
+  it("does not mark a task missing when the live note comes from a newer snapshot", async () => {
+    const project = makeProject("root", { name: "Root" });
+    const task = makeTask("newer-missing", { content: "Newer missing", project });
+    const path = "Sync/Newer missing.md";
+    const original = renderNewTaskDocument(
+      makeTaskFrontmatter(
+        { task, completed: false },
+        project.id,
+        testProjectPath(project),
+        "2026-08-10T02:00:00.000Z",
+        mapping.id,
+      ),
+      makeManagedBody(task),
+    );
+    vault.addFile(path, original);
+
+    const result = await adapter.reconcile(
+      {
+        rootProjectId: project.id,
+        projects: [project],
+        tasks: [],
+        syncedAt: "2026-08-10T01:00:00.000Z",
+      },
+      mapping,
+    );
+
+    expect(result).toMatchObject({ updated: 0, stale: 0 });
+    expect(result.conflicts).toEqual([
+      expect.objectContaining({
+        taskId: task.id,
+        path,
+        projectionBlocked: true,
+        message: expect.stringContaining("stale missing result"),
+      }),
+    ]);
+    expect(vault.files.get(path)?.content).toBe(original);
+    expect(vault.process).not.toHaveBeenCalled();
+  });
+
+  it("rechecks the missing snapshot fence inside the atomic Vault process callback", async () => {
+    const project = makeProject("root", { name: "Root" });
+    const task = {
+      ...makeTask("missing-revision-race", { content: "Missing race", project }),
+      updatedAt: "2026-08-10T00:00:00.000Z",
+    };
+    const path = "Sync/Missing race.md";
+    const original = renderNewTaskDocument(
+      makeTaskFrontmatter(
+        { task, completed: false },
+        project.id,
+        testProjectPath(project),
+        "2026-08-10T00:00:00.000Z",
+        mapping.id,
+      ),
+      makeManagedBody(task),
+    );
+    vault.addFile(path, original);
+    vault.beforeProcess = () => {
+      const entry = vault.files.get(path);
+      if (entry !== undefined) {
+        entry.content = entry.content.replace(
+          "todoist_updated_at: '2026-08-10T00:00:00.000Z'",
+          "todoist_updated_at: '2026-08-10T02:00:00.000Z'",
+        );
+      }
+    };
+
+    const result = await adapter.reconcile(
+      {
+        rootProjectId: project.id,
+        projects: [project],
+        tasks: [],
+        syncedAt: "2026-08-10T01:00:00.000Z",
+      },
+      mapping,
+    );
+
+    expect(result).toMatchObject({ updated: 0, stale: 0 });
+    expect(result.conflicts).toEqual([
+      expect.objectContaining({
+        taskId: task.id,
+        path,
+        projectionBlocked: true,
+        message: expect.stringContaining("stale missing result"),
+      }),
+    ]);
+    expect(parseFrontmatter(vault.files.get(path)?.content ?? "")).toMatchObject({
+      todoist_updated_at: "2026-08-10T02:00:00.000Z",
+      todoist_synced_at: "2026-08-10T00:00:00.000Z",
+      todoist_sync_missing_count: 0,
+    });
+    expect(vault.process).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not write when the run is invalidated before the atomic Vault process callback", async () => {
+    const project = makeProject("root", { name: "Root" });
+    const originalTask = makeTask("callback-fence", { content: "Original", project });
+    const changedTask = makeTask(originalTask.id, { content: "Changed", project });
+    const path = "Sync/Original.md";
+    const original = renderNewTaskDocument(
+      makeTaskFrontmatter(
+        { task: originalTask, completed: false },
+        project.id,
+        testProjectPath(project),
+        "2026-08-09T00:00:00.000Z",
+        mapping.id,
+      ),
+      makeManagedBody(originalTask),
+    );
+    vault.addFile(path, original);
+
+    let valid = true;
+    vault.beforeProcess = () => {
+      valid = false;
+    };
+    const invalidated = new Error("sync invalidated before callback");
+
+    await expect(
+      adapter.reconcile(
+        {
+          rootProjectId: project.id,
+          projects: [project],
+          tasks: [{ task: changedTask, completed: false }],
+          syncedAt: "2026-08-10T00:00:00.000Z",
+        },
+        mapping,
+        {
+          assertValid: () => {
+            if (!valid) {
+              throw invalidated;
+            }
+          },
+        },
+      ),
+    ).rejects.toBe(invalidated);
+
+    expect(vault.process).toHaveBeenCalledTimes(1);
+    expect(vault.files.get(path)?.content).toBe(original);
+    expect(fileManager.renameFile).not.toHaveBeenCalled();
+  });
+
+  it("checks cancellation after the atomic document mutation before renaming", async () => {
     const project = makeProject("root", { name: "Root" });
     const originalTask = makeTask("mutable", { content: "Original", project });
     const changedTask = makeTask("mutable", { content: "Changed", project });
@@ -1099,15 +1623,9 @@ describe("ObsidianProjectSyncVault", () => {
     );
 
     let valid = true;
-    if (cancelAfter === "frontmatter") {
-      fileManager.afterProcessFrontMatter = () => {
-        valid = false;
-      };
-    } else {
-      vault.afterProcess = () => {
-        valid = false;
-      };
-    }
+    vault.afterProcess = () => {
+      valid = false;
+    };
     const invalidated = new Error("sync invalidated");
 
     await expect(
@@ -1129,8 +1647,8 @@ describe("ObsidianProjectSyncVault", () => {
       ),
     ).rejects.toBe(invalidated);
 
-    expect(fileManager.processFrontMatter).toHaveBeenCalledTimes(1);
-    expect(vault.process).toHaveBeenCalledTimes(cancelAfter === "body" ? 1 : 0);
+    expect(fileManager.processFrontMatter).not.toHaveBeenCalled();
+    expect(vault.process).toHaveBeenCalledTimes(1);
     expect(fileManager.renameFile).not.toHaveBeenCalled();
   });
 

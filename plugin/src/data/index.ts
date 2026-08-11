@@ -519,7 +519,7 @@ export class TodoistAdapter {
   ): Promise<void> {
     const refreshes = Array.from(this.subscriptions.list(), (subscription) => {
       this.assertAccountGeneration(accountGeneration, operation);
-      return subscription.update();
+      return subscription.updateAfterMutation();
     });
     await Promise.all(refreshes);
     this.assertAccountGeneration(accountGeneration, operation);
@@ -589,6 +589,9 @@ class Subscription {
   private updateGeneration = 0;
   private resetGeneration = 0;
   private refreshInFlight: Promise<void> | undefined;
+  private mutationRefreshRequestedGeneration = 0;
+  private mutationRefreshCompletedGeneration = 0;
+  private mutationRefreshInFlight: Promise<void> | undefined;
   private loadMoreInFlight: Promise<void> | undefined;
 
   constructor(
@@ -621,26 +624,80 @@ class Subscription {
   }
 
   public update = async (): Promise<void> => {
-    if (!this.completedTasks) {
-      await this.performUpdate();
-      return;
-    }
+    await this.getOrStartRefresh();
+  };
 
+  private getOrStartRefresh(): Promise<void> {
     if (this.refreshInFlight !== undefined) {
-      await this.refreshInFlight;
-      return;
+      return this.refreshInFlight;
     }
 
-    const refresh = this.performUpdate();
-    this.refreshInFlight = refresh;
-    try {
-      await refresh;
-    } finally {
+    const refresh = this.performUpdate().finally(() => {
       if (this.refreshInFlight === refresh) {
         this.refreshInFlight = undefined;
       }
+    });
+    this.refreshInFlight = refresh;
+    return refresh;
+  }
+
+  /**
+   * Refresh after Todoist has confirmed a mutation.
+   *
+   * A regular refresh that was already in flight may contain the pre-mutation snapshot, so it
+   * cannot satisfy this request. Wait for it and issue one trailing refresh instead. Mutations
+   * confirmed while waiting are coalesced into that trailing request; a mutation confirmed while
+   * the trailing request itself is in flight schedules one more pass.
+   */
+  public updateAfterMutation = async (): Promise<void> => {
+    const resetGeneration = this.resetGeneration;
+    const requestGeneration = ++this.mutationRefreshRequestedGeneration;
+
+    while (
+      resetGeneration === this.resetGeneration &&
+      this.mutationRefreshCompletedGeneration < requestGeneration
+    ) {
+      await this.getOrStartMutationRefresh(resetGeneration);
     }
   };
+
+  private getOrStartMutationRefresh(resetGeneration: number): Promise<void> {
+    if (this.mutationRefreshInFlight !== undefined) {
+      return this.mutationRefreshInFlight;
+    }
+
+    const refresh = this.performMutationRefreshes(resetGeneration).finally(() => {
+      if (this.mutationRefreshInFlight === refresh) {
+        this.mutationRefreshInFlight = undefined;
+      }
+    });
+    this.mutationRefreshInFlight = refresh;
+    return refresh;
+  }
+
+  private async performMutationRefreshes(resetGeneration: number): Promise<void> {
+    while (
+      resetGeneration === this.resetGeneration &&
+      this.mutationRefreshCompletedGeneration < this.mutationRefreshRequestedGeneration
+    ) {
+      const refreshBeforeMutationFollowup = this.refreshInFlight;
+      if (refreshBeforeMutationFollowup !== undefined) {
+        await refreshBeforeMutationFollowup;
+      }
+      if (resetGeneration !== this.resetGeneration) {
+        return;
+      }
+
+      // Capture the target after the pre-existing request settles so all mutations confirmed while
+      // waiting are represented by the same trailing fetch.
+      const targetGeneration = this.mutationRefreshRequestedGeneration;
+      await this.getOrStartRefresh();
+      if (resetGeneration !== this.resetGeneration) {
+        return;
+      }
+      this.mutationRefreshCompletedGeneration = targetGeneration;
+    }
+  }
 
   private async performUpdate(): Promise<void> {
     const generation = ++this.updateGeneration;
@@ -808,6 +865,9 @@ class Subscription {
     this.updateGeneration++;
     this.resetGeneration++;
     this.refreshInFlight = undefined;
+    this.mutationRefreshRequestedGeneration = 0;
+    this.mutationRefreshCompletedGeneration = 0;
+    this.mutationRefreshInFlight = undefined;
     this.loadMoreInFlight = undefined;
     this.lastSuccessfulTasks = [];
     this.completedTasksProgress = undefined;

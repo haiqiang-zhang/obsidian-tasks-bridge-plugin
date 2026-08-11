@@ -32,6 +32,7 @@ describe("hydrate", () => {
     const apiTask = makeApiTask({
       id: "task-42",
       addedAt: "2024-06-15T10:30:00Z",
+      updatedAt: "2024-06-16T12:00:00Z",
       content: "Buy groceries",
       description: "Milk, eggs, bread",
       priority: 3,
@@ -45,6 +46,7 @@ describe("hydrate", () => {
 
     expect(task.id).toBe("task-42");
     expect(task.createdAt).toBe("2024-06-15T10:30:00Z");
+    expect(task.updatedAt).toBe("2024-06-16T12:00:00Z");
     expect(task.content).toBe("Buy groceries");
     expect(task.description).toBe("Milk, eggs, bread");
     expect(task.priority).toBe(3);

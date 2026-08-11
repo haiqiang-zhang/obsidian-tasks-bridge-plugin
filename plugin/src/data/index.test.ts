@@ -445,6 +445,100 @@ describe("TodoistAdapter", () => {
       }
     });
 
+    it("fetches a post-mutation snapshot when an older query refresh is already in flight", async () => {
+      const staleRefresh = deferred<ReturnType<typeof makeApiTask>[]>();
+      const postMutationRefresh = deferred<ReturnType<typeof makeApiTask>[]>();
+      const updatedTask = makeApiTask({ id: "task-1", content: "Updated remotely" });
+      vi.mocked(mockApi.updateTask).mockResolvedValue(updatedTask);
+      vi.mocked(mockApi.getTasks)
+        .mockImplementationOnce(async () => await staleRefresh.promise)
+        .mockImplementationOnce(async () => await postMutationRefresh.promise);
+      await adapter.initialize(mockApi);
+
+      let captured: SubscriptionResult = { type: "not-ready" };
+      const [, refresh] = adapter.subscribe("#test", (result) => {
+        captured = result;
+      });
+
+      const openingRefresh = refresh();
+      const updating = adapter.actions.updateTask("task-1", { content: "Updated remotely" });
+      await vi.waitFor(() => expect(mockApi.updateTask).toHaveBeenCalledOnce());
+      expect(mockApi.getTasks).toHaveBeenCalledOnce();
+
+      staleRefresh.resolve([makeApiTask({ id: "task-1", content: "Before mutation" })]);
+      await vi.waitFor(() => expect(mockApi.getTasks).toHaveBeenCalledTimes(2));
+
+      postMutationRefresh.resolve([updatedTask]);
+      await Promise.all([openingRefresh, updating]);
+
+      const result = captured as SubscriptionResult;
+      expect(result.type).toBe("success");
+      if (result.type === "success") {
+        expect(result.tasks).toMatchObject([{ id: "task-1", content: "Updated remotely" }]);
+      }
+    });
+
+    it("coalesces mutation follow-ups waiting behind the same older query refresh", async () => {
+      const staleRefresh = deferred<ReturnType<typeof makeApiTask>[]>();
+      const postMutationRefresh = deferred<ReturnType<typeof makeApiTask>[]>();
+      vi.mocked(mockApi.updateTask).mockResolvedValue(
+        makeApiTask({ id: "task-1", content: "Updated remotely" }),
+      );
+      vi.mocked(mockApi.reopenTask).mockResolvedValue(undefined);
+      vi.mocked(mockApi.getTasks)
+        .mockImplementationOnce(async () => await staleRefresh.promise)
+        .mockImplementationOnce(async () => await postMutationRefresh.promise);
+      await adapter.initialize(mockApi);
+
+      const [, refresh] = adapter.subscribe("#test", vi.fn());
+      const openingRefresh = refresh();
+      const updating = adapter.actions.updateTask("task-1", { content: "Updated remotely" });
+      const reopening = adapter.actions.reopenTask("task-2");
+      await vi.waitFor(() => {
+        expect(mockApi.updateTask).toHaveBeenCalledOnce();
+        expect(mockApi.reopenTask).toHaveBeenCalledOnce();
+      });
+      expect(mockApi.getTasks).toHaveBeenCalledOnce();
+
+      staleRefresh.resolve([]);
+      await vi.waitFor(() => expect(mockApi.getTasks).toHaveBeenCalledTimes(2));
+      expect(mockApi.getTasks).toHaveBeenCalledTimes(2);
+
+      postMutationRefresh.resolve([
+        makeApiTask({ id: "task-1", content: "Updated remotely" }),
+        makeApiTask({ id: "task-2", content: "Reopened" }),
+      ]);
+      await Promise.all([openingRefresh, updating, reopening]);
+
+      expect(mockApi.getTasks).toHaveBeenCalledTimes(2);
+    });
+
+    it("adds one more trailing refresh for a mutation confirmed during a mutation refresh", async () => {
+      const firstPostMutationRefresh = deferred<ReturnType<typeof makeApiTask>[]>();
+      const secondPostMutationRefresh = deferred<ReturnType<typeof makeApiTask>[]>();
+      vi.mocked(mockApi.updateTask)
+        .mockResolvedValueOnce(makeApiTask({ id: "task-1", content: "First update" }))
+        .mockResolvedValueOnce(makeApiTask({ id: "task-1", content: "Second update" }));
+      vi.mocked(mockApi.getTasks)
+        .mockImplementationOnce(async () => await firstPostMutationRefresh.promise)
+        .mockImplementationOnce(async () => await secondPostMutationRefresh.promise);
+      await adapter.initialize(mockApi);
+      adapter.subscribe("#test", vi.fn());
+
+      const firstUpdate = adapter.actions.updateTask("task-1", { content: "First update" });
+      await vi.waitFor(() => expect(mockApi.getTasks).toHaveBeenCalledOnce());
+
+      const secondUpdate = adapter.actions.updateTask("task-1", { content: "Second update" });
+      await vi.waitFor(() => expect(mockApi.updateTask).toHaveBeenCalledTimes(2));
+      firstPostMutationRefresh.resolve([makeApiTask({ id: "task-1", content: "First update" })]);
+      await vi.waitFor(() => expect(mockApi.getTasks).toHaveBeenCalledTimes(2));
+
+      secondPostMutationRefresh.resolve([makeApiTask({ id: "task-1", content: "Second update" })]);
+      await Promise.all([firstUpdate, secondUpdate]);
+
+      expect(mockApi.getTasks).toHaveBeenCalledTimes(2);
+    });
+
     it("does not refresh queries when updating the remote task fails", async () => {
       vi.mocked(mockApi.updateTask).mockRejectedValue(new Error("update failed"));
       await adapter.initialize(mockApi);
@@ -1340,43 +1434,40 @@ describe("TodoistAdapter", () => {
       expect(onTaskClosed).toHaveBeenCalledWith("task-1", expect.any(Date));
     });
 
-    it("should ignore an older refresh that finishes after a newer refresh", async () => {
+    it.each([
+      ["active-only", false],
+      ["completed-enabled", true],
+    ] as const)("coalesces concurrent %s refreshes", async (_label, completedTasks) => {
       await adapter.initialize(mockApi);
 
-      let resolveOlder: (tasks: ReturnType<typeof makeApiTask>[]) => void = () => {};
-      let resolveNewer: (tasks: ReturnType<typeof makeApiTask>[]) => void = () => {};
-      vi.mocked(mockApi.getTasks)
-        .mockImplementationOnce(
-          () =>
-            new Promise((resolve) => {
-              resolveOlder = resolve;
-            }),
-        )
-        .mockImplementationOnce(
-          () =>
-            new Promise((resolve) => {
-              resolveNewer = resolve;
-            }),
-        );
+      const response = deferred<ReturnType<typeof makeApiTask>[]>();
+      vi.mocked(mockApi.getTasks).mockImplementationOnce(async () => await response.promise);
 
       let captured: SubscriptionResult = { type: "not-ready" };
-      const [, refresh] = adapter.subscribe("#test", (result) => {
-        captured = result;
-      });
+      const [, refresh] = adapter.subscribe(
+        "#test",
+        (result) => {
+          captured = result;
+        },
+        [],
+        completedTasks,
+      );
 
-      const olderRefresh = refresh();
-      const newerRefresh = refresh();
-      resolveNewer([makeApiTask({ id: "newer-task" })]);
-      await newerRefresh;
-      resolveOlder([makeApiTask({ id: "older-task" })]);
-      await olderRefresh;
+      const firstRefresh = refresh();
+      const secondRefresh = refresh();
+      expect(mockApi.getTasks).toHaveBeenCalledOnce();
+
+      response.resolve([makeApiTask({ id: "refreshed-task" })]);
+      await Promise.all([firstRefresh, secondRefresh]);
 
       const result = captured as SubscriptionResult;
       expect(result.type).toBe("success");
       if (result.type !== "success") {
         return;
       }
-      expect(result.tasks.map((task) => task.id)).toEqual(["newer-task"]);
+      expect(result.tasks.map((task) => task.id)).toEqual(["refreshed-task"]);
+      expect(mockApi.getTasks).toHaveBeenCalledOnce();
+      expect(mockApi.getCompletedTasksPage).toHaveBeenCalledTimes(completedTasks ? 1 : 0);
     });
 
     it("should seed cached tasks and not re-add a completed task from an older refresh", async () => {

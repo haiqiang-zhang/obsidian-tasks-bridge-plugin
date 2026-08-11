@@ -579,6 +579,66 @@ describe("ProjectFolderSyncService", () => {
     expect(service.getStatus()).toEqual({ state: "idle" });
   });
 
+  it("does not restart a queued generation after it is invalidated while waiting", async () => {
+    const root = makeProject("root");
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const fetchProjectTasks = vi.fn(async () => {
+      await gate;
+      return { activeTasks: [], completedTasks: [] };
+    });
+    const vault = makeVault();
+    const service = new ProjectFolderSyncService(
+      { listProjects: () => [root], fetchProjectTasks },
+      vault,
+      config(),
+    );
+
+    const first = service.sync();
+    service.invalidate();
+    const queued = service.sync();
+    service.invalidate();
+    release?.();
+
+    await expect(first).resolves.toBeNull();
+    await expect(queued).resolves.toBeNull();
+    expect(fetchProjectTasks).toHaveBeenCalledTimes(1);
+    expect(vault.reconcile).not.toHaveBeenCalled();
+  });
+
+  it("restarts a queued generation when no newer invalidation supersedes it", async () => {
+    const root = makeProject("root");
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const fetchProjectTasks = vi
+      .fn<() => Promise<{ activeTasks: never[]; completedTasks: never[] }>>()
+      .mockImplementationOnce(async () => {
+        await gate;
+        return { activeTasks: [], completedTasks: [] };
+      })
+      .mockResolvedValue({ activeTasks: [], completedTasks: [] });
+    const vault = makeVault();
+    const service = new ProjectFolderSyncService(
+      { listProjects: () => [root], fetchProjectTasks },
+      vault,
+      config(),
+    );
+
+    const first = service.sync();
+    service.invalidate();
+    const queued = service.sync();
+    release?.();
+
+    await expect(first).resolves.toBeNull();
+    await expect(queued).resolves.toMatchObject({ conflicts: [] });
+    expect(fetchProjectTasks).toHaveBeenCalledTimes(2);
+    expect(vault.reconcile).toHaveBeenCalledOnce();
+  });
+
   it("does not start synchronization after disposal", async () => {
     const root = makeProject("root");
     const fetchProjectTasks = vi.fn(async () => ({ activeTasks: [], completedTasks: [] }));

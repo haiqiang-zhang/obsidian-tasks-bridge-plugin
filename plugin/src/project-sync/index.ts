@@ -1,4 +1,10 @@
 export {
+  isAutomaticProjectSyncWriter,
+  isProjectSyncPath,
+  PROJECT_SYNC_QUIET_PERIOD_MS,
+  ProjectSyncActivityTracker,
+} from "./autoSync";
+export {
   applyManagedFrontmatter,
   MANAGED_BODY_END,
   MANAGED_BODY_START,
@@ -36,5 +42,5 @@ export type {
   ProjectTaskPage,
   SnapshotTask,
 } from "./types";
-export type { OpenFilePathsProvider } from "./vault";
+export type { OpenFilePathsProvider, ProjectSyncInternalMutationRunner } from "./vault";
 export { ObsidianProjectSyncVault } from "./vault";

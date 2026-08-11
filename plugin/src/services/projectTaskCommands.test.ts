@@ -11,6 +11,7 @@ import type { ProjectSyncMapping, ProjectSyncResult } from "@/project-sync/types
 import {
   ProjectTaskCommandError,
   ProjectTaskCommandService,
+  type ProjectTaskProjectionCoordinator,
   ProjectTaskProjectionError,
 } from "./projectTaskCommands";
 
@@ -77,6 +78,7 @@ const managedFrontmatter = (overrides: ManagedFrontmatter = {}): ManagedFrontmat
 });
 
 type HarnessOptions = {
+  automaticProjectionAllowed?: boolean;
   enabled?: boolean;
   filePath?: string;
   frontmatter?: ManagedFrontmatter | undefined;
@@ -120,6 +122,21 @@ const makeHarness = (options: HarnessOptions = {}) => {
     mappings: options.mappings ?? [mapping()],
   }));
   const projectSync = { getConfig, invalidate, sync } as unknown as ProjectFolderSyncService;
+  const runAutomaticProjection = vi.fn(
+    async <T>(operation: (assertValid: () => void) => Promise<T>) => {
+      if (options.automaticProjectionAllowed === false) {
+        return { performed: false } as const;
+      }
+      return { performed: true, value: await operation(() => undefined) } as const;
+    },
+  );
+  const runInternalMutation = vi.fn(
+    async <T>(_affectedPaths: readonly string[], operation: () => Promise<T>) => await operation(),
+  );
+  const projectionCoordinator = {
+    runAutomaticProjection,
+    runInternalMutation,
+  } as ProjectTaskProjectionCoordinator;
 
   const service = new ProjectTaskCommandService(
     { getFileByPath } as unknown as Vault,
@@ -127,6 +144,7 @@ const makeHarness = (options: HarnessOptions = {}) => {
     { getFileCache } as unknown as MetadataCache,
     todoist,
     projectSync,
+    projectionCoordinator,
   );
 
   return {
@@ -137,6 +155,8 @@ const makeHarness = (options: HarnessOptions = {}) => {
     invalidate,
     frontmatter,
     processFrontMatter,
+    runAutomaticProjection,
+    runInternalMutation,
     service,
     sync,
     task,
@@ -287,6 +307,22 @@ describe("ProjectTaskCommandService", () => {
     expect(harness.invalidate.mock.invocationCallOrder[0]).toBeLessThan(
       harness.sync.mock.invocationCallOrder[0],
     );
+    expect(harness.runAutomaticProjection).toHaveBeenCalledWith(expect.any(Function));
+    expect(harness.runInternalMutation).not.toHaveBeenCalled();
+  });
+
+  it("updates Todoist without writing or reconciling on a device denied by automatic projection policy", async () => {
+    const harness = makeHarness({ automaticProjectionAllowed: false });
+    const params: UpdateTaskParams = { content: "Updated remotely" };
+
+    await expect(harness.service.updateTask(reference, params)).resolves.toEqual(harness.task);
+
+    expect(harness.actions.updateTask).toHaveBeenCalledWith(TASK_ID, params);
+    expect(harness.runAutomaticProjection).toHaveBeenCalledOnce();
+    expect(harness.runInternalMutation).not.toHaveBeenCalled();
+    expect(harness.processFrontMatter).not.toHaveBeenCalled();
+    expect(harness.invalidate).not.toHaveBeenCalled();
+    expect(harness.sync).not.toHaveBeenCalled();
   });
 
   it("completes only an active managed task and atomically projects its status", async () => {
@@ -362,7 +398,57 @@ describe("ProjectTaskCommandService", () => {
     expect(active.actions.reopenProjectTask).not.toHaveBeenCalled();
   });
 
-  it("returns the targeted projection without awaiting the queued canonical sync", async () => {
+  it.each([
+    {
+      name: "complete",
+      status: "active",
+      action: "closeProjectTask",
+      invoke: (service: ProjectTaskCommandService) => service.completeTask(reference),
+    },
+    {
+      name: "reopen",
+      status: "completed",
+      action: "reopenProjectTask",
+      invoke: (service: ProjectTaskCommandService) => service.reopenTask(reference),
+    },
+  ] as const)("changes Todoist for $name but does not project status on a device denied by policy", async (testCase) => {
+    const harness = makeHarness({
+      automaticProjectionAllowed: false,
+      frontmatter: managedFrontmatter({ todoist_status: testCase.status }),
+    });
+
+    const result = await testCase.invoke(harness.service);
+    await expect(result.projection).resolves.toBeUndefined();
+
+    expect(harness.actions[testCase.action]).toHaveBeenCalledWith(TASK_ID);
+    expect(harness.runAutomaticProjection).toHaveBeenCalledOnce();
+    expect(harness.runInternalMutation).not.toHaveBeenCalled();
+    expect(harness.processFrontMatter).not.toHaveBeenCalled();
+    expect(harness.invalidate).not.toHaveBeenCalled();
+    expect(harness.sync).not.toHaveBeenCalled();
+  });
+
+  it("limits targeted projection suppression to the exact managed note path", async () => {
+    const harness = makeHarness({
+      mappings: [
+        mapping({ previousFolders: ["Todoist/Previous Root"] }),
+        mapping({
+          folder: "Todoist/Other",
+          id: "mapping-2",
+          previousFolders: ["Todoist/Other Previous"],
+          project: { projectId: "root-2", projectName: "Other" },
+        }),
+      ],
+    });
+
+    const result = await harness.service.completeTask(reference);
+    await expect(result.projection).resolves.toBeUndefined();
+
+    expect(harness.runAutomaticProjection).toHaveBeenCalledWith(expect.any(Function));
+    expect(harness.runInternalMutation).toHaveBeenCalledWith([FILE_PATH], expect.any(Function));
+  });
+
+  it("keeps targeted status projection and canonical reconciliation in one coordinated write", async () => {
     const harness = makeHarness();
     const projectionWrite = deferred<void>();
     const canonicalSync = deferred<ProjectSyncResult | null>();
@@ -381,11 +467,50 @@ describe("ProjectTaskCommandService", () => {
     expect(harness.sync).not.toHaveBeenCalled();
 
     projectionWrite.resolve(undefined);
-    await expect(result.projection).resolves.toBeUndefined();
     await vi.waitFor(() => expect(harness.sync).toHaveBeenCalledOnce());
+    expect(harness.runAutomaticProjection).toHaveBeenCalledOnce();
+
+    let projectionSettled = false;
+    void result.projection.finally(() => {
+      projectionSettled = true;
+    });
+    await Promise.resolve();
+    expect(projectionSettled).toBe(false);
 
     canonicalSync.resolve(successResult());
-    await canonicalSync.promise;
+    await expect(result.projection).resolves.toBeUndefined();
+  });
+
+  it("does not write or reconcile when coordinator validity is lost before the atomic callback", async () => {
+    const harness = makeHarness();
+    const policyLost = new Error("Automatic projection policy changed");
+    let validityChecks = 0;
+    harness.runAutomaticProjection.mockImplementationOnce(async (operation) => {
+      try {
+        const value = await operation(() => {
+          validityChecks++;
+          if (validityChecks >= 2) {
+            throw policyLost;
+          }
+        });
+        return { performed: true, value } as const;
+      } catch (error: unknown) {
+        if (error === policyLost) {
+          return { performed: false } as const;
+        }
+        throw error;
+      }
+    });
+
+    const result = await harness.service.completeTask(reference);
+    await expect(result.projection).resolves.toBeUndefined();
+
+    expect(validityChecks).toBe(3);
+    expect(harness.processFrontMatter).toHaveBeenCalledOnce();
+    expect(harness.frontmatter).toMatchObject({ todoist_status: "active" });
+    expect(harness.frontmatter).not.toHaveProperty("todoist_completed");
+    expect(harness.frontmatter).not.toHaveProperty("todoist_completed_at");
+    expect(harness.sync).not.toHaveBeenCalled();
   });
 
   it("wraps an atomic status projection failure after the remote mutation succeeds", async () => {
@@ -483,6 +608,7 @@ describe("ProjectTaskCommandService", () => {
     expect(harness.processFrontMatter).not.toHaveBeenCalled();
     expect(harness.invalidate).not.toHaveBeenCalled();
     expect(harness.sync).not.toHaveBeenCalled();
+    expect(harness.runAutomaticProjection).not.toHaveBeenCalled();
   });
 
   it("wraps projection failure after a successful remote mutation without hiding its cause", async () => {
@@ -519,6 +645,7 @@ describe("ProjectTaskCommandService", () => {
     expect(harness.actions.updateTask).toHaveBeenCalledOnce();
     expect(harness.invalidate).not.toHaveBeenCalled();
     expect(harness.sync).not.toHaveBeenCalled();
+    expect(harness.runAutomaticProjection).not.toHaveBeenCalled();
   });
 
   it("reports a deferred target note as a post-mutation projection failure", async () => {

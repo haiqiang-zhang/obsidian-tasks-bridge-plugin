@@ -22,12 +22,12 @@ export const nl: DeepPartial<Translations> = {
       toggle: {
         label: "Automatisch verversen inschakelen",
         description:
-          "Queryblokken en projectsynchronisatie automatisch verversen met een gedeeld interval",
+          "Queryblokken op dit apparaat en projectsynchronisatie op het geselecteerde schrijfapparaat automatisch verversen met een gedeeld interval",
       },
       interval: {
         label: "Interval automatisch verversen",
         description:
-          "Het interval, in seconden, waarop queryblokken en projectsynchronisatie standaard worden ververst",
+          "Het interval, in seconden, voor queryblokken op dit apparaat en projectsynchronisatie op het geselecteerde schrijfapparaat",
       },
     },
     rendering: {

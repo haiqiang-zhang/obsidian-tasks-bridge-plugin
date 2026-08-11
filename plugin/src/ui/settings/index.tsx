@@ -14,6 +14,7 @@ import { LabelsControl } from "./LabelsControl";
 import { ProjectDropdownControl } from "./ProjectDropdownControl";
 import { ProjectSyncMappingsControl } from "./ProjectSyncMappingsControl";
 import { ProjectSyncNowControl } from "./ProjectSyncNowControl";
+import { ProjectSyncWriterControl } from "./ProjectSyncWriterControl";
 import { Setting } from "./SettingItem";
 import { TokenChecker } from "./TokenChecker";
 import "./styles.scss";
@@ -175,6 +176,16 @@ const SettingsRoot: React.FC<Props> = ({ plugin }) => {
             });
           }}
           onValidityChange={onProjectSyncValidityChange}
+        />
+      </Setting.Root>
+      <Setting.Root
+        name={i18n.projectSync.automaticWriter.label}
+        description={i18n.projectSync.automaticWriter.description}
+      >
+        <ProjectSyncWriterControl
+          state={plugin.getProjectSyncWriterState()}
+          onUseThisDevice={async () => await plugin.setThisDeviceAsAutomaticProjectSyncWriter()}
+          onStopUsingThisDevice={async () => await plugin.stopAutomaticProjectSyncOnThisDevice()}
         />
       </Setting.Root>
       <Setting.Root

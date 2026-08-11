@@ -1,3 +1,4 @@
+import { dump as dumpYaml } from "js-yaml";
 import {
   type FileManager,
   getFrontMatterInfo,
@@ -9,7 +10,6 @@ import {
 } from "obsidian";
 
 import {
-  applyManagedFrontmatter,
   ManagedBodyConflictError,
   type ManagedFrontmatter,
   type ManagedNoteIdentity,
@@ -17,7 +17,7 @@ import {
   makeTaskFrontmatter,
   readManagedNoteIdentity,
   renderNewTaskDocument,
-  replaceManagedBody,
+  replaceManagedTaskDocument,
 } from "./document";
 import { projectHierarchyPath } from "./hierarchy";
 import {
@@ -37,6 +37,10 @@ import type {
 } from "./types";
 
 export type OpenFilePathsProvider = () => Iterable<string>;
+export type ProjectSyncInternalMutationRunner = <T>(
+  affectedPaths: readonly string[],
+  operation: () => Promise<T>,
+) => Promise<T>;
 
 type ManagedFile = {
   file: TFile;
@@ -60,6 +64,7 @@ type ResolvedFilePath = {
 type ManagedFileScan = {
   configuredByTaskId: Map<string, ManagedFile[]>;
   ownedByTaskId: Map<string, ManagedFile[]>;
+  creationFencePaths: string[];
   unresolvedHistoricalOwnership: boolean;
 };
 
@@ -69,6 +74,13 @@ type IndexedVaultFile = {
   frontmatter?: ManagedFrontmatter;
   identity?: ManagedNoteIdentity | null;
   parseError?: string;
+};
+
+type LiveManagedNote = {
+  content: string;
+  contentStart: number;
+  frontmatter: ManagedFrontmatter;
+  identity: ManagedNoteIdentity;
 };
 
 const emptyResult = (): ProjectSyncResult => ({
@@ -84,9 +96,14 @@ const emptyResult = (): ProjectSyncResult => ({
 });
 
 const alwaysValidRun: ProjectSyncRunContext = { assertValid: () => undefined };
+const runMutationDirectly: ProjectSyncInternalMutationRunner = async (_affectedPaths, operation) =>
+  await operation();
 
 class ActiveManagedNoteError extends Error {}
 class HistoricalProjectionConflictError extends Error {}
+class ManagedNoteIdentityConflictError extends Error {}
+class ManagedPathRaceError extends Error {}
+class NoManagedDocumentChangeError extends Error {}
 
 class PortableVaultPathIndex {
   private readonly occupantsByPath = new Map<string, Set<TAbstractFile>>();
@@ -125,12 +142,19 @@ export class ObsidianProjectSyncVault {
   private readonly vault: Vault;
   private readonly fileManager: FileManager;
   private readonly openFilePaths: OpenFilePathsProvider;
+  private readonly runInternalMutation: ProjectSyncInternalMutationRunner;
   private readonly managedFileIndexes = new WeakMap<object, Promise<IndexedVaultFile[]>>();
 
-  constructor(vault: Vault, fileManager: FileManager, openFilePaths: OpenFilePathsProvider) {
+  constructor(
+    vault: Vault,
+    fileManager: FileManager,
+    openFilePaths: OpenFilePathsProvider,
+    runInternalMutation: ProjectSyncInternalMutationRunner = runMutationDirectly,
+  ) {
     this.vault = vault;
     this.fileManager = fileManager;
     this.openFilePaths = openFilePaths;
+    this.runInternalMutation = runInternalMutation;
   }
 
   public validateConfig(config: ProjectSyncConfig): void {
@@ -208,6 +232,7 @@ export class ObsidianProjectSyncVault {
     const {
       configuredByTaskId,
       ownedByTaskId: managedById,
+      creationFencePaths,
       unresolvedHistoricalOwnership,
     } = await this.scanManagedFiles(
       mapping.id,
@@ -274,6 +299,16 @@ export class ObsidianProjectSyncVault {
       // found anywhere inside the configured mapping roots so its user-authored content moves
       // with it instead of creating a duplicate in the destination mapping.
       const existing = configuredByTaskId.get(taskId)?.[0];
+      if (existing === undefined && creationFencePaths.length > 0) {
+        result.conflicts.push({
+          taskId,
+          path: creationFencePaths.join(", "),
+          message:
+            "Task-note creation was blocked because a likely managed note has unreadable frontmatter in this mapping; repair that note before synchronizing again",
+          projectionBlocked: true,
+        });
+        continue;
+      }
       const resolvedPath = this.resolveAvailableTaskFilePath(
         projectFolder,
         snapshotTask.task.content,
@@ -297,9 +332,10 @@ export class ObsidianProjectSyncVault {
       try {
         if (existing === undefined) {
           runContext.assertValid();
-          const created = await this.vault.create(
+          const created = await this.createManagedFile(
             targetPath,
             renderNewTaskDocument(desiredFrontmatter, desiredBody),
+            runContext,
           );
           pathIndex.add(created);
           managedFiles.add(created);
@@ -330,12 +366,16 @@ export class ObsidianProjectSyncVault {
           this.recordDeferred(result, taskId, existing?.file.path, error.message);
           continue;
         }
-        if (!(error instanceof ManagedBodyConflictError)) {
+        if (
+          !(error instanceof ManagedBodyConflictError) &&
+          !(error instanceof ManagedNoteIdentityConflictError) &&
+          !(error instanceof ManagedPathRaceError)
+        ) {
           throw error;
         }
         result.conflicts.push({
           taskId,
-          path: existing?.file.path,
+          path: existing?.file.path ?? targetPath,
           message: error.message,
           projectionBlocked: true,
         });
@@ -358,6 +398,7 @@ export class ObsidianProjectSyncVault {
           rootPath,
           pathIndex,
           managedFiles,
+          mapping.id,
           runContext,
         );
         if (migration.moved) {
@@ -384,6 +425,18 @@ export class ObsidianProjectSyncVault {
           });
           continue;
         }
+        if (
+          error instanceof ManagedNoteIdentityConflictError ||
+          error instanceof ManagedPathRaceError
+        ) {
+          result.conflicts.push({
+            taskId,
+            path: managed.file.path,
+            message: error.message,
+            projectionBlocked: true,
+          });
+          continue;
+        }
         throw error;
       }
 
@@ -397,10 +450,20 @@ export class ObsidianProjectSyncVault {
             result.unchanged++;
           }
         } catch (error: unknown) {
-          if (!(error instanceof ActiveManagedNoteError)) {
-            throw error;
+          if (error instanceof ActiveManagedNoteError) {
+            this.recordDeferred(result, taskId, managed.file.path, error.message);
+            continue;
           }
-          this.recordDeferred(result, taskId, managed.file.path, error.message);
+          if (error instanceof ManagedNoteIdentityConflictError) {
+            result.conflicts.push({
+              taskId,
+              path: managed.file.path,
+              message: error.message,
+              projectionBlocked: true,
+            });
+            continue;
+          }
+          throw error;
         }
         continue;
       }
@@ -409,11 +472,20 @@ export class ObsidianProjectSyncVault {
       try {
         missingUpdate = await this.markMissing(managed, snapshot.syncedAt, mapping.id, runContext);
       } catch (error: unknown) {
-        if (!(error instanceof ActiveManagedNoteError)) {
-          throw error;
+        if (error instanceof ActiveManagedNoteError) {
+          this.recordDeferred(result, taskId, managed.file.path, error.message);
+          continue;
         }
-        this.recordDeferred(result, taskId, managed.file.path, error.message);
-        continue;
+        if (error instanceof ManagedNoteIdentityConflictError) {
+          result.conflicts.push({
+            taskId,
+            path: managed.file.path,
+            message: error.message,
+            projectionBlocked: true,
+          });
+          continue;
+        }
+        throw error;
       }
       if (missingUpdate.updated) {
         result.updated++;
@@ -543,7 +615,7 @@ export class ObsidianProjectSyncVault {
 
       try {
         runContext.assertValid();
-        await this.vault.createFolder(path);
+        await this.runInternalMutation([path], async () => await this.vault.createFolder(path));
         runContext.assertValid();
         return path;
       } catch (error: unknown) {
@@ -632,6 +704,7 @@ export class ObsidianProjectSyncVault {
     currentRoot: string,
     pathIndex: PortableVaultPathIndex,
     managedFiles: ReadonlySet<TFile>,
+    mappingId: string,
     runContext: ProjectSyncRunContext,
   ): Promise<{ moved: boolean; usedAlternate: boolean; unmanagedCollision: boolean }> {
     const currentPath = normalizePath(managed.file.path);
@@ -666,8 +739,18 @@ export class ObsidianProjectSyncVault {
     runContext.assertValid();
     this.assertBackgroundFile(managed.file);
     await this.ensureParentFolders(resolved.path, currentRoot, pathIndex, runContext);
+    await this.assertLiveManagedIdentity(managed, mappingId, [managed.identity.projectId]);
+    this.assertLivePathAvailable(resolved.path, managed.file);
     const oldPath = managed.file.path;
-    await this.fileManager.renameFile(managed.file, resolved.path);
+    try {
+      await this.runInternalMutation(
+        [oldPath, resolved.path],
+        async () => await this.fileManager.renameFile(managed.file, resolved.path),
+      );
+    } catch (error: unknown) {
+      this.throwPathRaceIfOccupied(resolved.path, managed.file);
+      throw error;
+    }
     pathIndex.move(managed.file, oldPath, resolved.path);
     runContext.assertValid();
     return {
@@ -708,7 +791,10 @@ export class ObsidianProjectSyncVault {
           `Cannot migrate '${filePath}' because '${current}' is not a folder`,
         );
       }
-      const folder = await this.vault.createFolder(current);
+      const folder = await this.runInternalMutation(
+        [current],
+        async () => await this.vault.createFolder(current),
+      );
       pathIndex.add(folder);
     }
   }
@@ -722,53 +808,111 @@ export class ObsidianProjectSyncVault {
     runContext: ProjectSyncRunContext,
   ): Promise<{ moved: boolean; updated: boolean }> {
     runContext.assertValid();
-    const currentContent = await this.vault.read(managed.file);
+    const live = await this.readLiveManagedNote(managed.file);
     runContext.assertValid();
-    const frontmatterInfo = getFrontMatterInfo(currentContent);
-    const bodyPreview = replaceManagedBody(
-      currentContent,
-      desiredBody,
-      frontmatterInfo.contentStart,
+    const desiredIdentity = this.requireLiveManagedIdentity(desiredFrontmatter, targetPath);
+    this.assertManagedIdentityTransition(
+      managed.identity,
+      live.identity,
+      desiredIdentity,
+      managed.file.path,
     );
     const moved = managed.file.path !== targetPath;
-    const comparisonFrontmatter = { ...desiredFrontmatter };
-    if (typeof managed.frontmatter.todoist_synced_at === "string") {
-      comparisonFrontmatter.todoist_synced_at = managed.frontmatter.todoist_synced_at;
+    const comparisonFrontmatter = this.makeComparisonFrontmatter(
+      live.frontmatter,
+      desiredFrontmatter,
+    );
+    const preview = replaceManagedTaskDocument(
+      live.content,
+      live.frontmatter,
+      comparisonFrontmatter,
+      desiredBody,
+      live.contentStart,
+    );
+    if (preview.changed) {
+      this.assertDesiredSourceRevisionCanUpdate(
+        live.frontmatter,
+        desiredFrontmatter,
+        managed.file.path,
+      );
     }
-    const frontmatterPreview = { ...managed.frontmatter };
-    const managedFieldsChanged = applyManagedFrontmatter(frontmatterPreview, comparisonFrontmatter);
-    const frontmatterChanged = managedFieldsChanged || bodyPreview.changed || moved;
+    let documentUpdated = false;
 
-    if (frontmatterChanged) {
+    if (preview.changed || moved) {
       runContext.assertValid();
       this.assertBackgroundFile(managed.file);
-      await this.fileManager.processFrontMatter(managed.file, (frontmatter: unknown) => {
-        if (!isRecord(frontmatter)) {
-          throw new Error(`Invalid frontmatter in '${managed.file.path}'`);
+      try {
+        await this.processFileInternally(managed.file, (content) => {
+          runContext.assertValid();
+          const current = this.parseLiveManagedNote(content, managed.file.path);
+          this.assertManagedIdentityTransition(
+            managed.identity,
+            current.identity,
+            desiredIdentity,
+            managed.file.path,
+          );
+          const currentComparison = this.makeComparisonFrontmatter(
+            current.frontmatter,
+            desiredFrontmatter,
+          );
+          const currentPreview = replaceManagedTaskDocument(
+            content,
+            current.frontmatter,
+            currentComparison,
+            desiredBody,
+            current.contentStart,
+          );
+          if (currentPreview.changed) {
+            this.assertDesiredSourceRevisionCanUpdate(
+              current.frontmatter,
+              desiredFrontmatter,
+              managed.file.path,
+            );
+          }
+          if (!currentPreview.changed && !moved) {
+            throw new NoManagedDocumentChangeError();
+          }
+
+          const update = replaceManagedTaskDocument(
+            content,
+            current.frontmatter,
+            this.makeWriteFrontmatter(current.frontmatter, desiredFrontmatter),
+            desiredBody,
+            current.contentStart,
+          );
+          if (!update.changed) {
+            throw new NoManagedDocumentChangeError();
+          }
+          documentUpdated = true;
+          return update.content;
+        });
+      } catch (error: unknown) {
+        if (!(error instanceof NoManagedDocumentChangeError)) {
+          throw error;
         }
-        applyManagedFrontmatter(frontmatter, desiredFrontmatter);
-      });
-      runContext.assertValid();
-    }
-    if (bodyPreview.changed) {
-      runContext.assertValid();
-      this.assertBackgroundFile(managed.file);
-      await this.vault.process(managed.file, (content) => {
-        const info = getFrontMatterInfo(content);
-        return replaceManagedBody(content, desiredBody, info.contentStart).content;
-      });
+      }
       runContext.assertValid();
     }
 
     if (moved) {
       runContext.assertValid();
       this.assertBackgroundFile(managed.file);
+      await this.assertLiveManagedIdentityTransition(managed, desiredIdentity);
+      this.assertLivePathAvailable(targetPath, managed.file);
       const oldPath = managed.file.path;
-      await this.fileManager.renameFile(managed.file, targetPath);
+      try {
+        await this.runInternalMutation(
+          [oldPath, targetPath],
+          async () => await this.fileManager.renameFile(managed.file, targetPath),
+        );
+      } catch (error: unknown) {
+        this.throwPathRaceIfOccupied(targetPath, managed.file);
+        throw error;
+      }
       pathIndex.move(managed.file, oldPath, targetPath);
       runContext.assertValid();
     }
-    return { moved, updated: frontmatterChanged || bodyPreview.changed };
+    return { moved, updated: documentUpdated || moved };
   }
 
   private async markMissing(
@@ -777,40 +921,70 @@ export class ObsidianProjectSyncVault {
     mappingId: string,
     runContext: ProjectSyncRunContext,
   ): Promise<{ updated: boolean; becameStale: boolean }> {
-    const nextMissingCount = Math.min(2, managed.identity.missingCount + 1);
-    const becameStale = managed.identity.missingCount < 2 && nextMissingCount >= 2;
-    const alreadyStale =
-      managed.frontmatter.todoist_status === "stale" &&
-      typeof managed.frontmatter.todoist_stale_since === "string";
-    const hasCurrentMappingId = managed.identity.mappingId === mappingId;
-    if (nextMissingCount === managed.identity.missingCount && alreadyStale && hasCurrentMappingId) {
+    runContext.assertValid();
+    const live = await this.readLiveManagedNote(managed.file);
+    runContext.assertValid();
+    this.assertSameManagedIdentity(
+      managed.identity,
+      live.identity,
+      mappingId,
+      [managed.identity.projectId],
+      managed.file.path,
+    );
+    this.assertMissingSnapshotNotOlder(live.frontmatter, syncedAt, managed.file.path);
+    if (!this.needsMissingUpdate(live.frontmatter, live.identity, mappingId)) {
       return { updated: false, becameStale: false };
     }
+
     let updated = false;
+    let becameStale = false;
 
     runContext.assertValid();
     this.assertBackgroundFile(managed.file);
-    await this.fileManager.processFrontMatter(managed.file, (frontmatter: unknown) => {
-      if (!isRecord(frontmatter)) {
-        throw new Error(`Invalid frontmatter in '${managed.file.path}'`);
+    try {
+      await this.processFileInternally(managed.file, (content) => {
+        runContext.assertValid();
+        const current = this.parseLiveManagedNote(content, managed.file.path);
+        this.assertSameManagedIdentity(
+          managed.identity,
+          current.identity,
+          mappingId,
+          [managed.identity.projectId],
+          managed.file.path,
+        );
+        this.assertMissingSnapshotNotOlder(current.frontmatter, syncedAt, managed.file.path);
+        if (!this.needsMissingUpdate(current.frontmatter, current.identity, mappingId)) {
+          throw new NoManagedDocumentChangeError();
+        }
+
+        const nextFrontmatter = { ...current.frontmatter };
+        const nextMissingCount = Math.min(2, current.identity.missingCount + 1);
+        becameStale = current.identity.missingCount < 2 && nextMissingCount >= 2;
+        if (nextFrontmatter.todoist_sync_missing_count !== nextMissingCount) {
+          nextFrontmatter.todoist_sync_missing_count = nextMissingCount;
+          updated = true;
+        }
+        if (nextFrontmatter.todoist_sync_mapping_id !== mappingId) {
+          nextFrontmatter.todoist_sync_mapping_id = mappingId;
+          updated = true;
+        }
+        if (nextMissingCount >= 2 && nextFrontmatter.todoist_status !== "stale") {
+          nextFrontmatter.todoist_status = "stale";
+          updated = true;
+        }
+        if (nextMissingCount >= 2 && typeof nextFrontmatter.todoist_stale_since !== "string") {
+          nextFrontmatter.todoist_stale_since = syncedAt;
+          updated = true;
+        }
+
+        const yaml = dumpYaml(nextFrontmatter, { lineWidth: -1, noRefs: true });
+        return `---\n${yaml}---${content.slice(current.contentStart)}`;
+      });
+    } catch (error: unknown) {
+      if (!(error instanceof NoManagedDocumentChangeError)) {
+        throw error;
       }
-      if (frontmatter.todoist_sync_missing_count !== nextMissingCount) {
-        frontmatter.todoist_sync_missing_count = nextMissingCount;
-        updated = true;
-      }
-      if (frontmatter.todoist_sync_mapping_id !== mappingId) {
-        frontmatter.todoist_sync_mapping_id = mappingId;
-        updated = true;
-      }
-      if (nextMissingCount >= 2 && frontmatter.todoist_status !== "stale") {
-        frontmatter.todoist_status = "stale";
-        updated = true;
-      }
-      if (nextMissingCount >= 2 && typeof frontmatter.todoist_stale_since !== "string") {
-        frontmatter.todoist_stale_since = syncedAt;
-        updated = true;
-      }
-    });
+    }
     runContext.assertValid();
 
     return { updated, becameStale };
@@ -821,28 +995,331 @@ export class ObsidianProjectSyncVault {
     mappingId: string,
     runContext: ProjectSyncRunContext,
   ): Promise<boolean> {
-    const needsUpdate =
-      managed.frontmatter.todoist_status !== "out_of_scope" ||
-      managed.identity.missingCount !== 0 ||
-      managed.identity.mappingId !== mappingId ||
-      "todoist_stale_since" in managed.frontmatter;
-    if (!needsUpdate) {
+    runContext.assertValid();
+    const live = await this.readLiveManagedNote(managed.file);
+    runContext.assertValid();
+    this.assertSameManagedIdentity(
+      managed.identity,
+      live.identity,
+      mappingId,
+      [managed.identity.projectId],
+      managed.file.path,
+    );
+    if (!this.needsOutOfScopeUpdate(live.frontmatter, live.identity, mappingId)) {
       return false;
     }
 
+    let updated = false;
     runContext.assertValid();
     this.assertBackgroundFile(managed.file);
-    await this.fileManager.processFrontMatter(managed.file, (frontmatter: unknown) => {
-      if (!isRecord(frontmatter)) {
-        throw new Error(`Invalid frontmatter in '${managed.file.path}'`);
+    try {
+      await this.processFrontmatterInternally(managed.file, (frontmatter: unknown) => {
+        runContext.assertValid();
+        if (!isRecord(frontmatter)) {
+          throw new ManagedNoteIdentityConflictError(
+            `Managed note '${managed.file.path}' no longer has valid frontmatter`,
+          );
+        }
+        const identity = this.requireLiveManagedIdentity(frontmatter, managed.file.path);
+        this.assertSameManagedIdentity(
+          managed.identity,
+          identity,
+          mappingId,
+          [managed.identity.projectId],
+          managed.file.path,
+        );
+        if (!this.needsOutOfScopeUpdate(frontmatter, identity, mappingId)) {
+          throw new NoManagedDocumentChangeError();
+        }
+
+        frontmatter.todoist_status = "out_of_scope";
+        frontmatter.todoist_sync_mapping_id = mappingId;
+        frontmatter.todoist_sync_missing_count = 0;
+        delete frontmatter.todoist_stale_since;
+        updated = true;
+      });
+    } catch (error: unknown) {
+      if (!(error instanceof NoManagedDocumentChangeError)) {
+        throw error;
       }
-      frontmatter.todoist_status = "out_of_scope";
-      frontmatter.todoist_sync_mapping_id = mappingId;
-      frontmatter.todoist_sync_missing_count = 0;
-      delete frontmatter.todoist_stale_since;
-    });
+    }
     runContext.assertValid();
-    return true;
+    return updated;
+  }
+
+  private async createManagedFile(
+    path: string,
+    content: string,
+    runContext: ProjectSyncRunContext,
+  ): Promise<TFile> {
+    runContext.assertValid();
+    this.assertLivePathAvailable(path);
+    let created: TFile;
+    try {
+      created = await this.runInternalMutation(
+        [path],
+        async () => await this.vault.create(path, content),
+      );
+    } catch (error: unknown) {
+      this.throwPathRaceIfOccupied(path);
+      throw error;
+    }
+    runContext.assertValid();
+    return created;
+  }
+
+  private async processFileInternally(
+    file: TFile,
+    processor: (content: string) => string,
+  ): Promise<void> {
+    await this.runInternalMutation([file.path], async () => {
+      await this.vault.process(file, processor);
+    });
+  }
+
+  private async processFrontmatterInternally(
+    file: TFile,
+    processor: (frontmatter: unknown) => void,
+  ): Promise<void> {
+    await this.runInternalMutation([file.path], async () => {
+      await this.fileManager.processFrontMatter(file, processor);
+    });
+  }
+
+  private async readLiveManagedNote(file: TFile): Promise<LiveManagedNote> {
+    const content = await this.vault.read(file);
+    return this.parseLiveManagedNote(content, file.path);
+  }
+
+  private parseLiveManagedNote(content: string, path: string): LiveManagedNote {
+    const info = getFrontMatterInfo(content);
+    if (!info.exists) {
+      throw new ManagedNoteIdentityConflictError(
+        `Managed note '${path}' no longer has frontmatter; synchronization was not applied`,
+      );
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = parseYaml(info.frontmatter);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new ManagedNoteIdentityConflictError(
+        `Managed note '${path}' has invalid frontmatter: ${message}`,
+      );
+    }
+    if (!isRecord(parsed)) {
+      throw new ManagedNoteIdentityConflictError(
+        `Managed note '${path}' no longer has valid frontmatter; synchronization was not applied`,
+      );
+    }
+
+    return {
+      content,
+      contentStart: info.contentStart,
+      frontmatter: parsed,
+      identity: this.requireLiveManagedIdentity(parsed, path),
+    };
+  }
+
+  private requireLiveManagedIdentity(
+    frontmatter: ManagedFrontmatter,
+    path: string,
+  ): ManagedNoteIdentity {
+    const identity = readManagedNoteIdentity(frontmatter);
+    if (identity === null) {
+      throw new ManagedNoteIdentityConflictError(
+        `Managed note '${path}' changed ownership before synchronization; it was not overwritten`,
+      );
+    }
+    return identity;
+  }
+
+  private assertSameManagedIdentity(
+    expected: ManagedNoteIdentity,
+    current: ManagedNoteIdentity,
+    targetMappingId: string | undefined,
+    allowedProjectIds: readonly string[],
+    path: string,
+  ): void {
+    const mappingMatches =
+      current.mappingId === expected.mappingId ||
+      (expected.mappingId === undefined && current.mappingId === targetMappingId);
+    const projectMatches = allowedProjectIds.includes(current.projectId);
+    if (
+      current.taskId !== expected.taskId ||
+      current.rootProjectId !== expected.rootProjectId ||
+      !mappingMatches ||
+      !projectMatches
+    ) {
+      throw new ManagedNoteIdentityConflictError(
+        `Managed note '${path}' changed identity before synchronization; it was not overwritten`,
+      );
+    }
+  }
+
+  private assertManagedIdentityTransition(
+    expected: ManagedNoteIdentity,
+    current: ManagedNoteIdentity,
+    desired: ManagedNoteIdentity,
+    path: string,
+  ): void {
+    if (sameManagedOwnership(current, expected) || sameManagedOwnership(current, desired)) {
+      return;
+    }
+    throw new ManagedNoteIdentityConflictError(
+      `Managed note '${path}' changed identity before synchronization; it was not overwritten`,
+    );
+  }
+
+  private async assertLiveManagedIdentity(
+    managed: ManagedFile,
+    targetMappingId: string | undefined,
+    allowedProjectIds: readonly string[],
+  ): Promise<void> {
+    const live = await this.readLiveManagedNote(managed.file);
+    this.assertSameManagedIdentity(
+      managed.identity,
+      live.identity,
+      targetMappingId,
+      allowedProjectIds,
+      managed.file.path,
+    );
+  }
+
+  private async assertLiveManagedIdentityTransition(
+    managed: ManagedFile,
+    desired: ManagedNoteIdentity,
+  ): Promise<void> {
+    const live = await this.readLiveManagedNote(managed.file);
+    this.assertManagedIdentityTransition(
+      managed.identity,
+      live.identity,
+      desired,
+      managed.file.path,
+    );
+  }
+
+  private makeComparisonFrontmatter(
+    current: ManagedFrontmatter,
+    desired: ManagedFrontmatter,
+  ): ManagedFrontmatter {
+    const comparison = this.makeWriteFrontmatter(current, desired);
+    if (typeof current.todoist_synced_at === "string") {
+      comparison.todoist_synced_at = current.todoist_synced_at;
+    }
+    return comparison;
+  }
+
+  private makeWriteFrontmatter(
+    current: ManagedFrontmatter,
+    desired: ManagedFrontmatter,
+  ): ManagedFrontmatter {
+    const write = { ...desired };
+    if (
+      typeof desired.todoist_updated_at !== "string" &&
+      typeof current.todoist_updated_at === "string"
+    ) {
+      write.todoist_updated_at = current.todoist_updated_at;
+    }
+    return write;
+  }
+
+  private assertDesiredSourceRevisionCanUpdate(
+    current: ManagedFrontmatter,
+    desired: ManagedFrontmatter,
+    path: string,
+  ): void {
+    const currentRevision = readTimestamp(current.todoist_updated_at);
+    const desiredRevision = readTimestamp(desired.todoist_updated_at);
+    if (typeof current.todoist_updated_at === "string" && currentRevision === undefined) {
+      throw new ManagedNoteIdentityConflictError(
+        `Managed note '${path}' contains an unreadable Todoist revision; the incoming snapshot was not applied`,
+      );
+    }
+    if (typeof current.todoist_updated_at === "string" && desiredRevision === undefined) {
+      throw new ManagedNoteIdentityConflictError(
+        `Managed note '${path}' contains a Todoist revision, but the incoming snapshot has none; the unversioned snapshot was not applied`,
+      );
+    }
+    if (
+      currentRevision !== undefined &&
+      desiredRevision !== undefined &&
+      desiredRevision < currentRevision
+    ) {
+      throw new ManagedNoteIdentityConflictError(
+        `Managed note '${path}' contains a newer Todoist revision; the stale snapshot was not applied`,
+      );
+    }
+  }
+
+  private assertMissingSnapshotNotOlder(
+    current: ManagedFrontmatter,
+    syncedAt: string,
+    path: string,
+  ): void {
+    const snapshotTimestamp = readTimestamp(syncedAt);
+    const projectedTimestamp = readTimestamp(current.todoist_synced_at);
+    const sourceRevision = readTimestamp(current.todoist_updated_at);
+    const hasUnreadableProjectionTimestamp =
+      typeof current.todoist_synced_at === "string" && projectedTimestamp === undefined;
+    const hasUnreadableSourceRevision =
+      typeof current.todoist_updated_at === "string" && sourceRevision === undefined;
+    if (
+      snapshotTimestamp === undefined ||
+      hasUnreadableProjectionTimestamp ||
+      hasUnreadableSourceRevision ||
+      (projectedTimestamp !== undefined && projectedTimestamp > snapshotTimestamp) ||
+      (sourceRevision !== undefined && sourceRevision > snapshotTimestamp)
+    ) {
+      throw new ManagedNoteIdentityConflictError(
+        `Managed note '${path}' contains a newer or unreadable Todoist snapshot revision; the stale missing result was not applied`,
+      );
+    }
+  }
+
+  private needsMissingUpdate(
+    frontmatter: ManagedFrontmatter,
+    identity: ManagedNoteIdentity,
+    mappingId: string,
+  ): boolean {
+    const nextMissingCount = Math.min(2, identity.missingCount + 1);
+    return (
+      nextMissingCount !== identity.missingCount ||
+      identity.mappingId !== mappingId ||
+      (nextMissingCount >= 2 && frontmatter.todoist_status !== "stale") ||
+      (nextMissingCount >= 2 && typeof frontmatter.todoist_stale_since !== "string")
+    );
+  }
+
+  private needsOutOfScopeUpdate(
+    frontmatter: ManagedFrontmatter,
+    identity: ManagedNoteIdentity,
+    mappingId: string,
+  ): boolean {
+    return (
+      frontmatter.todoist_status !== "out_of_scope" ||
+      identity.missingCount !== 0 ||
+      identity.mappingId !== mappingId ||
+      "todoist_stale_since" in frontmatter
+    );
+  }
+
+  private assertLivePathAvailable(path: string, current?: TAbstractFile): void {
+    const occupants = new PortableVaultPathIndex(this.vault.getAllLoadedFiles()).occupants(
+      path,
+      current,
+    );
+    if (occupants.length === 0) {
+      return;
+    }
+    throw new ManagedPathRaceError(
+      `Task path '${path}' changed while synchronization was running; no file was overwritten`,
+    );
+  }
+
+  private throwPathRaceIfOccupied(path: string, current?: TAbstractFile): void {
+    this.assertLivePathAvailable(path, current);
   }
 
   private async scanManagedFiles(
@@ -855,6 +1332,7 @@ export class ObsidianProjectSyncVault {
   ): Promise<ManagedFileScan> {
     const configuredByTaskId = new Map<string, ManagedFile[]>();
     const ownedByTaskId = new Map<string, ManagedFile[]>();
+    const creationFencePaths = new Set<string>();
     const configuredRootPaths = Array.from(new Set(configuredRoots.map(({ path }) => path)));
     const ownedRootPaths = configuredRoots
       .filter((root) => root.mappingId === mappingId && root.rootProjectId === rootProjectId)
@@ -878,6 +1356,7 @@ export class ObsidianProjectSyncVault {
           (content.includes(mappingId) || content.includes(rootProjectId));
         const likelyOwnedCurrentNote = isInCurrentRoot && content.includes("todoist_sync_managed");
         if (likelyOwnedCurrentNote || likelyOwnedHistoricalNote) {
+          creationFencePaths.add(file.path);
           conflicts.push({
             path: file.path,
             message: `Could not parse managed note frontmatter: ${indexed.parseError}`,
@@ -901,11 +1380,13 @@ export class ObsidianProjectSyncVault {
           (frontmatter.todoist_sync_mapping_id === mappingId ||
             (frontmatter.todoist_sync_mapping_id === undefined &&
               frontmatter.todoist_sync_root_id === rootProjectId));
-        if (likelyOwnedHistoricalNote) {
-          unresolvedHistoricalOwnership = true;
+        const likelyOwnedCurrentNote = isInCurrentRoot && frontmatter.todoist_sync_managed === true;
+        if (likelyOwnedCurrentNote || likelyOwnedHistoricalNote) {
+          creationFencePaths.add(file.path);
+          unresolvedHistoricalOwnership ||= likelyOwnedHistoricalNote;
           conflicts.push({
             path: file.path,
-            message: "Could not read the ownership fields of a historical managed note",
+            message: "Could not read the ownership fields of a managed note",
           });
         }
         continue;
@@ -932,7 +1413,12 @@ export class ObsidianProjectSyncVault {
       }
     }
 
-    return { configuredByTaskId, ownedByTaskId, unresolvedHistoricalOwnership };
+    return {
+      configuredByTaskId,
+      ownedByTaskId,
+      creationFencePaths: [...creationFencePaths],
+      unresolvedHistoricalOwnership,
+    };
   }
 
   private getManagedFileIndex(
@@ -1062,6 +1548,20 @@ export class ObsidianProjectSyncVault {
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
+
+const sameManagedOwnership = (left: ManagedNoteIdentity, right: ManagedNoteIdentity): boolean =>
+  left.taskId === right.taskId &&
+  left.mappingId === right.mappingId &&
+  left.rootProjectId === right.rootProjectId &&
+  left.projectId === right.projectId;
+
+const readTimestamp = (value: unknown): number | undefined => {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const timestamp = Date.parse(value);
+  return Number.isNaN(timestamp) ? undefined : timestamp;
+};
 
 const portablePathKey = (path: string): string =>
   normalizePath(path).normalize("NFC").toLocaleLowerCase("en-US");
