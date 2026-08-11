@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v2.8.2 (2026-08-12)
+
 ### 🐛 Fixes
 
 - Prevented Auto-refresh from creating Obsidian Sync conflicts between updated devices: query caches now stay in vault-specific device-local storage, synchronized settings hot-reload through `onExternalSettingsChange()`, and default query blocks are no longer refreshed by two independent timers.
