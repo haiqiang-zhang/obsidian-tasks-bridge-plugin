@@ -8,7 +8,8 @@
     "release": "vite-node src/release.ts",
     "check": "tsgo --noEmit",
     "lint:check": "biome check .",
-    "lint:fix": "biome check --write ."
+    "lint:fix": "biome check --write .",
+    "test": "vite-node src/release-utils.test.ts"
   },
   "dependencies": {
     "@obsidian-todoist/plugin": "*",

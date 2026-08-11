@@ -51,14 +51,21 @@ export const ProjectOverview: React.FC<ProjectOverviewProps> = ({
         onClick={() => onCollapsedChange(!collapsed)}
         type="button"
       >
-        <span aria-hidden="true" className="todoist-bases-project-overview-disclosure">
-          <ObsidianIcon id={collapsed ? "lucide-chevron-right" : "lucide-chevron-down"} size="xs" />
-        </span>
-        <span className="todoist-bases-project-overview-title-group">
-          <span className="todoist-bases-project-overview-title" id={headingId}>
-            Project overview
+        <span className="todoist-bases-project-overview-header-leading">
+          <span aria-hidden="true" className="todoist-bases-project-overview-disclosure">
+            <ObsidianIcon
+              id={collapsed ? "lucide-chevron-right" : "lucide-chevron-down"}
+              size="xs"
+            />
           </span>
-          <span className="todoist-bases-project-overview-scope">{scopeLabel}</span>
+          <span className="todoist-bases-project-overview-title-group">
+            <span className="todoist-bases-project-overview-title" id={headingId}>
+              Project overview
+            </span>
+            <span className="todoist-bases-project-overview-scope" title={scopeLabel}>
+              {scopeLabel}
+            </span>
+          </span>
         </span>
         <span className="todoist-bases-project-overview-header-meta">
           <span className="todoist-bases-project-overview-header-summary">{summary}</span>
@@ -80,7 +87,7 @@ const LastSynced: React.FC<{ syncedAt: string | null }> = ({ syncedAt }) => {
     return (
       <span className="todoist-bases-project-overview-last-synced">
         <ObsidianIcon aria-hidden="true" id="lucide-refresh-cw" size="xs" />
-        Not synced yet
+        <span className="todoist-bases-project-overview-last-synced-label">Not synced yet</span>
       </span>
     );
   }
@@ -92,7 +99,9 @@ const LastSynced: React.FC<{ syncedAt: string | null }> = ({ syncedAt }) => {
       title={syncedAt}
     >
       <ObsidianIcon aria-hidden="true" id="lucide-refresh-cw" size="xs" />
-      Last synced {formatSyncedAt(syncedAt)}
+      <span className="todoist-bases-project-overview-last-synced-label">
+        Last synced {formatSyncedAt(syncedAt)}
+      </span>
     </time>
   );
 };

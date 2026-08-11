@@ -14,6 +14,8 @@ All commands run from this `docs/` directory:
 - `npm run write-heading-ids` - Add heading IDs to markdown files
 - `npm run typecheck` - TypeScript type checking
 
+Run releases from the repository root with `npm run release -- <version|patch|minor|major>`.
+
 ## Documentation Structure
 
 - `docs/` - Current documentation (markdown/MDX)

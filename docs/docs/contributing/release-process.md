@@ -1,17 +1,19 @@
 # Release Process
 
-This is a brief guide on how to release a new version of the plugin.
+Keep user-visible changes under **Unreleased** in the changelog during development. Then release from a clean, up-to-date `master` branch with one command from the repository root:
 
-1. Update changelog with release version + date.
-2. Keep `docs/docs` as the single current documentation set. Do not create Docusaurus version snapshots.
-3. Update the versions in:
-    1. `manifest.json`
-    2. `package.json`
-    3. `versions.json`
-4. Open a PR + merge.
-5. Tag the release with `git tag -a ${VERSION}` and push the tag with `git push origin ${VERSION}`.
-6. Wait for the release build to complete.
-7. Update the generated release with the changelog and publish.
-8. Test the update in Obsidian.
+```bash
+npm run release -- 2.9.0
+```
 
-Note that between steps 4 and 6, there is a period of time where the plugin's `manifest.json` specified version does not have a release associated with it. This only lasts a minute or two, so the impact should be minimal.
+You can also request a semantic increment:
+
+```bash
+npm run release -- patch
+npm run release -- minor
+npm run release -- major
+```
+
+The command validates the repository and GitHub authentication, updates the changelog and version files, regenerates derived files, runs all release checks, commits and pushes `master`, creates and pushes the matching annotated tag, waits for the official GitHub Actions build, and publishes the generated draft with the matching changelog notes. Workflow status and elapsed time remain visible while GitHub builds the release.
+
+No release PR or interactive confirmation is required. If the command is interrupted, rerun the same command: its internal recovery state safely restarts pre-commit preparation or resumes the existing commit, tag, workflow, or draft. The documentation remains current-only; the release command does not create Docusaurus version snapshots.

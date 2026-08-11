@@ -1,45 +1,159 @@
 import pc from "picocolors";
 
-import { execSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import {
+  compareVersions,
+  extractChangelogContent,
+  parseVersion,
+  prepareChangelog,
+  resolveReleaseVersion,
+  validateReleaseVersionInput,
+} from "./release-utils";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
-import * as readline from "node:readline";
 
 const REPO_ROOT = join(import.meta.dirname, "..", "..");
-
+const EXPECTED_REPOSITORY = "haiqiang-zhang/obsidian-tasks-bridge-plugin";
+const RELEASE_WORKFLOW = "release.yml";
+const RELEASE_STATE_FILENAME = "tasks-bridge-release-state.json";
+const RELEASE_ASSETS = ["main.js", "manifest.json", "styles.css"] as const;
+const RELEASE_FILES = [
+  "docs/docs/changelog.md",
+  "docs/docs/translation-status.json",
+  "manifest.json",
+  "package-lock.json",
+  "plugin/package.json",
+  "versions.json",
+] as const;
 const MS_PER_SECOND = 1000;
-const POLL_INTERVAL_MS = 10 * MS_PER_SECOND;
+const SECONDS_PER_MINUTE = 60;
+const WORKFLOW_TIMEOUT_MINUTES = 10;
+const DRAFT_RELEASE_TIMEOUT_MINUTES = 1;
+const POLL_INTERVAL_SECONDS = 5;
+const STATUS_INTERVAL_SECONDS = 30;
+const MAX_CONSECUTIVE_GITHUB_ERRORS = 3;
+const RERUN_PROPAGATION_SECONDS = 30;
+const SIGINT_EXIT_CODE = 130;
+const SIGTERM_EXIT_CODE = 143;
+const POLL_INTERVAL_MS = POLL_INTERVAL_SECONDS * MS_PER_SECOND;
+const STATUS_INTERVAL_MS = STATUS_INTERVAL_SECONDS * MS_PER_SECOND;
+const WORKFLOW_TIMEOUT_MS = WORKFLOW_TIMEOUT_MINUTES * SECONDS_PER_MINUTE * MS_PER_SECOND;
+const DRAFT_RELEASE_TIMEOUT_MS = DRAFT_RELEASE_TIMEOUT_MINUTES * SECONDS_PER_MINUTE * MS_PER_SECOND;
+const RERUN_PROPAGATION_MS = RERUN_PROPAGATION_SECONDS * MS_PER_SECOND;
 
-function exec(command: string, options?: { cwd?: string; silent?: boolean }): string {
-  const showOutput = !options?.silent;
+let preparationRollback: (() => void) | null = null;
+let handlingShutdownSignal = false;
 
-  if (showOutput) {
-    console.log(pc.dim(`$ ${command}`));
+type RunOptions = {
+  cwd?: string;
+  inherit?: boolean;
+  silent?: boolean;
+};
+
+type Manifest = {
+  id: string;
+  minAppVersion: string;
+  name: string;
+  version: string;
+};
+
+type PackageJson = {
+  dependencies?: Record<string, string>;
+  version: string;
+};
+
+type PackageLock = {
+  packages: Record<string, { version?: string }>;
+};
+
+type ReleaseInfo = {
+  assets: Array<{ name: string }>;
+  isDraft: boolean;
+  isPrerelease: boolean;
+  tagName: string;
+  url: string;
+};
+
+type ReleaseState = {
+  baseHead: string;
+  input: string;
+  releaseHead?: string;
+  targetVersion: string;
+};
+
+type WorkflowRun = {
+  conclusion: string | null;
+  databaseId: number;
+  headBranch: string;
+  headSha: string;
+  status: string;
+  url: string;
+};
+
+class CommandError extends Error {
+  readonly output: string;
+
+  constructor(command: string, args: readonly string[], output: string) {
+    super(
+      output.length > 0
+        ? `Command failed: ${formatCommand(command, args)}\n${output}`
+        : `Command failed: ${formatCommand(command, args)}`,
+    );
+    this.name = "CommandError";
+    this.output = output;
+  }
+}
+
+function formatCommand(command: string, args: readonly string[]): string {
+  return [command, ...args]
+    .map((part) => (/^[a-zA-Z0-9_./:=@-]+$/.test(part) ? part : JSON.stringify(part)))
+    .join(" ");
+}
+
+function run(command: string, args: readonly string[] = [], options: RunOptions = {}): string {
+  if (!options.silent) {
+    console.log(pc.dim(`$ ${formatCommand(command, args)}`));
   }
 
   try {
-    const output = execSync(command, {
-      encoding: "utf-8",
-      stdio: ["pipe", "pipe", "pipe"],
-      cwd: options?.cwd ?? REPO_ROOT,
+    if (options.inherit) {
+      execFileSync(command, args, {
+        cwd: options.cwd ?? REPO_ROOT,
+        stdio: "inherit",
+      });
+      return "";
+    }
+
+    return execFileSync(command, args, {
+      cwd: options.cwd ?? REPO_ROOT,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
     }).trim();
-
-    if (showOutput && output) {
-      // Indent and dim the output
-      const indented = output
-        .split("\n")
-        .map((line) => pc.dim(`  ${line}`))
-        .join("\n");
-      console.log(indented);
+  } catch (cause) {
+    const error = cause as { stderr?: Buffer | string; stdout?: Buffer | string };
+    const output = [error.stdout, error.stderr]
+      .filter(Boolean)
+      .map((value) => value?.toString().trim())
+      .filter(Boolean)
+      .join("\n");
+    if (output.length > 0 && !options.silent) {
+      console.error(pc.dim(output));
     }
+    throw new CommandError(command, args, output);
+  }
+}
 
-    return output;
-  } catch (error) {
-    const stderr = (error as { stderr?: string }).stderr ?? "";
-    if (stderr) {
-      console.error(pc.dim(`  ${stderr.trim()}`));
-    }
-    throw new Error(`Command failed: ${command}`);
+function tryRun(command: string, args: readonly string[] = []): { ok: boolean; output: string } {
+  try {
+    const output = execFileSync(command, args, {
+      cwd: REPO_ROOT,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    }).trim();
+    return { ok: true, output };
+  } catch {
+    return { ok: false, output: "" };
   }
 }
 
@@ -51,370 +165,819 @@ function logCompleted(message: string): void {
   console.log(pc.green(`✓ ${message}`));
 }
 
-function error(message: string): never {
-  console.error(pc.red(`✗ ${message}`));
-  process.exit(1);
+function fail(message: string): never {
+  throw new Error(message);
 }
 
-async function confirm(message: string): Promise<boolean> {
-  const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout,
-  });
-
-  return new Promise((resolve) => {
-    rl.question(pc.yellow(`? ${message} (y/N) `), (answer) => {
-      rl.close();
-      resolve(answer.toLowerCase() === "y" || answer.toLowerCase() === "yes");
-    });
-  });
+function readJson<T>(path: string): T {
+  return JSON.parse(readFileSync(path, "utf8")) as T;
 }
 
-async function pollUntil(
-  check: () => boolean | Promise<boolean>,
-  options: {
-    timeoutMs: number;
-    intervalMs: number;
-  },
-): Promise<void> {
-  const startTime = Date.now();
-  let attempts = 0;
+function writeJson(path: string, value: unknown): void {
+  writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
+}
 
-  while (true) {
-    attempts++;
-    const elapsed = Math.floor((Date.now() - startTime) / MS_PER_SECOND);
+function releaseStatePath(): string {
+  const gitDirectory = run("git", ["rev-parse", "--absolute-git-dir"], { silent: true });
+  return join(gitDirectory, RELEASE_STATE_FILENAME);
+}
 
-    const result = await check();
-    if (result) {
-      return;
-    }
+function readReleaseState(): ReleaseState | null {
+  const path = releaseStatePath();
+  if (!existsSync(path)) {
+    return null;
+  }
 
-    if (Date.now() - startTime > options.timeoutMs) {
-      error(`Timed out after ${Math.floor(options.timeoutMs / MS_PER_SECOND)}s`);
-    }
+  const state = readJson<Partial<ReleaseState>>(path);
+  if (
+    typeof state.baseHead !== "string" ||
+    typeof state.input !== "string" ||
+    (state.releaseHead !== undefined && typeof state.releaseHead !== "string") ||
+    typeof state.targetVersion !== "string"
+  ) {
+    fail(`Invalid release recovery state at ${path}.`);
+  }
+  validateReleaseVersionInput(state.input);
+  parseVersion(state.targetVersion);
+  return state as ReleaseState;
+}
 
-    console.log(pc.dim(`  Still waiting after ${attempts} checks... (${elapsed}s elapsed)`));
-    await new Promise((resolve) => setTimeout(resolve, options.intervalMs));
+function writeReleaseState(state: ReleaseState): void {
+  writeJson(releaseStatePath(), state);
+}
+
+function clearReleaseState(): void {
+  const path = releaseStatePath();
+  if (existsSync(path)) {
+    unlinkSync(path);
   }
 }
 
-function validateVersion(version: string): void {
-  if (!/^\d+\.\d+\.\d+$/.test(version)) {
-    error(`Invalid version format: ${version}. Expected format: x.y.z`);
-  }
+function manifestPath(): string {
+  return join(REPO_ROOT, "manifest.json");
+}
+
+function changelogPath(): string {
+  return join(REPO_ROOT, "docs", "docs", "changelog.md");
+}
+
+function readManifest(): Manifest {
+  return readJson<Manifest>(manifestPath());
+}
+
+function localDate(): string {
+  const today = new Date();
+  const year = today.getFullYear();
+  const month = String(today.getMonth() + 1).padStart(2, "0");
+  const day = String(today.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
 function checkPrerequisites(): void {
-  logStarted("Checking prerequisites...");
+  logStarted("Checking release prerequisites...");
 
-  // Check for gh CLI
-  try {
-    exec("which gh");
-  } catch {
-    error("gh CLI not found. Install it from https://cli.github.com/");
+  run("gh", ["--version"], { silent: true });
+  run("gh", ["auth", "status"], { silent: true });
+
+  const repository = run(
+    "gh",
+    ["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"],
+    { silent: true },
+  );
+  if (repository !== EXPECTED_REPOSITORY) {
+    fail(`Expected GitHub repository ${EXPECTED_REPOSITORY}, found ${repository}.`);
   }
 
-  // Check git status
-  const status = exec("git status --porcelain");
-  const currentBranch = exec("git branch --show-current");
-
-  if (currentBranch !== "master" && status.length > 0) {
-    error("Cannot switch branches with uncommitted changes. Please commit or stash your changes.");
+  const branch = run("git", ["branch", "--show-current"], { silent: true });
+  if (branch !== "master") {
+    fail(`Release from master, not ${branch}.`);
   }
 
-  logCompleted("Prerequisites checked");
-}
-
-function ensureOnMaster(): void {
-  const currentBranch = exec("git branch --show-current");
-
-  if (currentBranch !== "master") {
-    logStarted("Switching to master branch...");
-    exec("git checkout master");
-    logCompleted("Switched to master");
+  const status = run("git", ["status", "--porcelain"], { silent: true });
+  if (status.length > 0) {
+    fail("The worktree must be clean before releasing.");
   }
 
-  logStarted("Pulling latest master...");
-  exec("git pull origin master");
-  logCompleted("Pulled latest master");
+  run("git", ["pull", "--ff-only", "origin", "master"]);
+  run("git", ["fetch", "origin", "--tags"]);
+  logCompleted("Release prerequisites passed");
 }
 
-function createReleaseBranch(version: string): void {
-  const branchName = `chore/prepare-release-${version}`;
-  logStarted(`Creating branch ${branchName}...`);
-  exec(`git checkout -b ${branchName}`);
-  logCompleted(`Created branch ${branchName}`);
+function isExpectedReleaseCommit(baseHead: string, head: string, version: string): boolean {
+  const parent = tryRun("git", ["rev-parse", `${head}^`]);
+  if (!parent.ok || parent.output !== baseHead) {
+    return false;
+  }
+
+  const subject = run("git", ["log", "-1", "--format=%s", head], { silent: true });
+  const files = run("git", ["diff", "--name-only", baseHead, head], { silent: true })
+    .split("\n")
+    .filter(Boolean);
+  const allowedFiles = new Set<string>(RELEASE_FILES);
+  return (
+    subject === releaseCommitMessage(version) &&
+    files.length > 0 &&
+    files.every((path) => allowedFiles.has(path))
+  );
 }
 
-function updateChangelog(version: string): void {
-  logStarted("Updating changelog...");
-  const changelogPath = join(REPO_ROOT, "docs", "docs", "changelog.md");
-  const changelog = readFileSync(changelogPath, "utf-8");
-
-  // Find the "Unreleased" section and replace with version + date
-  const today = new Date().toISOString().split("T")[0];
-  const updated = changelog.replace(/## Unreleased/, `## Unreleased\n\n## v${version} (${today})`);
-
-  if (updated === changelog) {
-    error(
-      'Could not find "## Unreleased" section in changelog.md. Please ensure changelog has an Unreleased section.',
+function recoverInterruptedRelease(state: ReleaseState, input: string): void {
+  if (input !== state.input && input !== state.targetVersion) {
+    fail(
+      `Release ${state.targetVersion} is still in progress. Rerun with ${state.input} or ${state.targetVersion}.`,
     );
   }
 
-  writeFileSync(changelogPath, updated);
-  logCompleted("Updated changelog with version and date");
+  const branch = run("git", ["branch", "--show-current"], { silent: true });
+  if (branch !== "master") {
+    fail(`Release ${state.targetVersion} recovery must run from master, not ${branch}.`);
+  }
+
+  const head = run("git", ["rev-parse", "HEAD"], { silent: true });
+  const changes = changedFiles();
+  const allowedFiles = new Set<string>(RELEASE_FILES);
+  const unexpected = changes.filter((path) => !allowedFiles.has(path));
+  if (unexpected.length > 0) {
+    fail(
+      `Release recovery found unrelated worktree changes:\n${unexpected.join("\n")}\nPreserve them before resuming.`,
+    );
+  }
+
+  if (state.releaseHead) {
+    const releaseCommitIsValid = isExpectedReleaseCommit(
+      state.baseHead,
+      state.releaseHead,
+      state.targetVersion,
+    );
+    const releaseIsAncestor =
+      head === state.releaseHead ||
+      tryRun("git", ["merge-base", "--is-ancestor", state.releaseHead, head]).ok;
+    if (changes.length > 0 || !releaseCommitIsValid || !releaseIsAncestor) {
+      fail(`Release recovery could not verify the recorded commit ${state.releaseHead}.`);
+    }
+    return;
+  }
+
+  if (head === state.baseHead) {
+    if (changes.length > 0) {
+      logStarted(`Recovering interrupted preparation for Tasks Bridge ${state.targetVersion}...`);
+      run("git", [
+        "restore",
+        "--source",
+        state.baseHead,
+        "--staged",
+        "--worktree",
+        "--",
+        ...RELEASE_FILES,
+      ]);
+      logCompleted("Interrupted release files restored; preparation will restart automatically");
+    }
+    return;
+  }
+
+  if (changes.length > 0 || !isExpectedReleaseCommit(state.baseHead, head, state.targetVersion)) {
+    fail(
+      `Release recovery expected only the ${state.targetVersion} release commit after ${state.baseHead}.`,
+    );
+  }
+
+  state.releaseHead = head;
+  writeReleaseState(state);
+}
+
+function reconcileReleaseStateAfterPull(
+  state: ReleaseState,
+  currentVersion: string,
+  targetVersion: string,
+): void {
+  const head = run("git", ["rev-parse", "HEAD"], { silent: true });
+
+  if (state.releaseHead) {
+    const releaseIsAncestor =
+      head === state.releaseHead ||
+      tryRun("git", ["merge-base", "--is-ancestor", state.releaseHead, head]).ok;
+    if (!releaseIsAncestor) {
+      fail(`Master no longer contains the recorded release commit ${state.releaseHead}.`);
+    }
+    return;
+  }
+
+  if (head === state.baseHead) {
+    return;
+  }
+
+  const comparison = compareVersions(targetVersion, currentVersion);
+  if (comparison > 0) {
+    state.baseHead = head;
+    writeReleaseState(state);
+    return;
+  }
+
+  if (comparison === 0 && isExpectedReleaseCommit(state.baseHead, head, targetVersion)) {
+    state.releaseHead = head;
+    writeReleaseState(state);
+    return;
+  }
+
+  fail(
+    `Master changed while release ${targetVersion} was interrupted. Remove ${releaseStatePath()} after reviewing the repository state.`,
+  );
+}
+
+function assertMasterCanRelease(currentVersion: string, targetVersion: string): void {
+  const head = run("git", ["rev-parse", "HEAD"], { silent: true });
+  const originMaster = run("git", ["rev-parse", "origin/master"], { silent: true });
+  const comparison = compareVersions(targetVersion, currentVersion);
+
+  if (comparison < 0) {
+    fail(`Cannot release ${targetVersion}; the repository is already at ${currentVersion}.`);
+  }
+
+  if (head === originMaster) {
+    return;
+  }
+
+  if (comparison === 0 && isExpectedReleaseCommit(originMaster, head, targetVersion)) {
+    return;
+  }
+
+  fail("Local master and origin/master have diverged or contain unrelated unpushed commits.");
+}
+
+function snapshotReleaseFiles(): Map<string, string> {
+  return new Map(RELEASE_FILES.map((path) => [path, readFileSync(join(REPO_ROOT, path), "utf8")]));
+}
+
+function restoreReleaseFiles(snapshot: ReadonlyMap<string, string>): void {
+  logStarted("Restoring release preparation files after failure...");
+  run("git", ["restore", "--staged", "--", ...RELEASE_FILES], { silent: true });
+  for (const [path, content] of snapshot) {
+    writeFileSync(join(REPO_ROOT, path), content);
+  }
+  logCompleted("Release preparation files restored");
+}
+
+function rollbackPreparationIfNeeded(): void {
+  const rollback = preparationRollback;
+  preparationRollback = null;
+  rollback?.();
+}
+
+function handleShutdownSignal(signal: "SIGINT" | "SIGTERM"): never {
+  const exitCode = signal === "SIGINT" ? SIGINT_EXIT_CODE : SIGTERM_EXIT_CODE;
+  if (handlingShutdownSignal) {
+    process.exit(exitCode);
+  }
+
+  handlingShutdownSignal = true;
+  try {
+    rollbackPreparationIfNeeded();
+  } catch (cause) {
+    const message = cause instanceof Error ? cause.message : String(cause);
+    console.error(pc.red(`✗ Could not restore release files: ${message}`));
+  }
+  console.error(pc.yellow(`Release interrupted by ${signal}.`));
+  process.exit(exitCode);
+}
+
+process.once("SIGINT", () => handleShutdownSignal("SIGINT"));
+process.once("SIGTERM", () => handleShutdownSignal("SIGTERM"));
+
+function updateChangelog(version: string): void {
+  const path = changelogPath();
+  const changelog = readFileSync(path, "utf8");
+  writeFileSync(path, prepareChangelog(changelog, version, localDate()));
 }
 
 function updateVersionFiles(version: string): void {
-  logStarted("Updating version files...");
-
-  // Update manifest.json
-  const manifestPath = join(REPO_ROOT, "manifest.json");
-  const manifest = JSON.parse(readFileSync(manifestPath, "utf-8"));
-  manifest.version = version;
-  writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
-
-  // Update plugin/package.json
+  const manifest = readManifest();
   const packagePath = join(REPO_ROOT, "plugin", "package.json");
-  const packageJson = JSON.parse(readFileSync(packagePath, "utf-8"));
-  packageJson.version = version;
-  writeFileSync(packagePath, `${JSON.stringify(packageJson, null, 2)}\n`);
+  const packageJson = readJson<PackageJson>(packagePath);
 
-  // Update manifest.minAppVersion with the obsidian version from plugin/package.json
+  manifest.version = version;
+  packageJson.version = version;
+
   const obsidianVersion = packageJson.dependencies?.obsidian;
   if (obsidianVersion) {
     manifest.minAppVersion = obsidianVersion;
-    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
   }
 
-  // Update versions.json
+  writeJson(manifestPath(), manifest);
+  writeJson(packagePath, packageJson);
+
+  const packageLockPath = join(REPO_ROOT, "package-lock.json");
+  const packageLock = readJson<PackageLock>(packageLockPath);
+  const lockedPlugin = packageLock.packages.plugin;
+  if (!lockedPlugin) {
+    fail('package-lock.json does not contain the "plugin" workspace.');
+  }
+  lockedPlugin.version = version;
+  writeJson(packageLockPath, packageLock);
+
   const versionsPath = join(REPO_ROOT, "versions.json");
-  const versions = JSON.parse(readFileSync(versionsPath, "utf-8"));
-  const minAppVersion = manifest.minAppVersion;
-  versions[version] = minAppVersion;
+  const versions = readJson<Record<string, string>>(versionsPath);
+  versions[version] = manifest.minAppVersion;
 
-  // Re-sort versions in descending order
   const sortedVersions = Object.fromEntries(
-    Object.entries(versions).sort(([a], [b]) => {
-      const [aMajor, aMinor, aPatch] = a.split(".").map(Number);
-      const [bMajor, bMinor, bPatch] = b.split(".").map(Number);
+    Object.entries(versions).sort(([left], [right]) => compareVersions(right, left)),
+  );
+  writeJson(versionsPath, sortedVersions);
+}
 
-      if (aMajor !== bMajor) {
-        return bMajor - aMajor;
-      }
-      if (aMinor !== bMinor) {
-        return bMinor - aMinor;
-      }
-      return bPatch - aPatch;
+function validatePreparedVersion(version: string): void {
+  const manifest = readManifest();
+  const packageJson = readJson<PackageJson>(join(REPO_ROOT, "plugin", "package.json"));
+  const packageLock = readJson<PackageLock>(join(REPO_ROOT, "package-lock.json"));
+  const versions = readJson<Record<string, string>>(join(REPO_ROOT, "versions.json"));
+
+  if (manifest.version !== version || packageJson.version !== version) {
+    fail(`Version files do not consistently contain ${version}.`);
+  }
+  if (packageLock.packages.plugin?.version !== version) {
+    fail(`package-lock.json does not contain plugin version ${version}.`);
+  }
+  if (versions[version] !== manifest.minAppVersion) {
+    fail(`versions.json does not map ${version} to ${manifest.minAppVersion}.`);
+  }
+
+  extractChangelogContent(readFileSync(changelogPath(), "utf8"), version);
+}
+
+function runReleaseChecks(version: string): void {
+  logStarted("Running release checks...");
+  run("npm", ["run", "gen"], { inherit: true });
+  run("npm", ["run", "check", "--workspace=plugin"], { inherit: true });
+  run("npm", ["run", "lint:check", "--workspace=plugin"], { inherit: true });
+  run("npm", ["test", "--workspace=plugin", "--", "--run"], { inherit: true });
+  run("npm", ["run", "check", "--workspace=scripts"], { inherit: true });
+  run("npm", ["run", "lint:check", "--workspace=scripts"], { inherit: true });
+  run("npm", ["test", "--workspace=scripts"], { inherit: true });
+  run("npm", ["run", "typecheck", "--workspace=docs"], { inherit: true });
+  run("npm", ["run", "build", "--workspace=docs"], { inherit: true });
+
+  const buildDirectory = mkdtempSync(join(tmpdir(), "tasks-bridge-release-build-"));
+  try {
+    run("npm", ["run", "build", "--workspace=plugin", "--", "--outDir", buildDirectory], {
+      inherit: true,
+    });
+    const builtManifest = readJson<Manifest>(join(buildDirectory, "manifest.json"));
+    if (builtManifest.version !== version) {
+      fail(`Built manifest is ${builtManifest.version}, expected ${version}.`);
+    }
+  } finally {
+    rmSync(buildDirectory, { force: true, recursive: true });
+  }
+
+  run("git", ["diff", "--check"]);
+  logCompleted("Release checks passed");
+}
+
+function changedFiles(): string[] {
+  const tracked = run("git", ["diff", "--name-only"], { silent: true });
+  const staged = run("git", ["diff", "--cached", "--name-only"], { silent: true });
+  const untracked = run("git", ["ls-files", "--others", "--exclude-standard"], {
+    silent: true,
+  });
+  return [
+    ...new Set([...tracked.split("\n"), ...staged.split("\n"), ...untracked.split("\n")]),
+  ].filter(Boolean);
+}
+
+function releaseCommitMessage(version: string): string {
+  return `Prepare Tasks Bridge ${version} release`;
+}
+
+function commitRelease(version: string): void {
+  const allowedFiles = new Set<string>(RELEASE_FILES);
+  const changes = changedFiles();
+  const unexpected = changes.filter((path) => !allowedFiles.has(path));
+  if (unexpected.length > 0) {
+    fail(`Release preparation changed unexpected files:\n${unexpected.join("\n")}`);
+  }
+  if (changes.length === 0) {
+    fail("Release preparation did not change any files.");
+  }
+
+  run("git", ["add", "--", ...changes]);
+  run("git", ["diff", "--cached", "--check"]);
+  run("git", ["commit", "-m", releaseCommitMessage(version)], {
+    inherit: true,
+  });
+}
+
+function prepareRelease(version: string): void {
+  logStarted(`Preparing Tasks Bridge ${version}...`);
+  updateChangelog(version);
+  updateVersionFiles(version);
+  validatePreparedVersion(version);
+  runReleaseChecks(version);
+  commitRelease(version);
+  logCompleted(`Prepared Tasks Bridge ${version}`);
+}
+
+function pushMasterIfNeeded(): void {
+  const head = run("git", ["rev-parse", "HEAD"], { silent: true });
+  const originMaster = run("git", ["rev-parse", "origin/master"], { silent: true });
+  if (head === originMaster) {
+    return;
+  }
+
+  if (!tryRun("git", ["merge-base", "--is-ancestor", originMaster, head]).ok) {
+    fail("Refusing to push because origin/master is not an ancestor of local master.");
+  }
+
+  logStarted("Pushing the release commit to master...");
+  run("git", ["push", "origin", "master"], { inherit: true });
+  run("git", ["fetch", "origin", "master"], { silent: true });
+  logCompleted("Release commit pushed");
+}
+
+function remoteTagCommit(version: string): string | null {
+  const directRef = `refs/tags/${version}`;
+  const peeledRef = `${directRef}^{}`;
+  const result = tryRun("git", [
+    "ls-remote",
+    "--exit-code",
+    "--tags",
+    "origin",
+    directRef,
+    peeledRef,
+  ]);
+  if (!result.ok) {
+    return null;
+  }
+
+  const refs = new Map(
+    result.output.split("\n").map((line) => {
+      const [commit, ref] = line.trim().split(/\s+/, 2);
+      return [ref, commit] as const;
     }),
   );
-
-  writeFileSync(versionsPath, `${JSON.stringify(sortedVersions, null, 2)}\n`);
-  logCompleted("Updated version files");
-
-  logStarted("Running npm install to update package-lock.json...");
-  exec("npm install", { cwd: REPO_ROOT });
-  logCompleted("Updated package-lock.json");
+  return refs.get(peeledRef) ?? refs.get(directRef) ?? null;
 }
 
-function createAndPushPR(version: string): string {
-  logStarted("Committing changes...");
-  exec("git add .");
-  exec(`git commit -m "chore: prepare release ${version}"`);
-  logCompleted("Committed changes");
+function ensureReleaseTag(version: string, releaseHead: string): string {
+  const localTag = run("git", ["tag", "--list", version], { silent: true });
 
-  logStarted("Pushing branch...");
-  const branchName = `chore/prepare-release-${version}`;
-  exec(`git push -u origin ${branchName}`);
-  logCompleted("Pushed branch");
-
-  logStarted("Creating pull request...");
-  const prUrl = exec(
-    `gh pr create --title "chore: prepare release ${version}" --body "Automated release preparation for version ${version}"`,
-  );
-  logCompleted(`Created pull request: ${prUrl}`);
-  return prUrl;
-}
-
-async function waitForChecksAndMerge(prUrl: string): Promise<void> {
-  const prNumber = prUrl.split("/").pop();
-
-  console.log();
-  console.log(pc.bold("Please review the pull request before proceeding:"));
-  console.log(pc.cyan(`  ${prUrl}`));
-  console.log();
-
-  const confirmed = await confirm("Enable auto-merge and continue with the release?");
-  if (!confirmed) {
-    error("Release cancelled by user");
+  if (localTag.length > 0) {
+    const tagCommit = run("git", ["rev-list", "-n", "1", version], { silent: true });
+    if (tagCommit !== releaseHead) {
+      fail(`Tag ${version} points to ${tagCommit}, expected ${releaseHead}.`);
+    }
+  } else {
+    logStarted(`Creating annotated tag ${version}...`);
+    run("git", ["tag", "-a", version, "-m", version, releaseHead]);
+    logCompleted(`Tag ${version} created`);
   }
 
-  logStarted("Enabling auto-merge...");
-  exec(`gh pr merge ${prNumber} --rebase --auto --delete-branch`);
-  logCompleted("Auto-merge enabled");
+  const remoteCommit = remoteTagCommit(version);
+  if (remoteCommit && remoteCommit !== releaseHead) {
+    fail(`Remote tag ${version} points to ${remoteCommit}, expected ${releaseHead}.`);
+  }
 
-  // Wait for checks to pass and merge to complete
-  logStarted("Waiting for checks to pass and merge to complete...");
-  const timeoutMinutes = 30;
-  const prMergeTimeoutMs = timeoutMinutes * 60 * MS_PER_SECOND;
-  await pollUntil(
-    () => {
-      const state = exec(`gh pr view ${prNumber} --json state -q '.state'`, { silent: true });
-      return state === "MERGED";
-    },
-    {
-      timeoutMs: prMergeTimeoutMs,
-      intervalMs: POLL_INTERVAL_MS,
-    },
-  );
-  logCompleted("PR merged successfully!");
+  if (!remoteCommit) {
+    logStarted(`Pushing tag ${version}...`);
+    run("git", ["push", "origin", version], { inherit: true });
+    logCompleted(`Tag ${version} pushed`);
+  }
+
+  return releaseHead;
 }
 
-function pullLatestMaster(): void {
-  logStarted("Pulling latest master...");
-  exec("git checkout master");
-  exec("git pull origin master");
-  logCompleted("Pulled latest master");
+function getRelease(version: string): ReleaseInfo | null {
+  try {
+    const output = run(
+      "gh",
+      ["release", "view", version, "--json", "assets,isDraft,isPrerelease,tagName,url"],
+      { silent: true },
+    );
+    return JSON.parse(output) as ReleaseInfo;
+  } catch (cause) {
+    if (cause instanceof CommandError && /release not found/i.test(cause.output)) {
+      return null;
+    }
+    throw cause;
+  }
 }
 
-function createAndPushTag(version: string): void {
-  logStarted(`Creating tag ${version}...`);
-  exec(`git tag -a ${version} -m "Release ${version}"`);
-  logCompleted(`Created tag ${version}`);
+function releaseWorkflowRun(version: string, headSha: string): WorkflowRun | null {
+  const runs = JSON.parse(
+    run(
+      "gh",
+      [
+        "run",
+        "list",
+        `--workflow=${RELEASE_WORKFLOW}`,
+        "--json",
+        "conclusion,databaseId,headBranch,headSha,status,url",
+        "--limit",
+        "20",
+      ],
+      { silent: true },
+    ),
+  ) as WorkflowRun[];
 
-  logStarted("Pushing tag...");
-  exec(`git push origin ${version}`);
-  logCompleted("Pushed tag");
+  return runs.find((item) => item.headBranch === version && item.headSha === headSha) ?? null;
 }
 
-async function waitForReleaseBuild(version: string): Promise<void> {
-  logStarted("Waiting for release build to complete...");
+function sleep(durationMs: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, durationMs));
+}
 
-  const timeoutMinutes = 20;
-  const buildTimeoutMs = timeoutMinutes * 60 * MS_PER_SECOND;
-  // Poll for the workflow run
-  await pollUntil(
-    () => {
-      const runs = exec(
-        `gh run list --workflow=release.yml --json databaseId,status,conclusion,headBranch -L 5`,
-        { silent: true },
+function elapsedSeconds(startedAt: number): number {
+  return Math.floor((Date.now() - startedAt) / MS_PER_SECOND);
+}
+
+async function waitForReleaseBuild(version: string, headSha: string): Promise<void> {
+  logStarted("Waiting for the GitHub release build...");
+  const startedAt = Date.now();
+  let consecutiveErrors = 0;
+  let lastReportedAt = 0;
+  let lastStatus = "";
+  let rerunRequestedAt: number | null = null;
+
+  while (Date.now() - startedAt <= WORKFLOW_TIMEOUT_MS) {
+    let workflow: WorkflowRun | null;
+    try {
+      workflow = releaseWorkflowRun(version, headSha);
+      consecutiveErrors = 0;
+    } catch (cause) {
+      consecutiveErrors += 1;
+      if (consecutiveErrors >= MAX_CONSECUTIVE_GITHUB_ERRORS) {
+        throw cause;
+      }
+      console.log(
+        pc.yellow(
+          `  GitHub status check failed (${consecutiveErrors}/${MAX_CONSECUTIVE_GITHUB_ERRORS}); retrying...`,
+        ),
       );
-      const runList = JSON.parse(runs) as Array<{
-        databaseId: number;
-        status: string;
-        conclusion: string | null;
-        headBranch: string;
-      }>;
+      await sleep(POLL_INTERVAL_MS);
+      continue;
+    }
 
-      // Find run for our tag
-      const run = runList.find((r) => r.headBranch === version);
-
-      if (!run) {
-        // Still waiting for workflow to start
-        return false;
+    if (!workflow) {
+      if (Date.now() - lastReportedAt >= STATUS_INTERVAL_MS) {
+        console.log(pc.dim(`  Waiting for the workflow to start (${elapsedSeconds(startedAt)}s)`));
+        lastReportedAt = Date.now();
       }
+      await sleep(POLL_INTERVAL_MS);
+      continue;
+    }
 
-      if (run.status === "completed") {
-        if (run.conclusion === "success") {
-          return true;
+    const workflowStatus = `${workflow.status}:${workflow.conclusion ?? "pending"}`;
+    if (workflowStatus !== lastStatus || Date.now() - lastReportedAt >= STATUS_INTERVAL_MS) {
+      console.log(
+        pc.dim(`  Workflow ${workflow.status} (${elapsedSeconds(startedAt)}s): ${workflow.url}`),
+      );
+      lastStatus = workflowStatus;
+      lastReportedAt = Date.now();
+    }
+
+    if (workflow.status === "completed") {
+      if (workflow.conclusion !== "success") {
+        if (rerunRequestedAt === null) {
+          logStarted(`Retrying failed release workflow ${workflow.databaseId} once...`);
+          run("gh", ["run", "rerun", String(workflow.databaseId)]);
+          rerunRequestedAt = Date.now();
+          await sleep(POLL_INTERVAL_MS);
+          continue;
         }
-        error(`Release build failed with conclusion: ${run.conclusion}`);
+        if (Date.now() - rerunRequestedAt <= RERUN_PROPAGATION_MS) {
+          await sleep(POLL_INTERVAL_MS);
+          continue;
+        }
+        fail(`Release workflow failed (${workflow.conclusion}): ${workflow.url}`);
       }
+      logCompleted(`GitHub release build passed: ${workflow.url}`);
+      return;
+    }
 
-      // Still running
-      return false;
-    },
-    {
-      timeoutMs: buildTimeoutMs,
-      intervalMs: POLL_INTERVAL_MS,
-    },
-  );
-  logCompleted("Release build completed successfully!");
-}
-
-function extractChangelogContent(version: string): string {
-  const changelogPath = join(REPO_ROOT, "docs", "docs", "changelog.md");
-  const changelog = readFileSync(changelogPath, "utf-8");
-
-  // Find the section for this version
-  const versionRegex = new RegExp(
-    `## v${version.replace(/\./g, "\\.")} \\([^)]+\\)([\\s\\S]*?)(?=## v|$)`,
-  );
-  const match = changelog.match(versionRegex);
-
-  if (!match) {
-    error(`Could not find changelog content for version ${version}`);
+    await sleep(POLL_INTERVAL_MS);
   }
 
-  return match[1].trim();
+  fail(
+    `Timed out after ${WORKFLOW_TIMEOUT_MINUTES} minutes waiting for the ${version} release workflow.`,
+  );
 }
 
-async function updateAndPublishRelease(version: string): Promise<void> {
-  const changelogContent = extractChangelogContent(version);
+async function waitForDraftRelease(version: string): Promise<ReleaseInfo> {
+  logStarted("Waiting for the draft GitHub Release...");
+  const startedAt = Date.now();
+  let consecutiveErrors = 0;
+  let lastReportedAt = 0;
 
-  logStarted("Waiting for draft release to appear...");
-  const timeoutMinutes = 5;
+  while (Date.now() - startedAt <= DRAFT_RELEASE_TIMEOUT_MS) {
+    let release: ReleaseInfo | null;
+    try {
+      release = getRelease(version);
+      consecutiveErrors = 0;
+    } catch (cause) {
+      consecutiveErrors += 1;
+      if (consecutiveErrors >= MAX_CONSECUTIVE_GITHUB_ERRORS) {
+        throw cause;
+      }
+      console.log(
+        pc.yellow(
+          `  GitHub release lookup failed (${consecutiveErrors}/${MAX_CONSECUTIVE_GITHUB_ERRORS}); retrying...`,
+        ),
+      );
+      await sleep(POLL_INTERVAL_MS);
+      continue;
+    }
 
-  await pollUntil(
-    () => {
-      const releases = exec(`gh release list --json tagName,isDraft,name -L 10`, { silent: true });
-      const releaseList = JSON.parse(releases) as Array<{
-        tagName: string;
-        isDraft: boolean;
-        name: string;
-      }>;
-
-      const draftRelease = releaseList.find((r) => r.isDraft && r.tagName.includes(version));
-      return draftRelease !== undefined;
-    },
-    {
-      timeoutMs: timeoutMinutes * 60 * MS_PER_SECOND,
-      intervalMs: POLL_INTERVAL_MS,
-    },
+    if (release) {
+      return release;
+    }
+    if (Date.now() - lastReportedAt >= STATUS_INTERVAL_MS) {
+      console.log(pc.dim(`  Draft not visible yet (${elapsedSeconds(startedAt)}s)`));
+      lastReportedAt = Date.now();
+    }
+    await sleep(POLL_INTERVAL_MS);
+  }
+  return fail(
+    `Timed out after ${DRAFT_RELEASE_TIMEOUT_MINUTES} minute waiting for the ${version} GitHub Release.`,
   );
+}
 
-  logCompleted("Draft release found");
+function publishRelease(version: string, release: ReleaseInfo): ReleaseInfo {
+  if (!release.isDraft) {
+    return release;
+  }
 
-  logStarted("Publishing release...");
-  exec(
-    `gh release edit ${version} --title "Tasks Bridge - v${version}" --notes ${JSON.stringify(changelogContent)} --draft=false`,
-  );
+  const notes = extractChangelogContent(readFileSync(changelogPath(), "utf8"), version);
+  const temporaryDirectory = mkdtempSync(join(tmpdir(), "tasks-bridge-release-notes-"));
+  const notesPath = join(temporaryDirectory, "release-notes.md");
+  writeFileSync(notesPath, `${notes}\n`);
 
-  logCompleted(`Release v${version} published successfully! 🎉`);
+  try {
+    logStarted(`Publishing Tasks Bridge ${version}...`);
+    run("gh", [
+      "release",
+      "edit",
+      version,
+      "--title",
+      `Tasks Bridge - v${version}`,
+      "--notes-file",
+      notesPath,
+      "--draft=false",
+      "--prerelease=false",
+    ]);
+    logCompleted(`Tasks Bridge ${version} published`);
+  } finally {
+    rmSync(temporaryDirectory, { force: true, recursive: true });
+  }
+
+  return getRelease(version) ?? fail(`Could not read the published ${version} release.`);
+}
+
+function validatePublishedRelease(version: string, release: ReleaseInfo): void {
+  validateReleaseContents(version, release);
+  if (release.isDraft) {
+    fail(`GitHub Release ${version} is still a draft.`);
+  }
+}
+
+function validateReleaseContents(version: string, release: ReleaseInfo): void {
+  if (release.tagName !== version || release.isPrerelease) {
+    fail(`GitHub Release ${version} does not match the stable release tag.`);
+  }
+
+  const assetNames = new Set(release.assets.map((asset) => asset.name));
+  const missingAssets = RELEASE_ASSETS.filter((asset) => !assetNames.has(asset));
+  if (missingAssets.length > 0) {
+    fail(`GitHub Release ${version} is missing: ${missingAssets.join(", ")}.`);
+  }
+}
+
+function printUsage(): void {
+  console.log(`Usage:
+  npm run release -- <x.y.z|major|minor|patch>
+
+Examples:
+  npm run release -- 2.9.0
+  npm run release -- minor`);
 }
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
-
-  if (args.length === 0) {
-    error("Usage: npm run release -- <version>");
+  if (args.length === 1 && (args[0] === "--help" || args[0] === "-h")) {
+    printUsage();
+    return;
+  }
+  if (args.length !== 1) {
+    printUsage();
+    fail("Expected exactly one release target.");
   }
 
-  if (args.length > 1) {
-    error(`Expected exactly 1 argument, got ${args.length}. Usage: npm run release -- <version>`);
+  const releaseInput = args[0];
+  validateReleaseVersionInput(releaseInput);
+  let releaseState = readReleaseState();
+  if (releaseState) {
+    recoverInterruptedRelease(releaseState, releaseInput);
   }
-
-  const version = args[0];
-  validateVersion(version);
-
-  logStarted(`Starting release process for version ${version}...`);
 
   checkPrerequisites();
-  ensureOnMaster();
-  createReleaseBranch(version);
-  updateChangelog(version);
-  updateVersionFiles(version);
-  const prUrl = createAndPushPR(version);
-  await waitForChecksAndMerge(prUrl);
-  pullLatestMaster();
-  createAndPushTag(version);
-  await waitForReleaseBuild(version);
-  await updateAndPublishRelease(version);
+  const currentVersion = readManifest().version;
+  const version =
+    releaseState?.targetVersion ?? resolveReleaseVersion(releaseInput, currentVersion);
+  if (releaseState) {
+    reconcileReleaseStateAfterPull(releaseState, currentVersion, version);
+  }
+  logStarted(`Starting one-command release for Tasks Bridge ${version}...`);
 
-  logCompleted(`Release process for version ${version} completed successfully!`);
+  const existingRelease = getRelease(version);
+  if (existingRelease && !existingRelease.isDraft) {
+    const head = run("git", ["rev-parse", "HEAD"], { silent: true });
+    const expectedReleaseHead = releaseState?.releaseHead ?? head;
+    const remoteCommit = remoteTagCommit(version);
+    if (remoteCommit !== expectedReleaseHead) {
+      fail(
+        `Tasks Bridge ${version} is already released from ${remoteCommit ?? "an unknown commit"}, not expected commit ${expectedReleaseHead}.`,
+      );
+    }
+    validatePublishedRelease(version, existingRelease);
+    clearReleaseState();
+    logCompleted(`Tasks Bridge ${version} is already released: ${existingRelease.url}`);
+    return;
+  }
+
+  assertMasterCanRelease(currentVersion, version);
+
+  try {
+    if (compareVersions(version, currentVersion) > 0) {
+      if (
+        run("git", ["rev-parse", "HEAD"], { silent: true }) !==
+        run("git", ["rev-parse", "origin/master"], { silent: true })
+      ) {
+        fail("Pull or push master before preparing a new release.");
+      }
+      if (run("git", ["tag", "--list", version], { silent: true }).length > 0) {
+        fail(`Tag ${version} already exists before its version files are prepared.`);
+      }
+
+      const snapshot = snapshotReleaseFiles();
+      const preparationHead = run("git", ["rev-parse", "HEAD"], { silent: true });
+      releaseState = {
+        baseHead: preparationHead,
+        input: releaseState?.input ?? releaseInput,
+        targetVersion: version,
+      };
+      writeReleaseState(releaseState);
+      preparationRollback = () => {
+        const currentHead = tryRun("git", ["rev-parse", "HEAD"]).output;
+        if (currentHead !== preparationHead) {
+          logCompleted("Release commit already exists; keeping it so the release can resume");
+          return;
+        }
+        restoreReleaseFiles(snapshot);
+        clearReleaseState();
+      };
+      prepareRelease(version);
+      const releaseHead = run("git", ["rev-parse", "HEAD"], { silent: true });
+      releaseState.releaseHead = releaseHead;
+      writeReleaseState(releaseState);
+      preparationRollback = null;
+    } else {
+      validatePreparedVersion(version);
+      if (!releaseState) {
+        const snapshot = snapshotReleaseFiles();
+        const validationHead = run("git", ["rev-parse", "HEAD"], { silent: true });
+        preparationRollback = () => {
+          if (tryRun("git", ["rev-parse", "HEAD"]).output === validationHead) {
+            restoreReleaseFiles(snapshot);
+          }
+        };
+        runReleaseChecks(version);
+        const generatedChanges = changedFiles();
+        if (generatedChanges.length > 0) {
+          fail(
+            `Release checks changed files that are not committed:\n${generatedChanges.join("\n")}`,
+          );
+        }
+        preparationRollback = null;
+      }
+    }
+
+    pushMasterIfNeeded();
+    const releaseHead =
+      releaseState?.releaseHead ?? run("git", ["rev-parse", "HEAD"], { silent: true });
+    const headSha = ensureReleaseTag(version, releaseHead);
+    await waitForReleaseBuild(version, headSha);
+    const draft = await waitForDraftRelease(version);
+    validateReleaseContents(version, draft);
+    const published = publishRelease(version, draft);
+    validatePublishedRelease(version, published);
+
+    clearReleaseState();
+    logCompleted(`Release complete: ${published.url}`);
+  } catch (cause) {
+    rollbackPreparationIfNeeded();
+    throw cause;
+  }
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
+main().catch((cause) => {
+  const message = cause instanceof Error ? cause.message : String(cause);
+  console.error(pc.red(`✗ ${message}`));
+  process.exitCode = 1;
 });

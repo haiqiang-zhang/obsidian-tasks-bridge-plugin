@@ -12,6 +12,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### 🐛 Fixes
+
+- Realigned the Project overview header with the native Obsidian Bases layout, including vertically centered controls, balanced left and right metadata, and responsive narrow-width alignment.
+
+### 🔁 Changes
+
+- Replaced the interactive PR-based release process with the resumable one-line `npm run release -- <version|patch|minor|major>` command. It validates, tests, versions, commits, tags, reports GitHub build progress, and publishes the GitHub Release without manual intermediate steps.
+
 ## v2.8.0 (2026-08-10)
 
 ### ✨ Features

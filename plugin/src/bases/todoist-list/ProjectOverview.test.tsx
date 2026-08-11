@@ -97,7 +97,22 @@ describe("ProjectOverview", () => {
 
     const region = screen.getByRole("region", { name: "Project overview" });
     const toggle = within(region).getByRole("button", { name: /Project overview/ });
+    const leading = toggle.querySelector(".todoist-bases-project-overview-header-leading");
+    const metadata = toggle.querySelector(".todoist-bases-project-overview-header-meta");
     const bodyId = toggle.getAttribute("aria-controls");
+    expect(toggle.children).toHaveLength(2);
+    expect(toggle.children[0]).toBe(leading);
+    expect(toggle.children[1]).toBe(metadata);
+    expect(leading).toContainElement(
+      toggle.querySelector(".todoist-bases-project-overview-disclosure"),
+    );
+    expect(leading).toContainElement(
+      toggle.querySelector(".todoist-bases-project-overview-title-group"),
+    );
+    expect(metadata).toContainElement(
+      toggle.querySelector(".todoist-bases-project-overview-header-summary"),
+    );
+    expect(metadata).toContainElement(toggle.querySelector("time"));
     expect(toggle).toHaveAttribute("aria-expanded", "true");
     expect(bodyId).not.toBeNull();
     expect(document.getElementById(bodyId ?? "")).toBeVisible();

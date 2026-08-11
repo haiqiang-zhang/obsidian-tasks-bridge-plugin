@@ -1,5 +1,8 @@
 name: "premerge"
-on: [push]
+on:
+  push:
+    branches:
+      - "**"
 
 jobs:
   plugin:
@@ -59,6 +62,10 @@ jobs:
 
       - name: Lint
         run: npm run lint:check
+        working-directory: ./scripts
+
+      - name: Test
+        run: npm test
         working-directory: ./scripts
 
       - name: Generate files
