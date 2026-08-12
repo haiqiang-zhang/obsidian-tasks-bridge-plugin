@@ -2,7 +2,7 @@ import { render } from "@testing-library/react";
 import * as obsidian from "obsidian";
 import { describe, expect, it, type MockInstance, vi } from "vitest";
 
-import { ObsidianIcon } from "./index";
+import { ObsidianIcon, ObsidianLoadingIcon } from "./index";
 
 describe("ObsidianIcon", () => {
   it("should render div with obsidian-icon class and correct data-icon-size", () => {
@@ -37,5 +37,17 @@ describe("ObsidianIcon", () => {
 
     const div = container.querySelector(".obsidian-icon.extra-class");
     expect(div).toBeInTheDocument();
+  });
+
+  it("renders Obsidian's native loader without the progress-bar class", () => {
+    const spy: MockInstance = vi.spyOn(obsidian, "setIcon");
+
+    const { container } = render(<ObsidianLoadingIcon size="s" />);
+
+    const loader = container.querySelector(".obsidian-icon.loader-spinner");
+    expect(loader).toBeInTheDocument();
+    expect(loader).not.toHaveClass("is-loading");
+    expect(spy).toHaveBeenCalledWith(expect.any(HTMLElement), "loader-2");
+    spy.mockRestore();
   });
 });

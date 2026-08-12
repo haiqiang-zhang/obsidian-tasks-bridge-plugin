@@ -9,7 +9,6 @@ export function makeSettings(overrides?: Partial<Settings>): Settings {
     autoRefreshInterval: 60,
     projectSyncEnabled: false,
     projectSyncMappings: [],
-    projectSyncWriterId: null,
     renderDateIcon: true,
     renderProjectIcon: true,
     renderLabelsIcon: true,

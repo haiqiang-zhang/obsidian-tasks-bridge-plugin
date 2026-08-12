@@ -35,6 +35,8 @@ Todoist is the first supported backend. The current Todoist integration provides
 
 Project sync is a one-way Todoist-to-Obsidian projection. It retrieves complete completed-task history from Todoist's project endpoint, preserves note bodies and properties not managed by the plugin, and does not treat arbitrary Base or Markdown edits as Todoist changes. Its **Tasks List** Base view provides explicit server-backed actions for editing, completing, and reopening tasks. Open task notes are deferred instead of overwritten, and tasks that leave an included child hierarchy are retained as `out_of_scope`. See the [project sync guide](https://haiqiang-zhang.github.io/obsidian-tasks-bridge-plugin/docs/project-mode/).
 
+Every device can run automatic Project sync. Before an automatic projection, Tasks Bridge waits for incoming Obsidian Sync downloads, merges, and remote deletions to finish and briefly settle. Upload-only activity, including uploads triggered by Tasks Bridge's own writes, does not block the next refresh. Manual Project sync remains available immediately. This is local, direction-aware coordination on each device, not a distributed lock or cross-device ownership protocol.
+
 The Todoist integration is not created by, affiliated with, endorsed by, or supported by Doist.
 
 Read the [Tasks Bridge documentation](https://haiqiang-zhang.github.io/obsidian-tasks-bridge-plugin/) for installation, query syntax, and general usage.
@@ -52,6 +54,7 @@ Compared with the upstream Todoist Sync codebase, this fork adds:
 - Time-zone-correct same-day due-date handling.
 - Optional completed-task display with complete cursor pagination and user-controlled three-month history expansion.
 - Independent multi-project sync with validated folder mappings, resumable root-folder moves, nested child-project folders, one Markdown file per task, complete active and completed history, and flat `todoist_*` properties for Obsidian Bases.
+- Multi-device automatic Project sync that defers for incoming Obsidian Sync file changes without treating local uploads as a conflict.
 - A native-styled **Tasks List** Base view with Project → Section → Task → Subtask hierarchy, arbitrary project roots, a GitHub-style daily completion heatmap, native filters/sorts/groups/property order, and controlled Todoist task actions.
 - Symlink-safe production builds that preserve the plugin's existing `data.json`.
 

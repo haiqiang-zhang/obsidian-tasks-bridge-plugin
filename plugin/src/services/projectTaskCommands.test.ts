@@ -311,7 +311,7 @@ describe("ProjectTaskCommandService", () => {
     expect(harness.runInternalMutation).not.toHaveBeenCalled();
   });
 
-  it("updates Todoist without writing or reconciling on a device denied by automatic projection policy", async () => {
+  it("updates Todoist without writing or reconciling when automatic projection is cancelled", async () => {
     const harness = makeHarness({ automaticProjectionAllowed: false });
     const params: UpdateTaskParams = { content: "Updated remotely" };
 
@@ -411,7 +411,7 @@ describe("ProjectTaskCommandService", () => {
       action: "reopenProjectTask",
       invoke: (service: ProjectTaskCommandService) => service.reopenTask(reference),
     },
-  ] as const)("changes Todoist for $name but does not project status on a device denied by policy", async (testCase) => {
+  ] as const)("changes Todoist for $name but does not project status when automatic projection is cancelled", async (testCase) => {
     const harness = makeHarness({
       automaticProjectionAllowed: false,
       frontmatter: managedFrontmatter({ todoist_status: testCase.status }),

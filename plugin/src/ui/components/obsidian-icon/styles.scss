@@ -11,3 +11,16 @@ $sizes: xs, s, m, l, xl;
     }
   }
 }
+
+.obsidian-icon.loader-spinner {
+  width: var(--icon-size);
+  height: var(--icon-size);
+  justify-content: center;
+  margin: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .obsidian-icon.loader-spinner svg {
+    animation: none;
+  }
+}

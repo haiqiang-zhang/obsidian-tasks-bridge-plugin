@@ -10,6 +10,8 @@ type Props = {
   className?: string;
 } & Omit<React.HTMLAttributes<HTMLDivElement>, "size" | "id" | "className">;
 
+type LoadingProps = Omit<Props, "id">;
+
 export const ObsidianIcon: React.FC<Props> = ({ size, id, className, ...rest }) => {
   const div = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -29,3 +31,8 @@ export const ObsidianIcon: React.FC<Props> = ({ size, id, className, ...rest }) 
     />
   );
 };
+
+/** Obsidian's native loader icon and animation contract. */
+export const ObsidianLoadingIcon: React.FC<LoadingProps> = ({ className, ...rest }) => (
+  <ObsidianIcon className={classNames("loader-spinner", className)} id="loader-2" {...rest} />
+);

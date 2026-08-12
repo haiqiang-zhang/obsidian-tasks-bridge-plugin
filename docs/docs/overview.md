@@ -22,7 +22,7 @@ Todoist is the first supported backend. Its current integration works on desktop
 
 Its custom **Tasks List** Base view rebuilds Project → Section → Task → Subtask hierarchy, lets each view choose any project as its root, and continues to honor native Base filters, sorting, grouping, and property order. A collapsible **Project overview** uses the latest complete Project Sync snapshot to summarize the selected root and all synchronized descendants, including child projects with no tasks. It also includes a GitHub-style daily completion heatmap with recent-range and calendar-year choices. Task rows and toolbar counts remain scoped to the current Base filters. Explicit actions edit, complete, or reopen the Todoist task before Project sync refreshes the Markdown projection.
 
-The two modes keep independent data and workflows, but share the plugin-level **Auto-refresh** toggle and interval. A query block can override the shared interval for that block with its own `autorefresh` value. To avoid simultaneous Obsidian Sync edits, Project sync runs automatically only on the one device explicitly selected as the automatic writer, and never projects Markdown files immediately at startup. Project sync retrieves complete completed-task history through Todoist's project endpoint and does not use query filters or the **Load earlier** workflow. Query blocks do not create task files.
+The two modes keep independent data and workflows, but share the plugin-level **Auto-refresh** toggle and interval. A query block can override the shared interval for that block with its own `autorefresh` value. Every device with Project sync and Auto-refresh enabled can run the periodic projection. Before an automatic Project sync write, Tasks Bridge waits for incoming Obsidian Sync downloads, merges, and remote deletions to finish and briefly settle; an upload-only Sync cycle, including one triggered by the plugin's own writes, does not block the refresh. This gate does not pause query-block refreshes, and manual Project sync bypasses it. Project sync retrieves complete completed-task history through Todoist's project endpoint and does not use query filters or the **Load earlier** workflow. Query blocks do not create task files.
 
 ## What Tasks Bridge adds to Todoist Sync
 
@@ -35,5 +35,6 @@ The two modes keep independent data and workflows, but share the plugin-level **
 - Titled and untitled blocks use compact, consistent layouts.
 - Same-day due dates are handled correctly across time zones.
 - Independent multi-project sync maps separate Todoist project trees into Base-friendly Markdown files with complete active and completed history, including resumable moves when a mapping's Vault folder changes.
+- Automatic Project sync runs on every configured device and defers for incoming Obsidian Sync file changes without waiting on local uploads.
 - The **Tasks List** Base view adds a native-styled hierarchical workspace with arbitrary project roots, a collapsible complete-project overview, a daily completion heatmap, and controlled server-backed task actions.
 - Symlink-safe production builds preserve the plugin's existing `data.json`.

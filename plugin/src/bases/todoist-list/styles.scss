@@ -1,9 +1,3 @@
-@keyframes todoist-bases-list-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
 .todoist-bases-list-container {
   container: todoist-bases-list / inline-size;
   min-width: 0;
@@ -837,6 +831,7 @@
 
   [data-loading="true"] & {
     color: transparent;
+    opacity: 0;
 
     &::after {
       content: "";
@@ -1111,10 +1106,6 @@
   }
 }
 
-.todoist-bases-list .obsidian-icon.is-loading {
-  animation: todoist-bases-list-spin 1s linear infinite;
-}
-
 @media (hover: none) {
   .todoist-bases-task-actions {
     opacity: 1;
@@ -1154,10 +1145,6 @@
 @media (prefers-reduced-motion: reduce) {
   .todoist-bases-task-actions {
     transition: none;
-  }
-
-  .todoist-bases-list .obsidian-icon.is-loading {
-    animation: none;
   }
 
   .todoist-bases-project-overview-ring-value,

@@ -9,7 +9,7 @@ import {
 } from "react";
 
 import type { ProjectSyncStatisticsSnapshot, ProjectSyncStatus } from "@/project-sync";
-import { ObsidianIcon } from "@/ui/components/obsidian-icon";
+import { ObsidianIcon, ObsidianLoadingIcon } from "@/ui/components/obsidian-icon";
 
 import type { CompletionHeatmapRange } from "./completionHeatmapModel";
 import { scopeTodoistListGroups } from "./model";
@@ -785,9 +785,7 @@ const TaskBranch: React.FC<
             onChange={() => void runCompletionAction()}
             type="checkbox"
           />
-          {(pending === "complete" || pending === "reopen") && (
-            <ObsidianIcon className="is-loading" id="lucide-loader-circle" size="xs" />
-          )}
+          {(pending === "complete" || pending === "reopen") && <ObsidianLoadingIcon size="xs" />}
         </span>
         <div className="todoist-bases-task-main">
           <div className="todoist-bases-task-primary">
@@ -839,11 +837,11 @@ const TaskBranch: React.FC<
               title={editReadOnlyReason ?? "Edit task"}
               type="button"
             >
-              <ObsidianIcon
-                className={pending === "edit" ? "is-loading" : undefined}
-                id={pending === "edit" ? "lucide-loader-circle" : "lucide-pencil"}
-                size="s"
-              />
+              {pending === "edit" ? (
+                <ObsidianLoadingIcon size="s" />
+              ) : (
+                <ObsidianIcon id="lucide-pencil" size="s" />
+              )}
             </button>
           </span>
           {task.url !== undefined && (

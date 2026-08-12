@@ -232,9 +232,12 @@ describe("ProjectOverview", () => {
     );
     expect(screen.getByText("All synchronized projects")).toBeInTheDocument();
     expect(screen.getByText("Waiting for Project Sync")).toBeInTheDocument();
-    expect(screen.getByRole("status")).toHaveTextContent(
+    const status = screen.getByRole("status");
+    expect(status).toHaveTextContent(
       "Preparing project overviewWaiting for the initial Project Sync.",
     );
+    expect(status.querySelector(".loader-spinner")).toBeInTheDocument();
+    expect(status.querySelector(".is-loading")).not.toBeInTheDocument();
     expect(screen.queryByRole("list", { name: "Project statistics" })).not.toBeInTheDocument();
   });
 

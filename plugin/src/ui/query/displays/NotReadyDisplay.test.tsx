@@ -12,5 +12,7 @@ describe("NotReadyDisplay", () => {
       "aria-hidden",
       "true",
     );
+    expect(container.querySelector(".todoist-query-loading-icon")).toHaveClass("loader-spinner");
+    expect(container.querySelector(".todoist-query-loading-icon")).not.toHaveClass("is-loading");
   });
 });

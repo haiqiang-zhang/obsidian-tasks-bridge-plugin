@@ -1,7 +1,7 @@
 import type React from "react";
 
 import type { TokenValidation } from "../../../token";
-import { ObsidianIcon } from "../obsidian-icon";
+import { ObsidianIcon, ObsidianLoadingIcon } from "../obsidian-icon";
 import "./styles.scss";
 
 export const TokenValidationIcon: React.FC<{
@@ -11,7 +11,7 @@ export const TokenValidationIcon: React.FC<{
     case "none":
       return null;
     case "in-progress":
-      return <ObsidianIcon id="loader-2" className="token-validation-in-progress" size="m" />;
+      return <ObsidianLoadingIcon className="token-validation-in-progress" size="m" />;
     case "error":
       return <ObsidianIcon id="x-circle" className="token-validation-error" size="m" />;
     case "success":

@@ -12,6 +12,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### 🔁 Changes
+
+- Removed the single-device automatic Project sync assignment. Every configured device can now run periodic Project sync when global **Auto-refresh** is enabled.
+- Automatic Project sync now defers only for incoming Obsidian Sync downloads, merges, and remote deletions, then resumes after the incoming cycle settles. Upload-only activity, including uploads triggered by Tasks Bridge's own writes, does not block a refresh. Manual Project sync remains immediate and does not use this gate.
+- Removed the legacy writer control and writer identifier from current settings. The incoming-Sync gate coordinates locally on each device and is not a distributed lock.
+
+### 🐛 Bug Fixes
+
+- Replaced custom loading animations with Obsidian's native spinner, removing the unintended horizontal progress line.
+
 ## v2.9.0 (2026-08-12)
 
 ### ✨ Features

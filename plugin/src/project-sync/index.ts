@@ -1,7 +1,5 @@
 export {
-  isAutomaticProjectSyncWriter,
   isProjectSyncPath,
-  PROJECT_SYNC_QUIET_PERIOD_MS,
   ProjectSyncActivityTracker,
 } from "./autoSync";
 export {

@@ -22,12 +22,12 @@ export const nl: DeepPartial<Translations> = {
       toggle: {
         label: "Automatisch verversen inschakelen",
         description:
-          "Queryblokken op dit apparaat en projectsynchronisatie op het geselecteerde schrijfapparaat automatisch verversen met een gedeeld interval",
+          "Queryblokken en projectsynchronisatie op elk apparaat automatisch verversen met een gedeeld interval; inkomende Obsidian Sync-wijzigingen stellen projectsynchronisatie uit totdat ze zijn verwerkt",
       },
       interval: {
         label: "Interval automatisch verversen",
         description:
-          "Het interval, in seconden, voor queryblokken op dit apparaat en projectsynchronisatie op het geselecteerde schrijfapparaat",
+          "Het interval, in seconden, voor queryblokken en projectsynchronisatie op dit apparaat",
       },
     },
     rendering: {

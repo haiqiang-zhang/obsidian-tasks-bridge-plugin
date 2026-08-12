@@ -188,7 +188,10 @@ describe("QueryRoot cache-first rendering", () => {
 
     renderQuery(mock.plugin);
 
-    expect(screen.getByRole("status")).toHaveTextContent("Loading Todoist tasks");
+    const status = screen.getByRole("status");
+    expect(status).toHaveTextContent("Loading Todoist tasks");
+    expect(status.querySelector(".loader-spinner")).toBeInTheDocument();
+    expect(status.querySelector(".is-loading")).not.toBeInTheDocument();
     await waitFor(() => expect(mock.refresh).toHaveBeenCalledOnce());
 
     act(() => {
@@ -454,6 +457,13 @@ describe("QueryRoot cache-first rendering", () => {
     };
     const completedTasksProgress = makeProgress(nextPage);
     const mock = makePlugin([completedTask], nextPage);
+    let resolveLoadMore!: () => void;
+    mock.loadMoreCompleted.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveLoadMore = resolve;
+        }),
+    );
     const followingPage = {
       since: "2026-02-10T06:00:00.000Z",
       until: nextPage.since,
@@ -467,6 +477,11 @@ describe("QueryRoot cache-first rendering", () => {
     });
     fireEvent.click(button);
     await waitFor(() => expect(mock.loadMoreCompleted).toHaveBeenCalledOnce());
+    await waitFor(() => expect(button.querySelector(".loader-spinner")).toBeInTheDocument());
+    expect(button.querySelector(".is-loading")).not.toBeInTheDocument();
+
+    await act(async () => resolveLoadMore());
+    await waitFor(() => expect(button).not.toBeDisabled());
 
     act(() => {
       mock.callback()({

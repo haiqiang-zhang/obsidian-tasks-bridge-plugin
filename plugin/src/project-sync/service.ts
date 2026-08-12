@@ -151,10 +151,10 @@ export class ProjectFolderSyncService {
       return this.inFlight.promise
         .catch(() => null)
         .then(() => {
-          // The caller requested the generation captured above. If Vault activity, a writer
-          // transfer, or another config change invalidates that request while it waits, do not
-          // silently restart with the newest generation: doing so would bypass the caller's
-          // writer/quiet-period policy checks.
+          // The caller requested the generation captured above. If Vault activity or another
+          // config change invalidates that request while it waits, do not silently restart with
+          // the newest generation: doing so would bypass the caller's activity and Sync-permit
+          // checks.
           if (this.disposed || generation !== this.configGeneration) {
             return null;
           }

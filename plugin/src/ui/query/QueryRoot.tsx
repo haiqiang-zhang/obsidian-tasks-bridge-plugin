@@ -17,7 +17,7 @@ import type TodoistPlugin from "@/index";
 import type { QueryWarning } from "@/query/parser";
 import type { TaskQuery } from "@/query/schema/tasks";
 import { type Settings, useSettingsStore } from "@/settings";
-import { ObsidianIcon } from "@/ui/components/obsidian-icon";
+import { ObsidianIcon, ObsidianLoadingIcon } from "@/ui/components/obsidian-icon";
 import { PluginContext } from "@/ui/context";
 import { Displays } from "@/ui/query/displays";
 import { QueryHeader } from "@/ui/query/QueryHeader";
@@ -255,11 +255,11 @@ export const QueryRoot: React.FC<Props> = ({ query, warnings }) => {
                 disabled={isLoadingMore}
                 onClick={loadMoreCompleted}
               >
-                <ObsidianIcon
-                  id={isLoadingMore ? "loader-2" : "history"}
-                  size="s"
-                  className={isLoadingMore ? "is-loading" : undefined}
-                />
+                {isLoadingMore ? (
+                  <ObsidianLoadingIcon size="s" />
+                ) : (
+                  <ObsidianIcon id="history" size="s" />
+                )}
                 <span>
                   {isLoadingMore
                     ? completedHistoryText.loadingEarlier(nextCompletedHistoryMonths)

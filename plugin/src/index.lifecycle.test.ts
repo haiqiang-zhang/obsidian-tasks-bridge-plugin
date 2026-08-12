@@ -1,4 +1,4 @@
-import type { App, PluginManifest } from "obsidian";
+import type { App, EventRef, PluginManifest } from "obsidian";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { TodoistListActions, TodoistListTaskRecord } from "@/bases/todoist-list";
@@ -187,13 +187,26 @@ type LifecycleInternals = {
 
 type VaultActivityListener = (file: { path: string }, oldPath?: string) => void;
 
+type MutableSyncInstance = {
+  dataLoaded: boolean;
+  getStatus(): string;
+  gettingServer: unknown;
+  initial: boolean;
+  initialized: boolean;
+  newServerFiles: unknown[];
+  off: ReturnType<typeof vi.fn>;
+  on: ReturnType<typeof vi.fn>;
+  pause: boolean;
+  ready: boolean;
+  syncStatus: string;
+};
+
 const defaultSettings = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
   apiTokenSecretId: "swt-todoist-api-token",
   autoRefreshInterval: 60,
   autoRefreshToggle: false,
   projectSyncEnabled: false,
   projectSyncMappings: [],
-  projectSyncWriterId: null,
   tokenStorage: "secrets",
   version: 1,
   ...overrides,
@@ -261,9 +274,65 @@ const deferred = <T>(): Deferred<T> => {
   return { promise, resolve: resolvePromise, reject: rejectPromise };
 };
 
-const makePlugin = (services: TestServices, onLayoutReady = vi.fn()) => {
+const flushPromises = async (): Promise<void> => {
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+};
+
+const makeSyncHarness = (
+  overrides: Partial<Omit<MutableSyncInstance, "getStatus" | "off" | "on">> & {
+    coreStatus?: string;
+  } = {},
+) => {
+  const { coreStatus: initialCoreStatus = "syncing", ...instanceOverrides } = overrides;
+  const listeners = new Set<() => void>();
+  let coreStatus = initialCoreStatus;
+  const eventRef = {} as EventRef;
+  const instance: MutableSyncInstance = {
+    dataLoaded: true,
+    getStatus: () => coreStatus,
+    gettingServer: null,
+    initial: false,
+    initialized: true,
+    newServerFiles: [],
+    off: vi.fn((_name: string, listener: () => void) => listeners.delete(listener)),
+    on: vi.fn((_name: string, listener: () => void) => {
+      listeners.add(listener);
+      return eventRef;
+    }),
+    pause: false,
+    ready: true,
+    syncStatus: "Fully synced",
+    ...instanceOverrides,
+  };
+  const internalPlugins = {
+    getEnabledPluginById: vi.fn(() => instance),
+    getPluginById: vi.fn(() => ({ enabled: true, instance })),
+  };
+
+  return {
+    emitStatusChange: () => {
+      for (const listener of listeners) {
+        listener();
+      }
+    },
+    instance,
+    internalPlugins,
+    setCoreStatus: (status: string) => {
+      coreStatus = status;
+    },
+  };
+};
+
+const makePlugin = (
+  services: TestServices,
+  onLayoutReady = vi.fn(),
+  internalPlugins: unknown | null = makeSyncHarness().internalPlugins,
+) => {
   runtime.makeServices.mockReturnValue(services);
   const app = {
+    ...(internalPlugins === null ? {} : { internalPlugins }),
     loadLocalStorage: runtime.loadLocalStorage,
     saveLocalStorage: runtime.saveLocalStorage,
     vault: {
@@ -294,9 +363,7 @@ describe("TodoistPlugin async lifecycle", () => {
     runtime.notices.length = 0;
     runtime.settings.current = defaultSettings();
     runtime.loadData.mockResolvedValue(defaultSettings());
-    runtime.loadLocalStorage.mockImplementation((key: string) =>
-      key === "tasks-bridge:device-id:v1" ? "device-a" : null,
-    );
+    runtime.loadLocalStorage.mockReturnValue(null);
     runtime.vaultOn.mockReturnValue({});
     runtime.saveData.mockResolvedValue(undefined);
     vi.stubGlobal("crypto", {
@@ -307,6 +374,7 @@ describe("TodoistPlugin async lifecycle", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
@@ -582,8 +650,8 @@ describe("TodoistPlugin async lifecycle", () => {
     const plugin = makePlugin(services);
     runtime.settings.current = defaultSettings({
       debugLogging: false,
-      projectSyncWriterId: "device-a",
-      version: 4,
+      renderLabelsIcon: false,
+      version: 5,
     });
     runtime.loadData.mockResolvedValueOnce({
       autoRefreshInterval: 45,
@@ -592,7 +660,7 @@ describe("TodoistPlugin async lifecycle", () => {
       projectSyncEnabled: false,
       projectSyncMappings: [],
       tokenStorage: "secrets",
-      version: 3,
+      version: 4,
     });
 
     await plugin.onExternalSettingsChange();
@@ -601,28 +669,28 @@ describe("TodoistPlugin async lifecycle", () => {
       autoRefreshInterval: 45,
       autoRefreshToggle: true,
       debugLogging: true,
-      projectSyncWriterId: "device-a",
-      version: 4,
+      renderLabelsIcon: false,
+      version: 5,
     });
     const lastSave = runtime.saveData.mock.calls[runtime.saveData.mock.calls.length - 1]?.[0];
-    expect(lastSave).toMatchObject({ projectSyncWriterId: "device-a", version: 4 });
+    expect(lastSave).toMatchObject({ renderLabelsIcon: false, version: 5 });
   });
 
-  it("honors an explicit external writer release", async () => {
+  it("drops a legacy Project sync writer assignment received from another device", async () => {
     const services = makeServices();
-    runtime.settings.current = defaultSettings({
-      projectSyncWriterId: "device-a",
-      version: 4,
+    runtime.settings.current = defaultSettings({ version: 5 });
+    runtime.loadData.mockResolvedValueOnce({
+      ...defaultSettings({ version: 4 }),
+      projectSyncWriterId: "device-b",
     });
-    runtime.loadData.mockResolvedValueOnce(
-      defaultSettings({ projectSyncWriterId: null, version: 4 }),
-    );
     const plugin = makePlugin(services);
 
     await plugin.onExternalSettingsChange();
 
-    expect(runtime.settings.current.projectSyncWriterId).toBeNull();
-    expect(services.projectSync.invalidate).toHaveBeenCalledOnce();
+    expect(runtime.settings.current).not.toHaveProperty("projectSyncWriterId");
+    expect(runtime.settings.current.version).toBe(5);
+    const lastSave = runtime.saveData.mock.calls[runtime.saveData.mock.calls.length - 1]?.[0];
+    expect(lastSave).not.toHaveProperty("projectSyncWriterId");
   });
 
   it("keeps the legacy Project mapping migration path for external settings", async () => {
@@ -637,14 +705,14 @@ describe("TodoistPlugin async lifecycle", () => {
           previousFolders: [],
         },
       ],
-      version: 4,
+      version: 5,
     });
     runtime.loadData.mockResolvedValueOnce({
       projectSyncEnabled: true,
       projectSyncFolder: "Todoist Projects",
       projectSyncIncludeSubprojects: true,
       projectSyncProject: { projectId: "root", projectName: "Root/Project" },
-      version: 3,
+      version: 4,
     });
     const plugin = makePlugin(services);
 
@@ -657,7 +725,7 @@ describe("TodoistPlugin async lifecycle", () => {
         project: { projectId: "root", projectName: "Root/Project" },
       }),
     ]);
-    expect(runtime.settings.current.version).toBe(4);
+    expect(runtime.settings.current.version).toBe(5);
   });
 
   it("does not echo an already canonical external settings update back to Sync", async () => {
@@ -885,7 +953,6 @@ describe("TodoistPlugin async lifecycle", () => {
     const stored = {
       ...defaultSettings(),
       projectSyncEnabled: true,
-      projectSyncWriterId: "device-a",
       projectSyncMappings: [
         {
           id: "mapping-work",
@@ -1024,66 +1091,217 @@ describe("TodoistPlugin async lifecycle", () => {
     expect(services.projectSync.sync).not.toHaveBeenCalled();
   });
 
-  it.each([
-    ["no device", null],
-    ["another device", "device-b"],
-  ])("never automatically projects on %s", async (_label, projectSyncWriterId) => {
-    const services = makeServices();
+  it("runs automatic Project sync independently on every device", async () => {
+    const firstDeviceServices = makeServices();
+    const secondDeviceServices = makeServices();
+    firstDeviceServices.projectSync.sync.mockResolvedValueOnce(emptyResult());
+    secondDeviceServices.projectSync.sync.mockResolvedValueOnce(emptyResult());
     runtime.settings.current = defaultSettings({
       autoRefreshToggle: true,
       projectSyncEnabled: true,
-      projectSyncWriterId,
     });
-    const plugin = makePlugin(services);
+    const firstDevice = makePlugin(firstDeviceServices);
+    const secondDevice = makePlugin(secondDeviceServices);
+
+    await Promise.all([
+      internals(firstDevice).runScheduledSync(),
+      internals(secondDevice).runScheduledSync(),
+    ]);
+
+    expect(firstDeviceServices.todoist.syncMetadata).toHaveBeenCalledOnce();
+    expect(secondDeviceServices.todoist.syncMetadata).toHaveBeenCalledOnce();
+    expect(firstDeviceServices.projectSync.sync).toHaveBeenCalledOnce();
+    expect(secondDeviceServices.projectSync.sync).toHaveBeenCalledOnce();
+  });
+
+  it("does not defer Fully synced when the coarse Sync engine status is still syncing", async () => {
+    const services = makeServices();
+    services.projectSync.sync.mockResolvedValueOnce(emptyResult());
+    runtime.settings.current = defaultSettings({
+      autoRefreshToggle: true,
+      projectSyncEnabled: true,
+    });
+    const sync = makeSyncHarness({ coreStatus: "syncing", syncStatus: "Fully synced" });
+    const plugin = makePlugin(services, vi.fn(), sync.internalPlugins);
 
     await internals(plugin).runScheduledSync();
 
     expect(services.todoist.syncMetadata).toHaveBeenCalledOnce();
-    expect(services.projectSync.sync).not.toHaveBeenCalled();
-  });
-
-  it("waits for the Project folders to become quiet after startup", async () => {
-    let now = 1000;
-    vi.spyOn(Date, "now").mockImplementation(() => now);
-    const services = makeServices();
-    const stored = defaultSettings({
-      autoRefreshToggle: true,
-      projectSyncEnabled: true,
-      projectSyncWriterId: "device-a",
-      projectSyncMappings: [
-        {
-          id: "mapping-work",
-          project: { projectId: "work", projectName: "Work" },
-          folder: "Tasks/Work",
-          includeSubprojects: true,
-          previousFolders: [],
-        },
-      ],
-    });
-    runtime.loadData.mockResolvedValueOnce(stored);
-    runtime.settings.current = stored;
-    vi.spyOn(window, "setInterval").mockReturnValue(
-      51 as unknown as ReturnType<typeof window.setInterval>,
-    );
-    const plugin = makePlugin(services);
-    await plugin.onload();
-
-    await internals(plugin).runScheduledSync();
-    expect(services.projectSync.sync).not.toHaveBeenCalled();
-
-    now += 30_000;
-    await internals(plugin).runScheduledSync();
     expect(services.projectSync.sync).toHaveBeenCalledOnce();
   });
 
-  it("invalidates an in-flight Project sync when external mapped Vault activity arrives", async () => {
-    let now = 1000;
-    vi.spyOn(Date, "now").mockImplementation(() => now);
+  it("does not defer automatic Project sync during an upload-only cycle", async () => {
     const services = makeServices();
+    services.projectSync.sync.mockResolvedValueOnce(emptyResult());
+    runtime.settings.current = defaultSettings({
+      autoRefreshToggle: true,
+      projectSyncEnabled: true,
+    });
+    const sync = makeSyncHarness({
+      coreStatus: "syncing",
+      syncStatus: "Uploading Tasks/Work/Local task.md",
+    });
+    const plugin = makePlugin(services, vi.fn(), sync.internalPlugins);
+
+    await internals(plugin).runScheduledSync();
+
+    expect(services.todoist.syncMetadata).toHaveBeenCalledOnce();
+    expect(services.projectSync.sync).toHaveBeenCalledOnce();
+    expect(services.projectSync.invalidate).not.toHaveBeenCalled();
+  });
+
+  it("fails open when the private Sync plugin is missing, disabled, or malformed", async () => {
+    const privateSurfaces: [string, unknown | null][] = [
+      ["missing", null],
+      [
+        "disabled",
+        {
+          getEnabledPluginById: vi.fn(() => undefined),
+          getPluginById: vi.fn(() => ({
+            enabled: false,
+            instance: makeSyncHarness({
+              newServerFiles: [{ path: "Tasks/Remote task.md" }],
+            }).instance,
+          })),
+        },
+      ],
+      [
+        "malformed",
+        {
+          getEnabledPluginById: vi.fn(() => ({ getStatus: () => "syncing" })),
+        },
+      ],
+    ];
+
+    for (const [surfaceName, internalPlugins] of privateSurfaces) {
+      const services = makeServices();
+      services.projectSync.sync.mockResolvedValueOnce(emptyResult());
+      runtime.settings.current = defaultSettings({
+        autoRefreshToggle: true,
+        projectSyncEnabled: true,
+      });
+      const plugin = makePlugin(services, vi.fn(), internalPlugins);
+
+      await internals(plugin).runScheduledSync();
+
+      expect(services.projectSync.sync, surfaceName).toHaveBeenCalledOnce();
+    }
+  });
+
+  it("keeps one scheduled promise pending through incoming Sync and resumes after settling", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-12T00:00:00.000Z"));
+    const services = makeServices();
+    services.projectSync.sync.mockResolvedValueOnce(emptyResult());
+    runtime.settings.current = defaultSettings({
+      autoRefreshToggle: true,
+      projectSyncEnabled: true,
+    });
+    const sync = makeSyncHarness({
+      coreStatus: "syncing",
+      newServerFiles: [{ path: "Tasks/Work/Remote task.md" }],
+      syncStatus: "Downloading Tasks/Work/Remote task.md",
+    });
+    const plugin = makePlugin(services, vi.fn(), sync.internalPlugins);
+
+    const first = internals(plugin).runScheduledSync();
+    const second = internals(plugin).runScheduledSync();
+    expect(second).toBe(first);
+    await flushPromises();
+
+    expect(services.todoist.syncMetadata).toHaveBeenCalledOnce();
+    expect(services.projectSync.invalidate).toHaveBeenCalledOnce();
+    expect(services.projectSync.sync).not.toHaveBeenCalled();
+
+    sync.instance.newServerFiles = [];
+    sync.instance.syncStatus = "Uploading Tasks/Work/Local task.md";
+    sync.emitStatusChange();
+    await flushPromises();
+    expect(services.projectSync.sync).not.toHaveBeenCalled();
+
+    sync.instance.syncStatus = "Fully synced";
+    sync.emitStatusChange();
+    await vi.advanceTimersByTimeAsync(749);
+    expect(services.projectSync.sync).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+    await Promise.all([first, second]);
+
+    expect(services.todoist.syncMetadata).toHaveBeenCalledOnce();
+    expect(services.projectSync.sync).toHaveBeenCalledOnce();
+  });
+
+  it("invalidates an in-flight Project sync on incoming work and retries after Sync settles", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-12T00:00:00.000Z"));
+    const services = makeServices();
+    const firstProjection = deferred<ProjectSyncResult | null>();
+    services.projectSync.sync
+      .mockImplementationOnce(async () => await firstProjection.promise)
+      .mockResolvedValueOnce(emptyResult());
+    runtime.settings.current = defaultSettings({
+      autoRefreshToggle: true,
+      projectSyncEnabled: true,
+    });
+    const sync = makeSyncHarness({
+      coreStatus: "syncing",
+      syncStatus: "Uploading Tasks/Work/Local task.md",
+    });
+    const plugin = makePlugin(services, vi.fn(), sync.internalPlugins);
+
+    const scheduled = internals(plugin).runScheduledSync();
+    await flushPromises();
+    expect(services.projectSync.sync).toHaveBeenCalledOnce();
+
+    sync.instance.newServerFiles = [{ path: "Tasks/Work/Remote task.md" }];
+    sync.instance.syncStatus = "Downloading Tasks/Work/Remote task.md";
+    sync.emitStatusChange();
+    expect(services.projectSync.invalidate).toHaveBeenCalledOnce();
+    firstProjection.resolve(emptyResult());
+    await flushPromises();
+    expect(services.projectSync.sync).toHaveBeenCalledOnce();
+
+    sync.instance.newServerFiles = [];
+    sync.instance.syncStatus = "Fully synced";
+    sync.emitStatusChange();
+    await vi.advanceTimersByTimeAsync(750);
+    await scheduled;
+
+    expect(services.todoist.syncMetadata).toHaveBeenCalledOnce();
+    expect(services.projectSync.sync).toHaveBeenCalledTimes(2);
+  });
+
+  it("cancels a scheduled incoming-Sync wait when Project sync is disabled", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-12T00:00:00.000Z"));
+    const services = makeServices();
+    runtime.settings.current = defaultSettings({
+      autoRefreshToggle: true,
+      projectSyncEnabled: true,
+    });
+    const sync = makeSyncHarness({
+      newServerFiles: [{ path: "Tasks/Work/Remote task.md" }],
+      syncStatus: "Downloading Tasks/Work/Remote task.md",
+    });
+    const plugin = makePlugin(services, vi.fn(), sync.internalPlugins);
+
+    const scheduled = internals(plugin).runScheduledSync();
+    await flushPromises();
+    expect(services.projectSync.sync).not.toHaveBeenCalled();
+
+    await plugin.writeOptions({ projectSyncEnabled: false });
+    await vi.advanceTimersByTimeAsync(250);
+    await scheduled;
+
+    expect(services.projectSync.sync).not.toHaveBeenCalled();
+  });
+
+  it("does not impose a fixed quiet period after mapped Vault activity", async () => {
+    const services = makeServices();
+    services.projectSync.sync.mockResolvedValueOnce(emptyResult());
     const stored = defaultSettings({
       autoRefreshToggle: true,
       projectSyncEnabled: true,
-      projectSyncWriterId: "device-a",
       projectSyncMappings: [
         {
           id: "mapping-work",
@@ -1100,15 +1318,11 @@ describe("TodoistPlugin async lifecycle", () => {
     await plugin.onload();
     services.projectSync.invalidate.mockClear();
 
-    now += 30_000;
     vaultActivityListener("modify")({ path: "Tasks/Work/Remote task.md" });
 
-    expect(services.projectSync.invalidate).toHaveBeenCalledOnce();
     await internals(plugin).runScheduledSync();
-    expect(services.projectSync.sync).not.toHaveBeenCalled();
 
-    now += 30_000;
-    await internals(plugin).runScheduledSync();
+    expect(services.projectSync.invalidate).toHaveBeenCalledOnce();
     expect(services.projectSync.sync).toHaveBeenCalledOnce();
   });
 
@@ -1116,7 +1330,6 @@ describe("TodoistPlugin async lifecycle", () => {
     const services = makeServices();
     const stored = defaultSettings({
       projectSyncEnabled: true,
-      projectSyncWriterId: "device-a",
       projectSyncMappings: [
         {
           id: "mapping-work",
@@ -1139,12 +1352,9 @@ describe("TodoistPlugin async lifecycle", () => {
   });
 
   it("does not treat an exact path-scoped plugin mutation as external Sync activity", async () => {
-    let now = 1000;
-    vi.spyOn(Date, "now").mockImplementation(() => now);
     const services = makeServices();
     const stored = defaultSettings({
       projectSyncEnabled: true,
-      projectSyncWriterId: "device-a",
       projectSyncMappings: [
         {
           id: "mapping-work",
@@ -1160,7 +1370,6 @@ describe("TodoistPlugin async lifecycle", () => {
     const plugin = makePlugin(services);
     await plugin.onload();
     services.projectSync.invalidate.mockClear();
-    now += 30_000;
     const modify = vaultActivityListener("modify");
 
     const result = await plugin.runAutomaticProjectProjection(async () => {
@@ -1183,6 +1392,25 @@ describe("TodoistPlugin async lifecycle", () => {
     expect(services.projectSync.invalidate).toHaveBeenCalledOnce();
   });
 
+  it("invalidates an automatic task projection when incoming Sync starts during it", async () => {
+    const services = makeServices();
+    runtime.settings.current = defaultSettings({ projectSyncEnabled: true });
+    const sync = makeSyncHarness({
+      syncStatus: "Uploading Tasks/Work/Local task.md",
+    });
+    const plugin = makePlugin(services, vi.fn(), sync.internalPlugins);
+
+    const result = await plugin.runAutomaticProjectProjection(async () => {
+      sync.instance.newServerFiles = [{ path: "Tasks/Work/Remote task.md" }];
+      sync.instance.syncStatus = "Downloading Tasks/Work/Remote task.md";
+      sync.emitStatusChange();
+      return 42;
+    });
+
+    expect(result).toEqual({ performed: false });
+    expect(services.projectSync.invalidate).toHaveBeenCalledOnce();
+  });
+
   it("coalesces overlapping scheduled ticks into one refresh", async () => {
     const services = makeServices();
     const todoistSync = deferred<boolean>();
@@ -1191,7 +1419,6 @@ describe("TodoistPlugin async lifecycle", () => {
     runtime.settings.current = defaultSettings({
       autoRefreshToggle: true,
       projectSyncEnabled: true,
-      projectSyncWriterId: "device-a",
     });
     const plugin = makePlugin(services);
 
@@ -1229,7 +1456,6 @@ describe("TodoistPlugin async lifecycle", () => {
     runtime.settings.current = defaultSettings({
       autoRefreshToggle: true,
       projectSyncEnabled: true,
-      projectSyncWriterId: "device-a",
     });
     const plugin = makePlugin(services);
 
@@ -1240,7 +1466,7 @@ describe("TodoistPlugin async lifecycle", () => {
     expect(services.projectSync.sync).not.toHaveBeenCalled();
   });
 
-  it("keeps manual Project sync independent of Auto-refresh without a startup projection", async () => {
+  it("keeps manual Project sync independent of Auto-refresh and incoming Sync", async () => {
     const services = makeServices();
     const result = emptyResult();
     services.projectSync.sync.mockResolvedValue(result);
@@ -1248,7 +1474,11 @@ describe("TodoistPlugin async lifecycle", () => {
       autoRefreshToggle: false,
       projectSyncEnabled: true,
     });
-    const plugin = makePlugin(services);
+    const sync = makeSyncHarness({
+      newServerFiles: [{ path: "Tasks/Work/Remote task.md" }],
+      syncStatus: "Downloading Tasks/Work/Remote task.md",
+    });
+    const plugin = makePlugin(services, vi.fn(), sync.internalPlugins);
 
     await plugin.updateApiToken("token");
     await plugin.syncProjectFolderNow();
@@ -1267,7 +1497,6 @@ describe("TodoistPlugin async lifecycle", () => {
     runtime.settings.current = defaultSettings({
       autoRefreshToggle: true,
       projectSyncEnabled: true,
-      projectSyncWriterId: "device-a",
     });
     const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const plugin = makePlugin(services);
@@ -1294,7 +1523,6 @@ describe("TodoistPlugin async lifecycle", () => {
     runtime.settings.current = defaultSettings({
       autoRefreshToggle: true,
       projectSyncEnabled: true,
-      projectSyncWriterId: "device-a",
     });
     const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const plugin = makePlugin(services);
@@ -1308,21 +1536,24 @@ describe("TodoistPlugin async lifecycle", () => {
     expect(runtime.notices).toEqual([]);
   });
 
-  it("stops a scheduled continuation after unload", async () => {
+  it("cancels a scheduled incoming-Sync wait after unload", async () => {
     const services = makeServices();
-    const todoistSync = deferred<boolean>();
-    services.todoist.syncMetadata.mockImplementationOnce(async () => await todoistSync.promise);
     runtime.settings.current = defaultSettings({
       autoRefreshToggle: true,
       projectSyncEnabled: true,
-      projectSyncWriterId: "device-a",
     });
-    const plugin = makePlugin(services);
+    const sync = makeSyncHarness({
+      newServerFiles: [{ path: "Tasks/Work/Remote task.md" }],
+      syncStatus: "Downloading Tasks/Work/Remote task.md",
+    });
+    const plugin = makePlugin(services, vi.fn(), sync.internalPlugins);
 
     const scheduled = internals(plugin).runScheduledSync();
-    await vi.waitFor(() => expect(services.todoist.syncMetadata).toHaveBeenCalledTimes(1));
+    await flushPromises();
+    expect(services.todoist.syncMetadata).toHaveBeenCalledOnce();
+    expect(services.projectSync.sync).not.toHaveBeenCalled();
+
     plugin.onunload();
-    todoistSync.resolve(true);
     await scheduled;
 
     expect(services.projectSync.sync).not.toHaveBeenCalled();

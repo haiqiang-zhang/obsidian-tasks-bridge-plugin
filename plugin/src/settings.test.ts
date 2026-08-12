@@ -27,12 +27,10 @@ describe("normalizeSettings auto-refresh", () => {
 });
 
 describe("normalizeSettings project sync", () => {
-  it("accepts only a non-empty automatic writer device ID", () => {
-    expect(normalizeSettings({ projectSyncWriterId: " device-a " }).projectSyncWriterId).toBe(
-      "device-a",
+  it("drops the retired single-device writer assignment", () => {
+    expect(normalizeSettings({ projectSyncWriterId: "device-a" })).not.toHaveProperty(
+      "projectSyncWriterId",
     );
-    expect(normalizeSettings({ projectSyncWriterId: " " }).projectSyncWriterId).toBeNull();
-    expect(normalizeSettings({ projectSyncWriterId: 42 }).projectSyncWriterId).toBeNull();
   });
 
   it("preserves an enabled, structurally complete multi-project configuration", () => {

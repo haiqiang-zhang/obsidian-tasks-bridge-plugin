@@ -39,9 +39,6 @@ describe("SettingsTab", () => {
         },
       },
       writeOptions: vi.fn(async () => undefined),
-      getProjectSyncWriterState: vi.fn(() => "unassigned"),
-      setThisDeviceAsAutomaticProjectSyncWriter: vi.fn(async () => undefined),
-      stopAutomaticProjectSyncOnThisDevice: vi.fn(async () => undefined),
     } as unknown as TodoistPlugin;
     const tab = new SettingsTab({} as App, plugin);
     Object.assign(tab, { containerEl });
@@ -58,6 +55,7 @@ describe("SettingsTab", () => {
       "Task creation",
       "Advanced",
     ]);
+    expect(screen.queryByText("Automatic Project sync device")).not.toBeInTheDocument();
 
     await act(async () => tab.hide());
   });

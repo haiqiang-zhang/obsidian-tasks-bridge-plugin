@@ -2,7 +2,7 @@ import type React from "react";
 import { type CSSProperties, useId } from "react";
 
 import type { ProjectSyncStatus } from "@/project-sync";
-import { ObsidianIcon } from "@/ui/components/obsidian-icon";
+import { ObsidianIcon, ObsidianLoadingIcon } from "@/ui/components/obsidian-icon";
 
 import { CompletionHeatmap } from "./CompletionHeatmap";
 import type { CompletionHeatmapRange } from "./completionHeatmapModel";
@@ -175,7 +175,7 @@ const ProjectOverviewState: React.FC<{
       aria-live="polite"
       className="todoist-bases-project-overview-state todoist-bases-project-overview-loading"
     >
-      <ObsidianIcon className="is-loading" id="lucide-loader-circle" size="l" />
+      <ObsidianLoadingIcon size="l" />
       <span className="todoist-bases-project-overview-state-copy">
         <strong>Preparing project overview</strong>
         <span>

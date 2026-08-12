@@ -38,12 +38,12 @@ export const en: Translations = {
       toggle: {
         label: "Enable auto-refresh",
         description:
-          "Automatically refresh query blocks on this device and Project sync on the selected writer device at a shared interval",
+          "Automatically refresh query blocks and Project sync on every device at a shared interval; incoming Obsidian Sync changes delay Project sync until they settle",
       },
       interval: {
         label: "Auto-refresh interval",
         description:
-          "The interval, in seconds, used for query blocks on this device and Project sync on the selected writer device",
+          "The interval, in seconds, used for query blocks and Project sync on this device",
       },
     },
     projectSync: {
@@ -83,17 +83,6 @@ export const en: Translations = {
         label: "Include child projects",
         description:
           "Create the selected project's complete descendant hierarchy as nested folders",
-      },
-      automaticWriter: {
-        label: "Automatic Project sync device",
-        description:
-          "Choose exactly one updated device to write Project sync notes automatically. Obsidian Sync shares this assignment only when Vault configuration sync includes Tasks Bridge plugin data; otherwise configure only one device manually.",
-        statusThisDevice: "This device is the automatic writer",
-        statusAnotherDevice: "Another device is the automatic writer",
-        statusUnassigned: "No automatic writer is assigned",
-        useThisDevice: "Use this device",
-        takeOver: "Use this device instead",
-        stopUsingThisDevice: "Stop using this device",
       },
       validation: {
         projectRequired: "Select a Todoist project.",

@@ -32,8 +32,7 @@ Task filenames use the sanitized Todoist task title. When tasks in the same fold
 6. Enable **Include child projects** if you want to reproduce the complete descendant hierarchy below that folder.
 7. Add more mappings for any other independent Todoist project trees.
 8. Enable **Project sync**.
-9. Under **Automatic Project sync device**, select **Use this device** on exactly one device.
-10. Select **Sync now** to create the initial projections immediately.
+9. Select **Sync now** to create the initial projections immediately.
 
 The settings validate every mapping inline. A mapping is rejected if it is incomplete, refers to a missing Vault folder or unavailable Todoist project, duplicates another Todoist project, overlaps another mapped Vault folder, or selects a project already covered by another mapping's included child hierarchy. Folder overlap checks are case-insensitive and cover equal, parent, and descendant paths.
 
@@ -185,7 +184,7 @@ Because filtering happens before the hierarchy is rebuilt, a filtered-out parent
 
 ### Open, complete, reopen, and edit tasks
 
-Select a task title to open its Markdown note. Task actions always operate on Todoist first. If the current device is the selected writer and the Vault is quiet, Tasks Bridge then projects the result immediately. Other devices leave the synchronized Markdown note to the writer's next automatic interval or a later manual sync:
+Select a task title to open its Markdown note. Task actions always operate on Todoist first. On every device, Tasks Bridge attempts to project the accepted change. If an incoming Obsidian Sync download, merge, or remote deletion is already active, the projection waits until that cycle has finished and briefly settled. An upload-only Sync cycle does not delay it:
 
 - **Complete** completes an active task in Todoist.
 - **Reopen** reopens a completed task in Todoist.
@@ -193,31 +192,34 @@ Select a task title to open its Markdown note. Task actions always operate on To
 
 The project and section are shown as context in the editor but cannot be moved by this first Tasks List view. Recurring due rules are kept unchanged unless you explicitly replace the due date. A completed task must be reopened before it can be edited. Stale and out-of-scope tasks remain read-only until a later synchronization restores an actionable status; actions are also unavailable while Todoist is not ready.
 
-Do not edit plugin-managed `todoist_*` fields as a substitute for these actions. Project sync remains the authoritative projection writer and replaces local changes to managed fields during synchronization. If Todoist accepts an action but immediate projection is skipped, deferred, or fails, the remote change is still saved. Do not repeat the remote action; use **Sync Todoist projects** to refresh its note later.
+Do not edit plugin-managed `todoist_*` fields as a substitute for these actions. Project sync remains the authoritative projection and replaces local changes to managed fields during synchronization. If Todoist accepts an action but immediate projection is skipped, deferred, or fails, the remote change is still saved. Do not repeat the remote action; use **Sync Todoist projects** to refresh its note later.
 
 ## Synchronization timing
 
-Tasks Bridge never writes Project sync Markdown files immediately at startup. Obsidian does not expose a public API that reports when Obsidian Sync has completely finished downloading a Vault, so startup projection could otherwise race a remote copy of the same note.
+Tasks Bridge does not write Project sync Markdown files immediately at startup. Periodic projection starts on the configured Auto-refresh interval, subject to the incoming-Sync gate below.
 
 Automatic Project sync requires all of the following:
 
 - **Enable project sync** is enabled and every mapping is valid;
-- global **Auto-refresh** is enabled;
-- exactly one device is selected under **Automatic Project sync device**; and
-- the mapped folders have been quiet for at least 30 seconds after startup, a mapping or writer change, or a relevant Vault create, modify, rename, or delete event.
+- global **Auto-refresh** is enabled; and
+- Todoist is ready on that device.
 
-Each device generates its identity in vault-specific local storage, and the selected writer ID is copied into plugin settings. The assignment reaches other devices only when Obsidian Sync's **Vault configuration sync** includes the community plugin and therefore synchronizes the plugin `data.json`; enable **Active community plugin list** and **Installed community plugin list** on every device. Otherwise, you must manually ensure that exactly one device is selected. A device never claims ownership automatically. If you select **Use this device instead**, the new device waits for the quiet period, and updated devices stop automatic projection as soon as they receive the setting through Obsidian Sync. This is a conservative single-writer protocol, not a network lock: an offline old writer cannot see the transfer until it reconnects. Update or disable older Tasks Bridge versions on every synced device before assigning a writer.
+Every device that meets these conditions runs its own periodic Project sync. There is no device assignment or ownership transfer. Before an automatic projection begins, Tasks Bridge defers while Obsidian Sync has incoming downloads, merges, or remote deletions that can change local files. Once that incoming cycle reaches **Fully synced**, the same pending refresh resumes after a brief settle window.
 
-If a relevant Vault event arrives after an automatic run has started, Tasks Bridge invalidates that run and waits for another complete 30-second quiet period. Exact path scopes distinguish the plugin's own atomic mutations from unrelated user or Obsidian Sync activity, so a run neither cancels itself nor ignores changes elsewhere in a mapped tree.
+Upload-only Sync activity never blocks an automatic projection. This includes uploads triggered by Tasks Bridge's own writes. If confirmed incoming work appears after an automatic run starts, Tasks Bridge invalidates that run and retries after the incoming cycle settles. Exact path scopes distinguish the plugin's own atomic mutations from unrelated activity, so a run neither cancels itself nor ignores changes elsewhere in a mapped tree.
+
+This mechanism coordinates with the observed Sync direction on the current device; it is not a distributed lock and does not guarantee that only one device can write. Obsidian does not expose a public Sync-direction API, so Tasks Bridge isolates and feature-detects the built-in Sync status. If that internal status is unavailable or incompatible, the gate fails open and the automatic refresh continues with the atomic-write, revision, and live-file safeguards described below.
+
+The gate delays only automatic Project sync writes. Query-block Auto-refresh continues independently because it does not rewrite the Project sync Markdown projection.
 
 You can start it manually at any time with either:
 
 - **Settings → Tasks Bridge → Project sync → Sync now**; or
 - the **Sync Todoist projects** command.
 
-Manual synchronization does not depend on global **Auto-refresh** or the automatic writer assignment. Wait for Obsidian Sync to finish before using it, and do not run it on multiple devices at the same time.
+Manual synchronization does not depend on global **Auto-refresh** and bypasses the incoming-Sync gate. It remains available on every device. Because a manual request is intentionally immediate, wait for incoming Obsidian Sync changes to finish if you want the same conservative timing as Auto-refresh.
 
-Overlapping requests are combined, so repeatedly starting a sync does not create concurrent writers. Todoist data is fetched before any mapping is reconciled with the Vault, so a failed or incomplete fetch cannot apply a partial multi-project snapshot.
+Overlapping requests on one device are combined, so repeatedly starting a sync does not create concurrent local runs. Todoist data is fetched before any mapping is reconciled with the Vault, so a failed or incomplete fetch cannot apply a partial multi-project snapshot.
 
 ## Safety and stale tasks
 

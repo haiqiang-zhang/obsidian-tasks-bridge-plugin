@@ -19,6 +19,8 @@ describe("TokenValidationIcon", () => {
 
     const icon = container.querySelector(".token-validation-in-progress");
     expect(icon).toBeInTheDocument();
+    expect(icon).toHaveClass("loader-spinner");
+    expect(icon).not.toHaveClass("is-loading");
   });
 
   it("should render error icon for 'error' status", () => {

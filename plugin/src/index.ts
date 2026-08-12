@@ -16,9 +16,9 @@ import { registerCommands } from "@/commands";
 import { QueryCache } from "@/data/queryCache";
 import type { CompletedTasksProgress } from "@/data/subscriptions";
 import type { Task } from "@/data/task";
+import { ObsidianSyncActivityGate } from "@/infra/obsidianSyncGate";
 import { secondsToMillis } from "@/infra/time";
 import {
-  isAutomaticProjectSyncWriter,
   isProjectSyncPath,
   ProjectSyncActivityTracker,
   type ProjectSyncConfig,
@@ -40,12 +40,7 @@ import { SettingsTab } from "@/ui/settings";
 
 const hexadecimalRadix = 16;
 const byteHexWidth = 2;
-const deviceIdRadix = 36;
-const randomFractionPrefixLength = 2;
 const queryCacheStorageKey = "tasks-bridge:query-cache:v2";
-const deviceIdStorageKey = "tasks-bridge:device-id:v1";
-
-export type ProjectSyncWriterState = "unassigned" | "this-device" | "another-device";
 
 type AsyncGeneration = {
   apiToken: number;
@@ -66,19 +61,19 @@ export default class TodoistPlugin extends Plugin {
   private autoRefreshIntervalId: number | undefined;
   private scheduledSyncInFlight: Promise<void> | undefined;
   private readonly projectSyncActivity = new ProjectSyncActivityTracker();
-  private deviceId: string | undefined;
+  private readonly obsidianSyncGate: ObsidianSyncActivityGate;
   private disposed = false;
 
   constructor(app: App, pluginManifest: PluginManifest) {
     super(app, pluginManifest);
     this.services = makeServices(this);
+    this.obsidianSyncGate = new ObsidianSyncActivityGate(app, {
+      onInbound: () => this.services.projectSync.invalidate(),
+    });
   }
 
   async onload() {
     setLanguage(document.documentElement.lang);
-    // Obsidian doesn't expose a public "Sync is idle" signal. Treat startup as recent Vault
-    // activity so automatic projection cannot race remote files that are still arriving.
-    this.projectSyncActivity.recordActivity();
     await this.loadOptions();
     if (this.disposed) {
       return;
@@ -104,13 +99,13 @@ export default class TodoistPlugin extends Plugin {
 
     registerCommands(this);
     this.registerProjectSyncVaultActivityListeners();
+    this.obsidianSyncGate.start((eventRef) => this.registerEvent(eventRef));
     this.applyAutoRefreshSchedule();
 
     this.app.workspace.onLayoutReady(async () => {
       if (this.disposed) {
         return;
       }
-      this.projectSyncActivity.recordActivity();
 
       try {
         await this.applyMigrations();
@@ -193,6 +188,7 @@ export default class TodoistPlugin extends Plugin {
 
     this.disposed = true;
     this.clearAutoRefreshSchedule();
+    this.obsidianSyncGate.dispose();
     this.apiTokenGeneration++;
     this.projectSyncConfigGeneration++;
     this.services.todoist.reset();
@@ -369,20 +365,33 @@ export default class TodoistPlugin extends Plugin {
       return { performed: false };
     }
 
+    const permit = await this.obsidianSyncGate.waitForSafePermit(
+      () =>
+        this.isAsyncGenerationCurrent(asyncGeneration) && this.canRunAutomaticProjectProjection(),
+    );
+    if (permit === null) {
+      return { performed: false };
+    }
+
     const activityGeneration = this.projectSyncActivity.generation();
     const assertValid = () => {
       if (
         activityGeneration !== this.projectSyncActivity.generation() ||
         !this.isAsyncGenerationCurrent(asyncGeneration) ||
-        !this.canRunAutomaticProjectProjection()
+        !this.canRunAutomaticProjectProjection() ||
+        !this.obsidianSyncGate.isPermitCurrent(permit)
       ) {
         throw new AutomaticProjectProjectionInvalidatedError();
       }
     };
 
     try {
-      assertValid();
-      return { performed: true, value: await operation(assertValid) };
+      return await this.obsidianSyncGate.monitor(async () => {
+        assertValid();
+        const value = await operation(assertValid);
+        assertValid();
+        return { performed: true, value };
+      });
     } catch (error: unknown) {
       if (error instanceof AutomaticProjectProjectionInvalidatedError) {
         return { performed: false };
@@ -396,28 +405,6 @@ export default class TodoistPlugin extends Plugin {
     operation: () => Promise<T>,
   ): Promise<T> {
     return await this.projectSyncActivity.runInternalMutation(affectedPaths, operation);
-  }
-
-  getProjectSyncWriterState(): ProjectSyncWriterState {
-    const writerId = useSettingsStore.getState().projectSyncWriterId;
-    if (writerId === null) {
-      return "unassigned";
-    }
-    return isAutomaticProjectSyncWriter(writerId, this.getDeviceId())
-      ? "this-device"
-      : "another-device";
-  }
-
-  async setThisDeviceAsAutomaticProjectSyncWriter(): Promise<void> {
-    this.projectSyncActivity.recordActivity();
-    await this.writeOptions({ projectSyncWriterId: this.getDeviceId() });
-  }
-
-  async stopAutomaticProjectSyncOnThisDevice(): Promise<void> {
-    if (this.getProjectSyncWriterState() !== "this-device") {
-      return;
-    }
-    await this.writeOptions({ projectSyncWriterId: null });
   }
 
   async writeQueryCache(
@@ -537,20 +524,49 @@ export default class TodoistPlugin extends Plugin {
       ) {
         return;
       }
-      const settings = useSettingsStore.getState();
-      if (
-        !settings.projectSyncEnabled ||
-        !isAutomaticProjectSyncWriter(settings.projectSyncWriterId, this.getDeviceId()) ||
-        !this.projectSyncActivity.isQuiet()
-      ) {
+      if (!useSettingsStore.getState().projectSyncEnabled) {
         return;
       }
 
-      const result = await this.services.projectSync.sync();
-      if (!this.isAsyncGenerationCurrent(generation) || result === null) {
+      while (
+        this.isAsyncGenerationCurrent(generation) &&
+        this.isAutoRefreshEnabled() &&
+        useSettingsStore.getState().projectSyncEnabled
+      ) {
+        const permit = await this.obsidianSyncGate.waitForSafePermit(
+          () =>
+            this.isAsyncGenerationCurrent(generation) &&
+            this.isAutoRefreshEnabled() &&
+            useSettingsStore.getState().projectSyncEnabled,
+        );
+        if (permit === null) {
+          return;
+        }
+
+        const result = await this.obsidianSyncGate.monitor(async () => {
+          if (!this.obsidianSyncGate.isPermitCurrent(permit)) {
+            return null;
+          }
+          return await this.services.projectSync.sync();
+        });
+        if (
+          !this.isAsyncGenerationCurrent(generation) ||
+          !this.isAutoRefreshEnabled() ||
+          !useSettingsStore.getState().projectSyncEnabled
+        ) {
+          return;
+        }
+        if (!this.obsidianSyncGate.isPermitCurrent(permit)) {
+          // Incoming Sync invalidated this projection. The same scheduled promise remains pending
+          // and resumes as soon as the complete incoming cycle and settle window finish.
+          continue;
+        }
+        if (result === null) {
+          return;
+        }
+        this.reportBackgroundProjectSyncConflicts(result, "Scheduled");
         return;
       }
-      this.reportBackgroundProjectSyncConflicts(result, "Scheduled");
     } catch (error: unknown) {
       if (!this.isAsyncGenerationCurrent(generation)) {
         return;
@@ -593,15 +609,7 @@ export default class TodoistPlugin extends Plugin {
   }
 
   private canRunAutomaticProjectProjection(): boolean {
-    if (this.disposed || !this.projectSyncActivity.isQuiet()) {
-      return false;
-    }
-
-    const settings = useSettingsStore.getState();
-    return (
-      settings.projectSyncEnabled &&
-      isAutomaticProjectSyncWriter(settings.projectSyncWriterId, this.getDeviceId())
-    );
+    return !this.disposed && useSettingsStore.getState().projectSyncEnabled;
   }
 
   private applyProjectSyncConfig(): void {
@@ -669,15 +677,8 @@ export default class TodoistPlugin extends Plugin {
   }
 
   private applySettingsRuntime(previousSettings: Settings): void {
-    const nextSettings = useSettingsStore.getState();
     this.applyProjectSyncConfig();
-    if (previousSettings.projectSyncWriterId !== nextSettings.projectSyncWriterId) {
-      // Ownership is part of automatic projection validity even though it is not part of the
-      // Todoist folder mapping itself. Invalidate any run started by the previous writer.
-      this.projectSyncConfigGeneration++;
-      this.services.projectSync.invalidate();
-      this.projectSyncActivity.recordActivity();
-    }
+    const nextSettings = useSettingsStore.getState();
     if (
       previousSettings.autoRefreshToggle !== nextSettings.autoRefreshToggle ||
       previousSettings.autoRefreshInterval !== nextSettings.autoRefreshInterval
@@ -717,7 +718,7 @@ export default class TodoistPlugin extends Plugin {
     return Promise.resolve();
   }
 
-  private static readonly settingsVersion = 4;
+  private static readonly settingsVersion = 5;
 
   private async applyMigrations(): Promise<void> {
     const migrations: Record<number, () => Promise<void>> = {
@@ -733,7 +734,11 @@ export default class TodoistPlugin extends Plugin {
         // Stable mapping IDs and prior projection roots are added by settings normalization.
       },
       4: async () => {
-        // Automatic Project sync now requires one explicitly selected device writer.
+        // Retained so installations from settings version 3 can upgrade sequentially.
+      },
+      5: async () => {
+        // The single-device writer assignment is retired. Settings normalization removes the
+        // legacy field, and every updated device may now run inbound-aware automatic projection.
       },
     };
 
@@ -832,32 +837,10 @@ export default class TodoistPlugin extends Plugin {
     const mappings = useSettingsStore.getState().projectSyncMappings;
     const relevantPaths = paths.filter((path) => isProjectSyncPath(path, mappings));
     if (relevantPaths.length > 0 && this.projectSyncActivity.recordVaultActivity(relevantPaths)) {
-      // Abort an automatic reconcile that already passed the quiet-period gate. The next timer
-      // may start a fresh run only after Vault activity has settled again.
+      // Abort an automatic reconcile whose snapshot was captured before this external change.
+      // Exact-path suppression above prevents this plugin's own writes from invalidating itself.
       this.services.projectSync.invalidate();
     }
-  }
-
-  private getDeviceId(): string {
-    if (this.deviceId !== undefined) {
-      return this.deviceId;
-    }
-
-    const stored = this.app.loadLocalStorage(deviceIdStorageKey);
-    if (typeof stored === "string" && stored.trim() !== "") {
-      this.deviceId = stored.trim();
-      return this.deviceId;
-    }
-
-    const randomUUID = globalThis.crypto?.randomUUID;
-    this.deviceId =
-      typeof randomUUID === "function"
-        ? randomUUID.call(globalThis.crypto)
-        : `device-${Date.now().toString(deviceIdRadix)}-${Math.random()
-            .toString(deviceIdRadix)
-            .slice(randomFractionPrefixLength)}`;
-    this.app.saveLocalStorage(deviceIdStorageKey, this.deviceId);
-    return this.deviceId;
   }
 }
 

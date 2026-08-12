@@ -499,6 +499,36 @@ describe("TodoistList", () => {
     expect(completedEdit).toHaveAttribute("title", "Reopen before editing.");
   });
 
+  it("uses Obsidian's native spinner for pending task actions", async () => {
+    const edit = deferred<void>();
+    const completion = deferred<TodoistListMutationResult>();
+    const actions = makeActions();
+    vi.mocked(actions.editTask).mockReturnValue(edit.promise);
+    vi.mocked(actions.completeTask).mockReturnValue(completion.promise);
+    renderList(makeModel(makeProject("root", "Root", [makeTask("active")])), actions);
+
+    const editButton = screen.getByRole("button", { name: "Edit task: Task active" });
+    fireEvent.click(editButton);
+    await waitFor(() => expect(editButton.querySelector(".loader-spinner")).toBeInTheDocument());
+    expect(editButton.querySelector(".is-loading")).not.toBeInTheDocument();
+
+    await act(async () => edit.resolve());
+    await waitFor(() =>
+      expect(editButton.querySelector(".loader-spinner")).not.toBeInTheDocument(),
+    );
+
+    const checkbox = screen.getByRole("checkbox", { name: "Complete task: Task active" });
+    const actionWrapper = checkbox.closest(".todoist-bases-task-action-wrap");
+    fireEvent.click(checkbox);
+    await waitFor(() =>
+      expect(actionWrapper?.querySelector(".loader-spinner")).toBeInTheDocument(),
+    );
+    expect(actionWrapper?.querySelector(".is-loading")).not.toBeInTheDocument();
+    expect(actionWrapper).toHaveAttribute("data-loading", "true");
+
+    await act(async () => completion.resolve({ projection: Promise.resolve() }));
+  });
+
   it("refreshes readiness without requiring a Base data update", () => {
     vi.useFakeTimers();
     let ready = false;

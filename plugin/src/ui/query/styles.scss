@@ -113,7 +113,6 @@
   .todoist-query-loading-icon {
     flex: none;
     color: var(--interactive-accent);
-    animation: todoist-query-spin 1s linear infinite;
   }
 }
 
@@ -128,10 +127,6 @@
     display: inline-flex;
     align-items: center;
     gap: var(--size-4-2);
-
-    .obsidian-icon.is-loading {
-      animation: todoist-query-spin 1s linear infinite;
-    }
   }
 
   .todoist-completed-history-error {
@@ -141,9 +136,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .todoist-query-loading-icon,
-  .todoist-query-control-button.refresh-query.is-refreshing > .obsidian-icon,
-  .todoist-load-earlier-completed .obsidian-icon.is-loading {
+  .todoist-query-control-button.refresh-query.is-refreshing > .obsidian-icon {
     animation: none;
   }
 }

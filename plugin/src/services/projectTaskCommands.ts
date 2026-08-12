@@ -31,10 +31,9 @@ export type ProjectTaskAutomaticProjectionResult<T> =
 /**
  * Owns the device-local policy for automatic Markdown projection.
  *
- * The command service deliberately knows nothing about settings, device IDs, or Vault activity.
- * A coordinator must return `performed: false` without invoking `operation` when this device is
- * not currently allowed to write (for example, while Obsidian Sync is active or when another
- * device is the configured writer).
+ * The command service deliberately knows nothing about settings, Obsidian Sync direction, or
+ * Vault activity. A coordinator returns `performed: false` without invoking `operation` when an
+ * automatic projection is no longer valid, such as after confirmed incoming Sync work.
  */
 export interface ProjectTaskProjectionCoordinator {
   runAutomaticProjection<T>(

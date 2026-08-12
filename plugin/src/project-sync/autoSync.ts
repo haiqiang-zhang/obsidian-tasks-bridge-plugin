@@ -1,22 +1,11 @@
 import { isPathInside } from "./paths";
 import type { ProjectSyncMapping } from "./types";
 
-export const PROJECT_SYNC_QUIET_PERIOD_MS = 30_000;
-
 export class ProjectSyncActivityTracker {
-  private lastActivityAt = Number.NEGATIVE_INFINITY;
   private activityGeneration = 0;
   private readonly internalMutationPaths = new Map<string, number>();
-  private readonly now: () => number;
-  private readonly quietPeriodMs: number;
-
-  constructor(now: () => number = Date.now, quietPeriodMs: number = PROJECT_SYNC_QUIET_PERIOD_MS) {
-    this.now = now;
-    this.quietPeriodMs = quietPeriodMs;
-  }
 
   public recordActivity(): void {
-    this.lastActivityAt = this.now();
     this.activityGeneration++;
   }
 
@@ -70,14 +59,6 @@ export class ProjectSyncActivityTracker {
   public generation(): number {
     return this.activityGeneration;
   }
-
-  public isQuiet(): boolean {
-    return this.remainingQuietMs() === 0;
-  }
-
-  public remainingQuietMs(): number {
-    return Math.max(0, this.quietPeriodMs - (this.now() - this.lastActivityAt));
-  }
 }
 
 export const isProjectSyncPath = (
@@ -106,8 +87,3 @@ const normalizeVaultPath = (path: string): string =>
     .join("/")
     .replace(/\/{2,}/g, "/")
     .replace(/^\/+|\/+$/g, "");
-
-export const isAutomaticProjectSyncWriter = (
-  configuredWriterId: string | null,
-  deviceId: string,
-): boolean => configuredWriterId !== null && configuredWriterId === deviceId;

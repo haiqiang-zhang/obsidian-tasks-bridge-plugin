@@ -81,16 +81,6 @@ export type Translations = {
         label: string;
         description: string;
       };
-      automaticWriter: {
-        label: string;
-        description: string;
-        statusThisDevice: string;
-        statusAnotherDevice: string;
-        statusUnassigned: string;
-        useThisDevice: string;
-        takeOver: string;
-        stopUsingThisDevice: string;
-      };
       validation: {
         projectRequired: string;
         folderRequired: string;
