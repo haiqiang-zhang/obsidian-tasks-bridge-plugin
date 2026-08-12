@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### 🔁 Changes
+
+- Updated plugin author metadata to list Haiqiang Zhang first.
+
 ## v2.9.2 (2026-08-12)
 
 ### ✨ Features

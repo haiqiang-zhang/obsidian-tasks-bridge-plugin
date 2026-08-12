@@ -11,7 +11,7 @@
     "lint:check": "biome check ./src",
     "lint:fix": "biome check --write ./src"
   },
-  "author": "Jamie Brynes and Haiqiang Zhang",
+  "author": "Haiqiang Zhang and Jamie Brynes",
   "license": "ISC",
   "dependencies": {
     "@internationalized/date": "3.10.0",
