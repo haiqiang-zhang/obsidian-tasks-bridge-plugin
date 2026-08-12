@@ -13,6 +13,13 @@ import {
   replaceManagedTaskDocument,
 } from "./document";
 
+const completionEvent = (id: string, completedAt: string) => ({
+  id,
+  taskId: "task-1",
+  projectId: "project-1",
+  completedAt,
+});
+
 describe("project task documents", () => {
   it("emits flat Bases-friendly managed properties", () => {
     const project = makeProject("project-1", { name: "Networking" });
@@ -40,6 +47,12 @@ describe("project task documents", () => {
         project.id,
         { ids: [project.id], names: [project.name] },
         "2026-08-10T02:00:00.000Z",
+        "mapping-1",
+        [
+          completionEvent("second", "2026-08-10T01:00:00.000Z"),
+          completionEvent("first", "2026-08-09T01:00:00.000Z"),
+          completionEvent("second", "2026-08-10T01:00:00.000Z"),
+        ],
       ),
     ).toMatchObject({
       todoist_sync_managed: true,
@@ -58,6 +71,20 @@ describe("project task documents", () => {
       todoist_due_datetime: "2026-08-12T09:30:00.000Z",
       todoist_due_timezone: "Asia/Shanghai",
       todoist_due_is_recurring: false,
+      todoist_completion_events: [
+        {
+          id: "first",
+          task_id: "task-1",
+          project_id: "project-1",
+          completed_at: "2026-08-09T01:00:00.000Z",
+        },
+        {
+          id: "second",
+          task_id: "task-1",
+          project_id: "project-1",
+          completed_at: "2026-08-10T01:00:00.000Z",
+        },
+      ],
     });
   });
 

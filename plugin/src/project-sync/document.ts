@@ -1,5 +1,6 @@
 import { dump as dumpYaml } from "js-yaml";
 
+import type { ProjectCompletionEvent } from "@/api/domain/task";
 import type { Task } from "@/data/task";
 import { todoistTaskWebUrl } from "@/todoist/taskLinks";
 
@@ -31,6 +32,7 @@ export const MANAGED_FRONTMATTER_KEYS = [
   "todoist_created_at",
   "todoist_updated_at",
   "todoist_completed_at",
+  "todoist_completion_events",
   "todoist_due_date",
   "todoist_due_datetime",
   "todoist_due_timezone",
@@ -72,6 +74,7 @@ export const makeTaskFrontmatter = (
   projectPath: ProjectHierarchyPath,
   syncedAt: string,
   mappingId?: string,
+  completionEvents: readonly ProjectCompletionEvent[] = [],
 ): ManagedFrontmatter => {
   const { task, completed } = snapshotTask;
   const frontmatter: ManagedFrontmatter = {
@@ -93,6 +96,7 @@ export const makeTaskFrontmatter = (
     todoist_order: task.order,
     todoist_url: todoistTaskWebUrl(task.project.id, task.id),
     todoist_synced_at: syncedAt,
+    todoist_completion_events: normalizeCompletionEvents(completionEvents, task.id),
   };
 
   if (mappingId !== undefined) {
@@ -134,6 +138,29 @@ export const makeTaskFrontmatter = (
   }
 
   return frontmatter;
+};
+
+const normalizeCompletionEvents = (
+  events: readonly ProjectCompletionEvent[],
+  taskId: string,
+): Array<{ id: string; task_id: string; project_id: string; completed_at: string }> => {
+  const byId = new Map<string, ProjectCompletionEvent>();
+  for (const event of events) {
+    if (event.taskId === taskId && !byId.has(event.id)) {
+      byId.set(event.id, event);
+    }
+  }
+  return [...byId.values()]
+    .sort((left, right) => {
+      const byTime = left.completedAt.localeCompare(right.completedAt);
+      return byTime !== 0 ? byTime : left.id.localeCompare(right.id);
+    })
+    .map((event) => ({
+      id: event.id,
+      task_id: event.taskId,
+      project_id: event.projectId,
+      completed_at: event.completedAt,
+    }));
 };
 
 export const applyManagedFrontmatter = (

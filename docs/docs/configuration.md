@@ -23,7 +23,7 @@ Project sync is an independent, one-way Todoist-to-Vault projection. You can con
 
 ### Enable project sync
 
-Enables synchronization for every valid project mapping. An enabled configuration can be synchronized manually at any time and participates in periodic synchronization on every device where global **Auto-refresh** is enabled. Tasks Bridge waits for the configured interval instead of writing Project sync notes immediately at startup. Disabling the mode stops synchronization and leaves existing Markdown files in place.
+Enables synchronization for every valid project mapping. An enabled configuration can be synchronized manually at any time and participates in periodic synchronization when global **Auto-refresh** is enabled. Tasks Bridge waits for the configured interval instead of writing Project sync notes immediately at startup. Disabling the mode stops synchronization and leaves existing Markdown files in place.
 
 ### Project mappings
 
@@ -63,18 +63,6 @@ Runs every project mapping immediately. The button is available only after proje
 
 Project mode retrieves the full completed-task history available from Todoist's project endpoint. It does not use the progressive **Load earlier** controls from query blocks. Query-block filters, caching, and rendering settings remain independent of these mappings.
 
-### Obsidian Sync coordination
-
-Automatic Project sync runs independently on every configured device. Before an automatic projection begins, Tasks Bridge checks the local Obsidian Sync activity and defers only while incoming changes can modify the Vault, including downloads, merges, and remote deletions being applied locally. After an incoming cycle reaches **Fully synced**, the plugin waits for a brief settle window and then continues the same pending refresh.
-
-Upload-only activity does not delay automatic Project sync. This includes uploads caused by Tasks Bridge's own atomic projection writes, so the plugin does not wait on the Sync work it just created. If incoming work appears after an automatic projection starts, that run is invalidated and retried after the incoming cycle settles.
-
-Manual **Sync now** and the **Sync Todoist projects** command bypass this automatic gate. The gate is local coordination with Obsidian Sync on each device; it does not elect one device, claim cross-device ownership, or provide a distributed lock. Atomic writes, live-file validation, and revision checks remain the final conflict safeguards.
-
-This gate applies only to automatic Project sync writes. It does not pause query-block refreshes, which do not rewrite the Project sync Markdown projection.
-
-Obsidian does not expose a public API for Sync direction. Tasks Bridge isolates and feature-detects the built-in Sync status it uses for this gate. If that internal status is unavailable or incompatible, automatic Project sync remains enabled and relies on the projection safeguards instead of leaving a device permanently blocked.
-
 ## Auto-refresh
 
 ### Auto-refresh enabled
@@ -82,13 +70,13 @@ Obsidian does not expose a public API for Sync direction. Tasks Bridge isolates 
 When enabled, periodic refreshes apply to both synchronization modes:
 
 - query blocks that do not define their own `autorefresh` value; and
-- Project sync on every device where **Enable project sync** is also enabled and every mapping is valid.
+- Project sync when **Enable project sync** is also enabled and every mapping is valid.
 
 Manual synchronization through **Sync now** or the **Sync Todoist projects** command remains available when global auto-refresh is disabled.
 
 ### Auto-refresh interval
 
-This defines the shared interval, in seconds, for automatic query-block refreshes and Project sync on each configured device. A query block can define an explicit [`autorefresh`](./query-blocks#autorefresh) value, which overrides the shared interval for that block only. Project sync always uses the shared interval.
+This defines the shared interval, in seconds, for automatic query-block refreshes and Project sync. A query block can define an explicit [`autorefresh`](./query-blocks#autorefresh) value, which overrides the shared interval for that block only. Project sync always uses the shared interval.
 
 Query cache entries are stored in Obsidian's vault-specific, device-local storage. They are not written to the synchronized plugin `data.json`, so background query refreshes cannot overwrite settings received from another device. Tasks Bridge also implements Obsidian's external-settings callback so synchronized setting changes take effect without reloading the plugin.
 

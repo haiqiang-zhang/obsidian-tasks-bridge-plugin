@@ -31,8 +31,25 @@ export type ProjectSyncSnapshot = {
   rootProjectId: string;
   projects: Project[];
   tasks: SnapshotTask[];
+  /** Every completion occurrence, including repeated completions of the same task. */
+  completionEvents?: ProjectCompletionEvent[];
   syncedAt: string;
 };
+
+export interface ProjectSyncStatisticsRepository {
+  setConfig(config: ProjectSyncConfig): void;
+  persistProjectCatalog(
+    snapshot: ProjectSyncSnapshot,
+    mapping: ProjectSyncMapping,
+    runContext: ProjectSyncRunContext,
+  ): Promise<void>;
+  refresh(): Promise<void>;
+  notifyLocalChanges(paths: readonly string[]): void;
+  getSnapshot(): ProjectSyncStatisticsSnapshot | null;
+  clearSnapshot(): void;
+  subscribe(listener: () => void): () => void;
+  dispose(): void;
+}
 
 export type ProjectSyncStatisticsCounts = Readonly<{
   active: number;

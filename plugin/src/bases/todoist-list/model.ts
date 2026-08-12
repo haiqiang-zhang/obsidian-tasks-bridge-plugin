@@ -17,6 +17,7 @@ import type {
 } from "./types";
 
 const properties = {
+  projectCatalog: "note.tasks_bridge_project_catalog_managed",
   managed: "note.todoist_sync_managed",
   mappingId: "note.todoist_sync_mapping_id",
   rootProjectId: "note.todoist_sync_root_id",
@@ -50,6 +51,7 @@ const hiddenMetadataProperties = new Set<BasesPropertyId>([
   "file.basename",
   "file.path",
   properties.managed,
+  properties.projectCatalog,
   properties.taskId,
   properties.content,
   properties.description,
@@ -179,6 +181,11 @@ const buildGroup = (
     // A broad Base folder filter may include its own .base configuration file or other assets.
     // They are not notes and should not be reported as non-managed Markdown notes.
     if (!isMarkdownEntry(entry)) {
+      continue;
+    }
+    // Project catalogs are Markdown so they synchronize across devices, but they are local
+    // projection metadata rather than task rows. Broad folder filters must ignore them silently.
+    if (readBoolean(entry, properties.projectCatalog)) {
       continue;
     }
     if (taskIdentities.seenFilePaths.has(entry.file.path)) {

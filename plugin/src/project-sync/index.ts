@@ -14,6 +14,12 @@ export {
 } from "./document";
 export { projectNamePath, selectProjectHierarchy } from "./hierarchy";
 export {
+  ObsidianProjectSyncStatisticsRepository,
+  PROJECT_CATALOG_FOLDER,
+  PROJECT_CATALOG_MARKER,
+  projectCatalogPath,
+} from "./localStatistics";
+export {
   isPathInside,
   makeDisambiguatedProjectSegment,
   makeProjectSegments,
@@ -33,6 +39,7 @@ export type {
   ProjectSyncSnapshot,
   ProjectSyncSource,
   ProjectSyncStatisticsCounts,
+  ProjectSyncStatisticsRepository,
   ProjectSyncStatisticsScope,
   ProjectSyncStatisticsSnapshot,
   ProjectSyncStatus,

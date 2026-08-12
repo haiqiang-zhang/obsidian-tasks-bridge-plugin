@@ -8,6 +8,7 @@ import type {
   ProjectSyncResult,
   ProjectSyncSnapshot,
   ProjectSyncSource,
+  ProjectSyncStatisticsRepository,
   ProjectSyncStatisticsSnapshot,
   ProjectSyncStatus,
   ProjectSyncStatusListener,
@@ -53,16 +54,24 @@ export class ProjectFolderSyncService {
   private inFlight: InFlightSync | undefined;
   private status: ProjectSyncStatus = { state: "idle" };
   private statisticsSnapshot: ProjectSyncStatisticsSnapshot | null = null;
+  private readonly statisticsRepository: ProjectSyncStatisticsRepository | undefined;
+  private readonly unsubscribeStatistics: (() => void) | undefined;
   private readonly listeners = new Set<ProjectSyncStatusListener>();
 
   constructor(
     source: ProjectSyncSource,
     vault: ProjectSyncVault,
     initialConfig: ProjectSyncConfig,
+    statisticsRepository?: ProjectSyncStatisticsRepository,
   ) {
     this.source = source;
     this.vault = vault;
     this.config = cloneConfig(initialConfig);
+    this.statisticsRepository = statisticsRepository;
+    this.statisticsRepository?.setConfig(initialConfig);
+    this.unsubscribeStatistics = this.statisticsRepository?.subscribe(() => {
+      this.setStatus(this.status);
+    });
     if (!initialConfig.enabled) {
       this.status = { state: "disabled" };
     }
@@ -81,6 +90,7 @@ export class ProjectFolderSyncService {
     const statisticsScopeChanged = !hasSameStatisticsScopes(this.config, config);
     this.config = cloneConfig(config);
     this.configGeneration++;
+    this.statisticsRepository?.setConfig(config);
     if (statisticsScopeChanged) {
       this.statisticsSnapshot = null;
     }
@@ -102,6 +112,8 @@ export class ProjectFolderSyncService {
     this.disposed = true;
     this.configGeneration++;
     this.statisticsSnapshot = null;
+    this.unsubscribeStatistics?.();
+    this.statisticsRepository?.dispose();
     this.setStatus({ state: "disposed" });
     this.listeners.clear();
   }
@@ -115,11 +127,26 @@ export class ProjectFolderSyncService {
   }
 
   public getStatisticsSnapshot(): ProjectSyncStatisticsSnapshot | null {
-    return this.statisticsSnapshot;
+    return this.statisticsRepository?.getSnapshot() ?? this.statisticsSnapshot;
+  }
+
+  public refreshStatisticsFromLocalProjection(): Promise<void> {
+    return this.statisticsRepository?.refresh() ?? Promise.resolve();
+  }
+
+  public notifyLocalProjectionChanges(paths: readonly string[]): void {
+    this.statisticsRepository?.notifyLocalChanges(paths);
   }
 
   public clearStatisticsSnapshot(): void {
-    if (this.disposed || this.statisticsSnapshot === null) {
+    if (this.disposed) {
+      return;
+    }
+    if (this.statisticsRepository !== undefined) {
+      this.statisticsRepository.clearSnapshot();
+      return;
+    }
+    if (this.statisticsSnapshot === null) {
       return;
     }
     this.statisticsSnapshot = null;
@@ -219,7 +246,13 @@ export class ProjectFolderSyncService {
         ({ mapping, rootProjectId, projects, tasks, completionEvents }) => ({
           mapping,
           completionEvents,
-          snapshot: { rootProjectId, projects, tasks, syncedAt } satisfies ProjectSyncSnapshot,
+          snapshot: {
+            rootProjectId,
+            projects,
+            tasks,
+            completionEvents,
+            syncedAt,
+          } satisfies ProjectSyncSnapshot,
         }),
       );
       const activeMappingIds = new Set(snapshots.map(({ mapping }) => mapping.id));
@@ -256,7 +289,19 @@ export class ProjectFolderSyncService {
         addResult(result, mappingResult);
       }
       this.assertCurrent(generation);
-      this.statisticsSnapshot = makeStatisticsSnapshot(snapshots, syncedAt);
+      if (this.statisticsRepository === undefined) {
+        this.statisticsSnapshot = makeStatisticsSnapshot(snapshots, syncedAt);
+      } else {
+        for (const { mapping, snapshot } of snapshots) {
+          await this.statisticsRepository.persistProjectCatalog(snapshot, mapping, {
+            assertValid: () => this.assertCurrent(generation),
+            mappingRoots,
+            scanToken,
+          });
+        }
+        this.assertCurrent(generation);
+        await this.statisticsRepository.refresh();
+      }
       this.setStatus({
         state: "success",
         completedAt: new Date().toISOString(),

@@ -346,6 +346,54 @@ describe("ObsidianProjectSyncVault", () => {
     });
   });
 
+  it("replaces a matching local completion occurrence with Todoist's canonical event", async () => {
+    const root = makeProject("root", { name: "Root" });
+    const task = makeTask("task-1", { content: "Task", project: root });
+    const localEvent = {
+      id: "local:event",
+      taskId: task.id,
+      projectId: root.id,
+      completedAt: "2026-08-10T01:00:00.000Z",
+    };
+    const frontmatter = makeTaskFrontmatter(
+      { task, completed: false },
+      root.id,
+      testProjectPath(root),
+      "2026-08-10T01:00:00.000Z",
+      mapping.id,
+      [localEvent],
+    );
+    vault.addFile("Sync/Task.md", renderNewTaskDocument(frontmatter, makeManagedBody(task)));
+    const canonicalEvent = {
+      id: "canonical-event",
+      taskId: task.id,
+      projectId: root.id,
+      completedAt: "2026-08-10T01:00:01.000Z",
+    };
+
+    await adapter.reconcile(
+      {
+        rootProjectId: root.id,
+        projects: [root],
+        tasks: [{ task, completed: false }],
+        completionEvents: [canonicalEvent],
+        syncedAt: "2026-08-10T02:00:00.000Z",
+      },
+      mapping,
+    );
+
+    expect(parseFrontmatter(vault.files.get("Sync/Task.md")?.content ?? "")).toMatchObject({
+      todoist_completion_events: [
+        {
+          id: canonicalEvent.id,
+          task_id: task.id,
+          project_id: root.id,
+          completed_at: canonicalEvent.completedAt,
+        },
+      ],
+    });
+  });
+
   it("keeps updated projections parseable across repeated syncs instead of creating copies", async () => {
     const project = makeProject("root", { name: "Root" });
     const originalTask = makeTask("task-1", { content: "Task", project });

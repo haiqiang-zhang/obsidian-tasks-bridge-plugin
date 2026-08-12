@@ -241,6 +241,8 @@ const makeServices = () => ({
     getStatus: vi.fn(() => ({ state: "disabled" as const })),
     getStatisticsSnapshot: vi.fn(() => null),
     invalidate: vi.fn(),
+    notifyLocalProjectionChanges: vi.fn(),
+    refreshStatisticsFromLocalProjection: vi.fn(async () => undefined),
     setConfig: vi.fn(),
     subscribe: vi.fn(() => () => undefined),
     sync: vi.fn(async (): Promise<ProjectSyncResult | null> => null),

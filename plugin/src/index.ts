@@ -101,6 +101,14 @@ export default class TodoistPlugin extends Plugin {
 
     registerCommands(this);
     this.registerProjectSyncVaultActivityListeners();
+    try {
+      await this.services.projectSync.refreshStatisticsFromLocalProjection();
+    } catch (error: unknown) {
+      console.error("Failed to load the local Project Overview projection:", error);
+    }
+    if (this.disposed) {
+      return;
+    }
     this.obsidianSyncGate.start((eventRef) => this.registerEvent(eventRef));
     this.applyAutoRefreshSchedule();
 
@@ -888,6 +896,7 @@ export default class TodoistPlugin extends Plugin {
   }
 
   private recordProjectSyncVaultActivity(...paths: string[]): void {
+    this.services.projectSync.notifyLocalProjectionChanges(paths);
     const mappings = useSettingsStore.getState().projectSyncMappings;
     const relevantPaths = paths.filter((path) => isProjectSyncPath(path, mappings));
     if (relevantPaths.length > 0 && this.projectSyncActivity.recordVaultActivity(relevantPaths)) {

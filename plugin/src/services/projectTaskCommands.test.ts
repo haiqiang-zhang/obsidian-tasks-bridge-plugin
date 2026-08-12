@@ -362,6 +362,14 @@ describe("ProjectTaskCommandService", () => {
       todoist_status: "completed",
       todoist_synced_at: expect.any(String),
       todoist_sync_missing_count: 0,
+      todoist_completion_events: [
+        {
+          id: expect.stringMatching(/^local:/u),
+          task_id: TASK_ID,
+          project_id: "child-1",
+          completed_at: COMPLETED_AT.toISOString(),
+        },
+      ],
     });
     expect(harness.frontmatter).not.toHaveProperty("todoist_stale_since");
     expect(harness.invalidate).toHaveBeenCalledOnce();
@@ -413,6 +421,28 @@ describe("ProjectTaskCommandService", () => {
       "Only completed tasks can be reopened",
     );
     expect(active.actions.reopenProjectTask).not.toHaveBeenCalled();
+  });
+
+  it("retains every local completion occurrence after reopening and completing again", async () => {
+    const harness = makeHarness();
+    if (harness.frontmatter === undefined) {
+      throw new Error("Expected managed frontmatter");
+    }
+
+    const first = await harness.service.completeTask(reference);
+    await first.projection;
+    harness.frontmatter.todoist_status = "completed";
+    const reopened = await harness.service.reopenTask(reference);
+    await reopened.projection;
+    harness.frontmatter.todoist_status = "active";
+    harness.actions.closeProjectTask.mockResolvedValueOnce(new Date("2026-08-11T05:00:00.000Z"));
+    const second = await harness.service.completeTask(reference);
+    await second.projection;
+
+    expect(harness.frontmatter.todoist_completion_events).toEqual([
+      expect.objectContaining({ completed_at: "2026-08-10T05:00:00.000Z" }),
+      expect.objectContaining({ completed_at: "2026-08-11T05:00:00.000Z" }),
+    ]);
   });
 
   it.each([

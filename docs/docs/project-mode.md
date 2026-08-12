@@ -86,6 +86,7 @@ The synchronized files remain a one-way projection. Changes made to plugin-manag
 | `todoist_created_at` | Task creation date and time |
 | `todoist_updated_at` | Todoist's source revision time when the API provides it |
 | `todoist_completed_at` | Completion date and time |
+| `todoist_completion_events` | Complete completion-event history for this task, including repeated complete → reopen → complete cycles |
 | `todoist_due_date` | Due date |
 | `todoist_due_datetime` | Due date and time when the task has a scheduled time |
 | `todoist_due_timezone` | Todoist time zone for a scheduled due time |
@@ -157,6 +158,8 @@ The selected root controls both the complete Project overview and the filtered t
 
 Expand **Project overview** above the task list to see statistics for the selected root project and every synchronized descendant below it. Choose **All synchronized projects** in **Configure view** to combine every synchronized mapping. The overview includes:
 
+![Tasks List Project overview showing completion statistics, the daily completion heatmap, and the hierarchical project breakdown](./project-overview.png)
+
 - total, active, and completed task counts;
 - completion percentage and a status breakdown;
 - a GitHub-style heatmap of daily completion activity;
@@ -164,9 +167,9 @@ Expand **Project overview** above the task list to see statistics for the select
 - the time of the latest complete Project sync; and
 - a nested project breakdown in which each project's counts include all of its descendants.
 
-These statistics come from the latest complete Project Sync snapshot, not from the files currently visible in the Base. The snapshot retains the complete synchronized project catalog, so child projects remain in the breakdown even when they contain no tasks or all of their task notes are excluded by Base filters. A failed or interrupted refresh does not replace the last complete snapshot.
+These statistics come from the complete local Project Sync Markdown projection, not from the files currently visible after Base filters are applied. Task Markdown stores current state and every completion occurrence. Tasks Bridge also maintains project-catalog Markdown under `_Tasks Bridge/Project Catalogs` with each mapping's complete synchronized project hierarchy, including projects with no tasks. Keeping catalogs outside mapped task folders prevents them from changing native Base result counts. Project Overview reads that local projection immediately when the Vault opens and rebuilds after local or synchronized file changes. A failed or interrupted Todoist refresh leaves the last complete local projection available.
 
-Select the **Project overview** header to collapse or expand the panel. That choice is saved for the individual Base view. Before the first complete Project sync, the panel displays a waiting state instead of partial statistics. If Project Sync is not configured, disabled, or the initial sync fails, it shows that state directly instead of leaving an indefinite loading indicator.
+Select the **Project overview** header to collapse or expand the panel. That choice is saved for the individual Base view. Before the first complete Project sync has created the local catalog, the panel displays a waiting state instead of partial statistics. If Project Sync is not configured, disabled, or the initial sync fails, the panel reports that state directly.
 
 The completion heatmap initially shows the last year. Use its native range menu to switch among the last 4 weeks, 3 months, 6 months, the last year, or any calendar year from the earliest synchronized completion through the current year. The chosen range is saved for the individual Base view. Month and weekday labels, Obsidian tooltips, a Less-to-More intensity legend, horizontal scrolling on narrow screens, and keyboard navigation follow the familiar GitHub contribution-calendar interaction. Select one day to inspect its count, or select a second day while holding **Shift** to summarize the complete date range between them.
 
@@ -191,7 +194,7 @@ Because filtering happens before the hierarchy is rebuilt, a filtered-out parent
 
 ### Open, complete, reopen, and edit tasks
 
-Select a task title to open its Markdown note. Task actions always operate on Todoist first. On every device, Tasks Bridge attempts to project the accepted change. If an incoming Obsidian Sync download, merge, or remote deletion is already active, the projection waits until that cycle has finished and briefly settled. An upload-only Sync cycle does not delay it:
+Select a task title to open its Markdown note. Task actions always operate on Todoist first, then refresh the Markdown projection:
 
 - **Complete** completes an active task in Todoist.
 - **Reopen** reopens a completed task in Todoist.
@@ -203,7 +206,7 @@ Do not edit plugin-managed `todoist_*` fields as a substitute for these actions.
 
 ## Synchronization timing
 
-Tasks Bridge does not write Project sync Markdown files immediately at startup. Periodic projection starts on the configured Auto-refresh interval, subject to the incoming-Sync gate below.
+Periodic projection starts on the configured Auto-refresh interval.
 
 Automatic Project sync requires all of the following:
 
@@ -211,20 +214,12 @@ Automatic Project sync requires all of the following:
 - global **Auto-refresh** is enabled; and
 - Todoist is ready on that device.
 
-Every device that meets these conditions runs its own periodic Project sync. There is no device assignment or ownership transfer. Before an automatic projection begins, Tasks Bridge defers while Obsidian Sync has incoming downloads, merges, or remote deletions that can change local files. Once that incoming cycle reaches **Fully synced**, the same pending refresh resumes after a brief settle window.
-
-Upload-only Sync activity never blocks an automatic projection. This includes uploads triggered by Tasks Bridge's own writes. If confirmed incoming work appears after an automatic run starts, Tasks Bridge invalidates that run and retries after the incoming cycle settles. Exact path scopes distinguish the plugin's own atomic mutations from unrelated activity, so a run neither cancels itself nor ignores changes elsewhere in a mapped tree.
-
-This mechanism coordinates with the observed Sync direction on the current device; it is not a distributed lock and does not guarantee that only one device can write. Obsidian does not expose a public Sync-direction API, so Tasks Bridge isolates and feature-detects the built-in Sync status. If that internal status is unavailable or incompatible, the gate fails open and the automatic refresh continues with the atomic-write, revision, and live-file safeguards described below.
-
-The gate delays only automatic Project sync writes. Query-block Auto-refresh continues independently because it does not rewrite the Project sync Markdown projection.
-
 You can start it manually at any time with either:
 
 - **Settings → Tasks Bridge → Project sync → Sync now**; or
 - the **Sync Todoist projects** command.
 
-Manual synchronization does not depend on global **Auto-refresh** and bypasses the incoming-Sync gate. It remains available on every device. Because a manual request is intentionally immediate, wait for incoming Obsidian Sync changes to finish if you want the same conservative timing as Auto-refresh.
+Manual synchronization does not depend on global **Auto-refresh**.
 
 Overlapping requests on one device are combined, so repeatedly starting a sync does not create concurrent local runs. Todoist data is fetched before any mapping is reconciled with the Vault, so a failed or incomplete fetch cannot apply a partial multi-project snapshot.
 

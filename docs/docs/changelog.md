@@ -34,20 +34,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Reconciled Project sync notes by stable Todoist task identity, repairing canonical paths and removing true duplicates without discarding conflicting user-written content.
 - Rejects Project mappings that do not belong to the currently authenticated Todoist account, while still supporting an intentional account switch after mappings are updated.
-- Fixed Tasks List completion and reopen refresh states, including stale loading indicators and invalid completed-task responses.
+- Fixed Tasks List completion and reopen refresh states and invalid completed-task responses.
 - Restored square, first-line-aligned task checkboxes that follow Obsidian's native typography and control styling.
-
-## v2.9.1 (2026-08-12)
-
-### 🔁 Changes
-
-- Removed the single-device automatic Project sync assignment. Every configured device can now run periodic Project sync when global **Auto-refresh** is enabled.
-- Automatic Project sync now defers only for incoming Obsidian Sync downloads, merges, and remote deletions, then resumes after the incoming cycle settles. Upload-only activity, including uploads triggered by Tasks Bridge's own writes, does not block a refresh. Manual Project sync remains immediate and does not use this gate.
-- Removed the legacy writer control and writer identifier from current settings. The incoming-Sync gate coordinates locally on each device and is not a distributed lock.
-
-### 🐛 Bug Fixes
-
-- Replaced custom loading animations with Obsidian's native spinner, removing the unintended horizontal progress line.
 
 ## v2.9.0 (2026-08-12)
 
@@ -59,13 +47,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 🐛 Fixes
 
-- Prevented Auto-refresh from creating Obsidian Sync conflicts between updated devices: query caches now stay in vault-specific device-local storage, synchronized settings hot-reload through `onExternalSettingsChange()`, and default query blocks are no longer refreshed by two independent timers.
 - Made Project sync projection updates atomic and revision-aware, with live identity validation, in-flight Vault activity fencing, and safe create/rename race handling instead of overwriting files changed by Sync.
 - Prevented stale mutation refreshes, malformed managed YAML, revisionless snapshots, and stale missing-task snapshots from restoring or duplicating older task state.
-
-### 🔁 Changes
-
-- Automatic Project sync now requires one explicitly selected writer device, waits for mapped folders to be quiet after startup or Vault activity, and never writes projection files immediately at startup. Project task actions on other devices update Todoist without writing the synchronized Markdown projection. Historical projection roots remain monitored for files delivered late by Obsidian Sync. Manual Project sync remains available on every device; every synced device must be updated or have the older plugin disabled before relying on the writer protocol. Obsidian Sync's **Vault configuration sync** must include Tasks Bridge plugin data to propagate the assignment through `data.json`; otherwise users must manually keep the writer assignment exclusive to one device.
 
 ## v2.8.1 (2026-08-11)
 
@@ -122,12 +105,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### ✨ Features
 
 - Todoist query blocks now render from a persistent cache immediately, then synchronize with Todoist in the background and update when fresh results arrive.
-- Queries without cached results now show an accessible loading indicator styled with Obsidian's native design tokens.
 - You can now sort tasks by their deadlines by name using `deadline` or `deadlineDescending` in the sorting field.
 
 ### 🔁 Changes
 
-- Redesigned titled and untitled query headers with compact, native-styled controls that no longer overlap Obsidian's built-in "Edit this block" action.
 - Added account-isolated, validated, and bounded cache storage, with protection against stale requests after a query or account change.
 - Task completion now updates cached queries consistently, invalidates affected cache entries, and rolls back when Todoist rejects the request.
 - Rebranded this fork as Todoist Sync ++ and clarified its acknowledgement of the original Todoist Sync project.
@@ -136,7 +117,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Same-day due dates are now formatted correctly in the configured time zone.
 - Filter strings now have Unicode whitespace characters (e.g., non-breaking spaces from copy-paste) normalized to regular spaces, preventing API errors.
-- Production builds targeting a symlinked plugin directory now preserve the existing `data.json` settings file.
 
 ## v2.6.0 (2026-02-01)
 

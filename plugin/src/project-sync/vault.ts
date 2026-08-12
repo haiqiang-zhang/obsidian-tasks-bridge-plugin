@@ -104,6 +104,7 @@ type DuplicateCandidate = {
 
 const YAML_DELIMITER_WITH_LEADING_LINE_BREAK = "\n---";
 const YAML_OPENING_LENGTH = 4;
+const LOCAL_EVENT_MATCH_TOLERANCE_MS = 120_000;
 
 const emptyResult = (): ProjectSyncResult => ({
   created: 0,
@@ -279,6 +280,7 @@ export class ObsidianProjectSyncVault {
     const managedFiles = new Set<TFile>(
       [...configuredByTaskId.values()].flatMap((files) => files.map(({ file }) => file)),
     );
+    const completionEventsByTaskId = groupCompletionEventsByTaskId(snapshot.completionEvents ?? []);
     const conflictedIds = new Set<string>();
     const desiredIds = new Set(snapshot.tasks.map(({ task }) => task.id));
 
@@ -309,6 +311,7 @@ export class ObsidianProjectSyncVault {
         projectPath,
         snapshot.syncedAt,
         mapping.id,
+        completionEventsByTaskId.get(taskId) ?? [],
       );
       const desiredBody = makeManagedBody(snapshotTask.task);
       // A duplicate is scoped to this selected mapping/root plus Todoist's immutable task ID.
@@ -1550,6 +1553,10 @@ export class ObsidianProjectSyncVault {
     ) {
       write.todoist_updated_at = current.todoist_updated_at;
     }
+    write.todoist_completion_events = mergeProjectedCompletionEvents(
+      current.todoist_completion_events,
+      desired.todoist_completion_events,
+    );
     return write;
   }
 
@@ -1890,6 +1897,69 @@ export class ObsidianProjectSyncVault {
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
+
+const groupCompletionEventsByTaskId = (
+  events: readonly import("./types").ProjectCompletionEvent[],
+): Map<string, import("./types").ProjectCompletionEvent[]> => {
+  const result = new Map<string, import("./types").ProjectCompletionEvent[]>();
+  const seenIds = new Set<string>();
+  for (const event of events) {
+    if (seenIds.has(event.id)) {
+      continue;
+    }
+    seenIds.add(event.id);
+    const taskEvents = result.get(event.taskId) ?? [];
+    taskEvents.push(event);
+    result.set(event.taskId, taskEvents);
+  }
+  return result;
+};
+
+const mergeProjectedCompletionEvents = (current: unknown, desired: unknown): unknown[] => {
+  const desiredEvents = Array.isArray(desired) ? desired : [];
+  const localEvents = Array.isArray(current)
+    ? current.filter(
+        (event) => isRecord(event) && typeof event.id === "string" && event.id.startsWith("local:"),
+      )
+    : [];
+  const desiredIds = new Set(
+    desiredEvents.flatMap((event) =>
+      isRecord(event) && typeof event.id === "string" ? [event.id] : [],
+    ),
+  );
+  const unmatchedDesired = desiredEvents.filter((event): event is Record<string, unknown> =>
+    isRecord(event),
+  );
+  return [
+    ...desiredEvents,
+    ...localEvents.filter(
+      (event) =>
+        !desiredIds.has(String(event.id)) &&
+        !unmatchedDesired.some((candidate) => completionEventsMatch(event, candidate)),
+    ),
+  ];
+};
+
+const completionEventsMatch = (
+  local: Record<string, unknown>,
+  canonical: Record<string, unknown>,
+): boolean => {
+  if (
+    local.task_id !== canonical.task_id ||
+    local.project_id !== canonical.project_id ||
+    typeof local.completed_at !== "string" ||
+    typeof canonical.completed_at !== "string"
+  ) {
+    return false;
+  }
+  const localTime = Date.parse(local.completed_at);
+  const canonicalTime = Date.parse(canonical.completed_at);
+  return (
+    Number.isFinite(localTime) &&
+    Number.isFinite(canonicalTime) &&
+    Math.abs(localTime - canonicalTime) <= LOCAL_EVENT_MATCH_TOLERANCE_MS
+  );
+};
 
 /**
  * Read strict Obsidian frontmatter, with one narrowly scoped recovery path for projection damage

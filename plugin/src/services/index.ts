@@ -2,7 +2,11 @@ import { MarkdownView } from "obsidian";
 
 import { TodoistAdapter } from "@/data";
 import type TodoistPlugin from "@/index";
-import { ObsidianProjectSyncVault, ProjectFolderSyncService } from "@/project-sync";
+import {
+  ObsidianProjectSyncStatisticsRepository,
+  ObsidianProjectSyncVault,
+  ProjectFolderSyncService,
+} from "@/project-sync";
 import { ModalHandler } from "@/services/modals";
 import { TodoistProjectSyncSource } from "@/services/projectSyncSource";
 import {
@@ -27,6 +31,14 @@ export const makeServices = (plugin: TodoistPlugin): Services => {
     },
   });
   const settings = useSettingsStore.getState();
+  const projectSyncConfig = {
+    enabled: settings.projectSyncEnabled,
+    mappings: settings.projectSyncMappings,
+  };
+  const runInternalMutation = async <T>(
+    affectedPaths: readonly string[],
+    operation: () => Promise<T>,
+  ): Promise<T> => await plugin.runProjectSyncVaultMutation(affectedPaths, operation);
   const projectSync = new ProjectFolderSyncService(
     new TodoistProjectSyncSource(todoist),
     new ObsidianProjectSyncVault(
@@ -41,18 +53,18 @@ export const makeServices = (plugin: TodoistPlugin): Services => {
         });
         return paths;
       },
-      async (affectedPaths, operation) =>
-        await plugin.runProjectSyncVaultMutation(affectedPaths, operation),
+      runInternalMutation,
     ),
-    {
-      enabled: settings.projectSyncEnabled,
-      mappings: settings.projectSyncMappings,
-    },
+    projectSyncConfig,
+    new ObsidianProjectSyncStatisticsRepository(
+      plugin.app.vault,
+      projectSyncConfig,
+      runInternalMutation,
+    ),
   );
   const projectTaskProjectionCoordinator: ProjectTaskProjectionCoordinator = {
     runAutomaticProjection: (operation) => plugin.runAutomaticProjectProjection(operation),
-    runInternalMutation: async (affectedPaths, operation) =>
-      await plugin.runProjectSyncVaultMutation(affectedPaths, operation),
+    runInternalMutation,
   };
 
   return {

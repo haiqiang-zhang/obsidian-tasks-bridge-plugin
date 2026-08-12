@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { buildTodoistListModel, scopeTodoistListGroups } from "./model";
 
 type EntryOptions = {
+  projectCatalog?: boolean;
   managed?: boolean;
   mappingId?: string;
   rootProjectId?: string;
@@ -50,6 +51,7 @@ const makeEntry = (id: string, options: EntryOptions = {}): BasesEntry => {
   const projectName = options.projectName ?? "Root";
   const rootProjectId = options.rootProjectId ?? options.projectIdPath?.[0] ?? "root";
   const values = new Map<BasesPropertyId, Value>([
+    ["note.tasks_bridge_project_catalog_managed", primitive(options.projectCatalog ?? false)],
     ["note.todoist_sync_managed", primitive(options.managed ?? true)],
     ["note.todoist_sync_root_id", primitive(rootProjectId)],
     ["note.todoist_task_id", primitive(id)],
@@ -248,6 +250,23 @@ describe("buildTodoistListModel", () => {
       ignoredNonManaged: 1,
       ignoredDuplicateTaskNotes: 1,
       ignoredInvalid: 1,
+    });
+  });
+
+  it("silently excludes Project Catalog Markdown from broad Base results", () => {
+    const model = build([
+      makeGroup([
+        makeEntry("catalog", { managed: false, projectCatalog: true }),
+        makeEntry("task"),
+      ]),
+    ]);
+
+    expect(model.taskCount).toBe(1);
+    expect(model.diagnostics).toEqual({
+      ignoredNonManaged: 0,
+      ignoredDuplicateTaskNotes: 0,
+      ignoredInvalid: 0,
+      hierarchyWarnings: 0,
     });
   });
 

@@ -15,6 +15,8 @@ import {
 } from "@/project-sync";
 import type { ManagedFrontmatter, ManagedNoteIdentity } from "@/project-sync/document";
 
+const LOCAL_COMPLETION_EVENT_PREFIX = "local:";
+
 export type ManagedProjectTaskReference = {
   id: string;
   filePath: string;
@@ -310,7 +312,17 @@ export class ProjectTaskCommandService {
       delete frontmatter.todoist_stale_since;
 
       if (status === "completed" && completedAt !== undefined) {
-        frontmatter.todoist_completed_at = completedAt.toISOString();
+        const completedAtIso = completedAt.toISOString();
+        frontmatter.todoist_completed_at = completedAtIso;
+        frontmatter.todoist_completion_events = appendLocalCompletionEvent(
+          frontmatter.todoist_completion_events,
+          {
+            id: makeLocalCompletionEventId(target, completedAtIso),
+            task_id: target.taskId,
+            project_id: target.identity.projectId,
+            completed_at: completedAtIso,
+          },
+        );
       } else {
         delete frontmatter.todoist_completed_at;
       }
@@ -365,3 +377,31 @@ export class ProjectTaskCommandService {
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
+
+const makeLocalCompletionEventId = (
+  target: ManagedProjectTaskTarget,
+  completedAt: string,
+): string =>
+  `${LOCAL_COMPLETION_EVENT_PREFIX}${JSON.stringify([
+    target.identity.mappingId ?? null,
+    target.identity.rootProjectId,
+    target.taskId,
+    completedAt,
+  ])}`;
+
+const appendLocalCompletionEvent = (
+  current: unknown,
+  event: Record<string, string>,
+): Record<string, string>[] => {
+  const result = Array.isArray(current)
+    ? current.filter(
+        (entry): entry is Record<string, string> =>
+          isRecord(entry) &&
+          typeof entry.id === "string" &&
+          typeof entry.task_id === "string" &&
+          typeof entry.project_id === "string" &&
+          typeof entry.completed_at === "string",
+      )
+    : [];
+  return result.some((entry) => entry.id === event.id) ? result : [...result, event];
+};
