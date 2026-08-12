@@ -10,6 +10,9 @@ hero:
     alt: Tasks Bridge logo
   actions:
     - theme: brand
+      text: Get Tasks Bridge
+      link: https://community.obsidian.md/plugins/tasks-bridge
+    - theme: alt
       text: Read the documentation
       link: /overview
     - theme: alt
