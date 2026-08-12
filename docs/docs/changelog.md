@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v2.9.2 (2026-08-12)
+
 ### ✨ Features
 
 - Moved the Tasks List root-project choice into Obsidian's native **Configure view** menu and persist it in the `.base` view definition, so each view can keep an independent hierarchy root.
