@@ -36,3 +36,23 @@
 .translation-progress progress {
   accent-color: var(--rp-c-brand);
 }
+
+/* Keep home-page actions legible when the hero content becomes narrow. */
+.rp-home-hero__actions {
+  flex-wrap: wrap;
+}
+
+.rp-home-hero__action.rp-button--big {
+  flex: 0 0 auto;
+  padding-inline: 1.5rem;
+}
+
+@media (width <= 768px) {
+  .rp-home-hero__actions {
+    width: min(100%, 22rem);
+  }
+
+  .rp-home-hero__action.rp-button--big {
+    width: 100%;
+  }
+}

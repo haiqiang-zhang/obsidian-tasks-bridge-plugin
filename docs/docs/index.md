@@ -3,7 +3,7 @@ title: Tasks Bridge
 pageType: home
 hero:
   name: Tasks Bridge
-  text: Connect your Vault to task-management backends
+  text: Connect your Obsidian vault to task-management backends
   tagline: Todoist is supported today, with more backends planned.
   image:
     src: /img/logo.svg
