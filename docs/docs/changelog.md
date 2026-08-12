@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v2.9.1 (2026-08-12)
+
 ### 🔁 Changes
 
 - Removed the single-device automatic Project sync assignment. Every configured device can now run periodic Project sync when global **Auto-refresh** is enabled.
