@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v2.9.4 (2026-08-12)
+
 ### 🐛 Bug Fixes
 
 - Project overview now restores immediately from the synchronized local Markdown projection when the Vault opens instead of waiting for a new Todoist refresh.
