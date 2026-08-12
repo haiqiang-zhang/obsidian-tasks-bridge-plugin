@@ -24,15 +24,6 @@
     <filter id="card-shadow" x="-20%" y="-24%" width="140%" height="156%" color-interpolation-filters="sRGB">
       <feDropShadow dx="0" dy="4" stdDeviation="6" flood-color="#241d35" flood-opacity="0.12"/>
     </filter>
-    <marker id="arrow-purple" markerWidth="9" markerHeight="9" refX="7.4" refY="4.5" orient="auto" markerUnits="strokeWidth">
-      <path d="M0 0 8 4.5 0 9Z" fill="#7e68ad"/>
-    </marker>
-    <marker id="arrow-purple-start" markerWidth="9" markerHeight="9" refX="0.6" refY="4.5" orient="auto-start-reverse" markerUnits="strokeWidth">
-      <path d="M0 0 8 4.5 0 9Z" fill="#7e68ad"/>
-    </marker>
-    <marker id="arrow-red" markerWidth="9" markerHeight="9" refX="7.4" refY="4.5" orient="auto" markerUnits="strokeWidth">
-      <path d="M0 0 8 4.5 0 9Z" fill="#dc4c3e"/>
-    </marker>
   </defs>
   <style>
     text {
@@ -113,7 +104,6 @@
       fill: none;
       stroke-linecap: round;
       stroke-linejoin: round;
-      vector-effect: non-scaling-stroke;
     }
     .connector-primary {
       stroke: #7e68ad;
@@ -134,6 +124,12 @@
       font-weight: 650;
       letter-spacing: 0.6px;
       text-anchor: middle;
+    }
+    .arrowhead-purple {
+      fill: #7e68ad;
+    }
+    .arrowhead-red {
+      fill: #dc4c3e;
     }
     .divider {
       stroke: #e4deed;
@@ -157,14 +153,20 @@
     }
   </style>
 
-  <path class="connector connector-primary" d="M260 224H308" marker-start="url(#arrow-purple-start)" marker-end="url(#arrow-purple)"/>
+  <path class="connector connector-primary" d="M260 224H308"/>
+  <path class="arrowhead-purple" d="M260 224 269 219 269 229Z"/>
+  <path class="arrowhead-purple" d="M308 224 299 219 299 229Z"/>
   <rect x="266" y="194" width="36" height="16" rx="8" fill="#ffffff" stroke="#ddd5e8" vector-effect="non-scaling-stroke"/>
   <text class="connector-label" x="284" y="205.5">SYNC</text>
 
-  <path class="connector connector-live" d="M570 174C614 174 624 62 670 62" marker-end="url(#arrow-red)"/>
-  <path class="connector connector-planned" d="M570 204C611 204 627 166 670 166" marker-end="url(#arrow-purple)"/>
-  <path class="connector connector-planned" d="M570 236C611 236 627 270 670 270" marker-end="url(#arrow-purple)"/>
-  <path class="connector connector-planned" d="M570 266C614 266 624 374 670 374" marker-end="url(#arrow-purple)"/>
+  <path class="connector connector-live" d="M570 174C614 174 624 62 670 62"/>
+  <path class="arrowhead-red" d="M670 62 661 57 661 67Z"/>
+  <path class="connector connector-planned" d="M570 204C611 204 627 166 670 166"/>
+  <path class="arrowhead-purple" d="M670 166 661 161 661 171Z"/>
+  <path class="connector connector-planned" d="M570 236C611 236 627 270 670 270"/>
+  <path class="arrowhead-purple" d="M670 270 661 265 661 275Z"/>
+  <path class="connector connector-planned" d="M570 266C614 266 624 374 670 374"/>
+  <path class="arrowhead-purple" d="M670 374 661 369 661 379Z"/>
 
   <g>
     <rect class="card obsidian-card" x="28" y="155" width="220" height="130" rx="18"/>
