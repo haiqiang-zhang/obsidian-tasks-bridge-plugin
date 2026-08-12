@@ -12,5 +12,7 @@ runs:
       with:
         arguments: ./nix --impure
     - name: Install dependencies
-      run: npm install
+      # CI must consume the committed lockfile without rewriting platform-specific
+      # optional dependency metadata.
+      run: npm ci
       shell: bash

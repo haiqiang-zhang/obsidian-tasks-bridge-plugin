@@ -74,7 +74,10 @@ jobs:
 
       - name: Check for generated file changes
         run: |
-          git add -A
+          # Only these files are owned by the translation-status generator.
+          # Dependency installation and other platform-specific tooling must not
+          # be mistaken for generated documentation changes.
+          git add -- docs/docs/translation-status.json docs/docs/project-mode.md
           if git diff --staged --quiet; then
             echo "✅ No changes detected in generated files"
           else
