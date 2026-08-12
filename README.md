@@ -12,45 +12,9 @@ Tasks Bridge is based on the original [Todoist Sync](https://github.com/jamiebry
 
 ## Architecture
 
-```mermaid
-flowchart LR
-    subgraph OBSIDIAN["Obsidian"]
-        OBSIDIAN_DETAIL["Interaction and presentation"]
-    end
-    subgraph BRIDGE["Tasks Bridge"]
-        BRIDGE_DETAIL["Integration layer"]
-    end
-    subgraph TODOIST["Todoist"]
-        TODOIST_DETAIL["Implemented"]
-    end
-    subgraph TICKTICK["TickTick"]
-        TICKTICK_DETAIL["Planned"]
-    end
-    subgraph MICROSOFT_TODO["Microsoft To Do"]
-        MICROSOFT_TODO_DETAIL["Planned"]
-    end
-    subgraph GOOGLE_TASKS["Google Tasks"]
-        GOOGLE_TASKS_DETAIL["Planned"]
-    end
-
-    OBSIDIAN <--> BRIDGE
-    BRIDGE --> TODOIST
-    BRIDGE -.-> TICKTICK
-    BRIDGE -.-> MICROSOFT_TODO
-    BRIDGE -.-> GOOGLE_TASKS
-
-    classDef description fill:transparent,stroke:transparent,color:#5f596f,font-size:11px,font-weight:400
-    classDef implementedDescription fill:transparent,stroke:transparent,color:#8a3028,font-size:11px,font-weight:400
-    class OBSIDIAN_DETAIL,BRIDGE_DETAIL,TICKTICK_DETAIL,MICROSOFT_TODO_DETAIL,GOOGLE_TASKS_DETAIL description
-    class TODOIST_DETAIL implementedDescription
-
-    style OBSIDIAN fill:#f3f0ff,stroke:#8b7bb8,color:#302a43,stroke-width:1.5px,font-size:16px
-    style BRIDGE fill:#f3f0ff,stroke:#8b7bb8,color:#302a43,stroke-width:1.5px,font-size:16px
-    style TODOIST fill:#fff1f0,stroke:#dc4c3e,color:#70251f,stroke-width:2px,font-size:16px
-    style TICKTICK fill:#f3f0ff,stroke:#8b7bb8,color:#453b61,stroke-width:1.5px,stroke-dasharray:5 4,font-size:16px
-    style MICROSOFT_TODO fill:#f3f0ff,stroke:#8b7bb8,color:#453b61,stroke-width:1.5px,stroke-dasharray:5 4,font-size:16px
-    style GOOGLE_TASKS fill:#f3f0ff,stroke:#8b7bb8,color:#453b61,stroke-width:1.5px,stroke-dasharray:5 4,font-size:16px
-```
+<p align="center">
+  <img src="docs/static/img/architecture.svg" alt="Tasks Bridge architecture: Obsidian connects through Tasks Bridge to Todoist, with TickTick, Microsoft To Do, and Google Tasks planned." width="960">
+</p>
 
 The red backend node and solid connection are available now. Purple-gray nodes and dashed connections are planned integrations. Every task service remains the system of record for its own data.
 

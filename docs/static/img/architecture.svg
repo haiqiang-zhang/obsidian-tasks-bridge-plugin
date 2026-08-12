@@ -1,0 +1,246 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 440" preserveAspectRatio="xMidYMid meet" role="img" aria-labelledby="architecture-title architecture-description">
+  <title id="architecture-title">Tasks Bridge architecture</title>
+  <desc id="architecture-description">Obsidian connects bidirectionally to Tasks Bridge. Tasks Bridge connects to the implemented Todoist backend and to planned TickTick, Microsoft To Do, and Google Tasks backends.</desc>
+  <defs>
+    <linearGradient id="bridge-accent" x1="338" y1="0" x2="552" y2="0" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#8b6bd8"/>
+      <stop offset="0.52" stop-color="#a779c8"/>
+      <stop offset="1" stop-color="#dc4c3e"/>
+    </linearGradient>
+    <linearGradient id="bridge-icon-surface" x1="0" y1="0" x2="40" y2="40" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#ffffff"/>
+      <stop offset="0.52" stop-color="#fff5f4"/>
+      <stop offset="1" stop-color="#f2edff"/>
+    </linearGradient>
+    <linearGradient id="bridge-icon-frame" x1="0" y1="0" x2="40" y2="40" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#f16d61"/>
+      <stop offset="1" stop-color="#c83d43"/>
+    </linearGradient>
+    <linearGradient id="obsidian-gem" x1="0" y1="0" x2="34" y2="38" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#c1a7ff"/>
+      <stop offset="0.52" stop-color="#8b6bd8"/>
+      <stop offset="1" stop-color="#6542bd"/>
+    </linearGradient>
+    <filter id="card-shadow" x="-20%" y="-24%" width="140%" height="156%" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="4" stdDeviation="6" flood-color="#241d35" flood-opacity="0.12"/>
+    </filter>
+    <marker id="arrow-purple" markerWidth="9" markerHeight="9" refX="7.4" refY="4.5" orient="auto" markerUnits="strokeWidth">
+      <path d="M0 0 8 4.5 0 9Z" fill="#7e68ad"/>
+    </marker>
+    <marker id="arrow-purple-start" markerWidth="9" markerHeight="9" refX="0.6" refY="4.5" orient="auto-start-reverse" markerUnits="strokeWidth">
+      <path d="M0 0 8 4.5 0 9Z" fill="#7e68ad"/>
+    </marker>
+    <marker id="arrow-red" markerWidth="9" markerHeight="9" refX="7.4" refY="4.5" orient="auto" markerUnits="strokeWidth">
+      <path d="M0 0 8 4.5 0 9Z" fill="#dc4c3e"/>
+    </marker>
+  </defs>
+  <style>
+    text {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    }
+    .card {
+      filter: url(#card-shadow);
+      vector-effect: non-scaling-stroke;
+    }
+    .obsidian-card {
+      fill: #f5f2ff;
+      stroke: #8b6bd8;
+      stroke-width: 1.5;
+    }
+    .bridge-card {
+      fill: #fcfbff;
+      stroke: #b7aacd;
+      stroke-width: 1.5;
+    }
+    .todoist-card {
+      fill: #fff3f1;
+      stroke: #dc4c3e;
+      stroke-width: 1.75;
+    }
+    .planned-card {
+      fill: #f8f6fc;
+      stroke: #9485b7;
+      stroke-width: 1.5;
+      stroke-dasharray: 6 5;
+    }
+    .title {
+      fill: #2f2940;
+      font-size: 19px;
+      font-weight: 700;
+      letter-spacing: -0.25px;
+    }
+    .service-title {
+      fill: #342d46;
+      font-size: 16px;
+      font-weight: 700;
+      letter-spacing: -0.1px;
+    }
+    .todoist-title {
+      fill: #712920;
+    }
+    .description {
+      fill: #655f70;
+      font-size: 12px;
+      font-weight: 450;
+    }
+    .eyebrow {
+      fill: #786c8e;
+      font-size: 9.5px;
+      font-weight: 700;
+      letter-spacing: 1.25px;
+    }
+    .status {
+      font-size: 9px;
+      font-weight: 750;
+      letter-spacing: 0.7px;
+      text-anchor: middle;
+    }
+    .live-pill {
+      fill: #ffe1dd;
+      stroke: #ed9188;
+    }
+    .live-text {
+      fill: #a5362d;
+    }
+    .planned-pill {
+      fill: #eee9f8;
+      stroke: #c3b8db;
+    }
+    .planned-text {
+      fill: #6f608f;
+    }
+    .connector {
+      fill: none;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      vector-effect: non-scaling-stroke;
+    }
+    .connector-primary {
+      stroke: #7e68ad;
+      stroke-width: 2;
+    }
+    .connector-live {
+      stroke: #dc4c3e;
+      stroke-width: 2.1;
+    }
+    .connector-planned {
+      stroke: #9485b7;
+      stroke-width: 1.65;
+      stroke-dasharray: 5 6;
+    }
+    .connector-label {
+      fill: #746b82;
+      font-size: 9px;
+      font-weight: 650;
+      letter-spacing: 0.6px;
+      text-anchor: middle;
+    }
+    .divider {
+      stroke: #e4deed;
+      stroke-width: 1;
+      vector-effect: non-scaling-stroke;
+    }
+    @media (prefers-color-scheme: dark) {
+      .obsidian-card { fill: #211d2b; stroke: #a98ae9; }
+      .bridge-card { fill: #1d1a24; stroke: #8b809d; }
+      .todoist-card { fill: #2a1d1d; stroke: #e76359; }
+      .planned-card { fill: #211e28; stroke: #a995d9; }
+      .title, .service-title { fill: #f5f2f8; }
+      .todoist-title { fill: #ffc0b9; }
+      .description { fill: #c8c1d0; }
+      .eyebrow, .connector-label { fill: #b9adc9; }
+      .divider { stroke: #3b3447; }
+      .live-pill { fill: #44221f; stroke: #a94a42; }
+      .live-text { fill: #ffaaa2; }
+      .planned-pill { fill: #302a3c; stroke: #6f618a; }
+      .planned-text { fill: #c9b9ed; }
+    }
+  </style>
+
+  <path class="connector connector-primary" d="M260 224H308" marker-start="url(#arrow-purple-start)" marker-end="url(#arrow-purple)"/>
+  <rect x="266" y="194" width="36" height="16" rx="8" fill="#ffffff" stroke="#ddd5e8" vector-effect="non-scaling-stroke"/>
+  <text class="connector-label" x="284" y="205.5">SYNC</text>
+
+  <path class="connector connector-live" d="M570 174C614 174 624 62 670 62" marker-end="url(#arrow-red)"/>
+  <path class="connector connector-planned" d="M570 204C611 204 627 166 670 166" marker-end="url(#arrow-purple)"/>
+  <path class="connector connector-planned" d="M570 236C611 236 627 270 670 270" marker-end="url(#arrow-purple)"/>
+  <path class="connector connector-planned" d="M570 266C614 266 624 374 670 374" marker-end="url(#arrow-purple)"/>
+
+  <g>
+    <rect class="card obsidian-card" x="28" y="155" width="220" height="130" rx="18"/>
+    <g transform="translate(50 182)">
+      <circle cx="19" cy="19" r="19" fill="#ebe4ff"/>
+      <path d="M18.5 3.5 8 10.5 5 23l9.5 11.5 8-3.5 10-14.5-6-10Z" fill="url(#obsidian-gem)"/>
+      <path d="m8 10.5 10.5-7 4 27.5-8 3.5Z" fill="#a98af0" opacity="0.58"/>
+      <path d="m8 10.5 17.5-4-7 13.5L5 23Z" fill="#d4c3ff" opacity="0.48"/>
+      <path d="m18.5 3.5 7 3-7 13.5Z" fill="#6d49c6" opacity="0.7"/>
+    </g>
+    <text class="eyebrow" x="98" y="184">WORKSPACE</text>
+    <text class="title" x="98" y="208">Obsidian</text>
+    <text class="description" x="50" y="238">Interaction &amp; presentation</text>
+    <path class="divider" d="M50 250H226"/>
+    <circle cx="56" cy="265" r="3.5" fill="#8b6bd8"/>
+    <text class="description" x="68" y="269">Your task workspace</text>
+  </g>
+
+  <g>
+    <rect class="card bridge-card" x="320" y="135" width="250" height="170" rx="20"/>
+    <path d="M340 136.5H550" fill="none" stroke="url(#bridge-accent)" stroke-width="3" stroke-linecap="round" vector-effect="non-scaling-stroke"/>
+    <g transform="translate(346 165)">
+      <rect x="0" y="0" width="42" height="42" rx="10" fill="url(#bridge-icon-surface)" stroke="url(#bridge-icon-frame)" stroke-width="2" vector-effect="non-scaling-stroke"/>
+      <path d="M19 14v17M10.5 22.5h17" fill="none" stroke="#dc4c3e" stroke-width="3" stroke-linecap="round"/>
+      <path d="M32.5 8v8M28.5 12h8" fill="none" stroke="#8967d5" stroke-width="2.5" stroke-linecap="round"/>
+    </g>
+    <text class="eyebrow" x="404" y="174">INTEGRATION LAYER</text>
+    <text class="title" x="404" y="199">Tasks Bridge</text>
+    <text class="description" x="404" y="220">One bridge, many backends</text>
+    <path class="divider" d="M346 239H544"/>
+    <text class="description" x="346" y="263">Backends remain the source of truth.</text>
+    <rect x="346" y="275" width="48" height="18" rx="9" fill="#eee8fb"/>
+    <text class="status planned-text" x="370" y="287.5">SYNC</text>
+    <rect x="401" y="275" width="49" height="18" rx="9" fill="#fff0ee"/>
+    <text class="status live-text" x="425.5" y="287.5">VIEWS</text>
+  </g>
+
+  <text class="eyebrow" x="670" y="13">TASK BACKENDS</text>
+
+  <g>
+    <rect class="card todoist-card" x="670" y="22" width="262" height="80" rx="15"/>
+    <circle cx="698" cy="62" r="17" fill="#dc4c3e"/>
+    <path d="m688 55 4.5 2.5 10-5M688 62l4.5 2.5 10-5M688 69l4.5 2.5 10-5" fill="none" stroke="#fff" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>
+    <text class="service-title todoist-title" x="726" y="58">Todoist</text>
+    <text class="description" x="726" y="77">Implemented backend</text>
+    <rect class="live-pill" x="868" y="43" width="44" height="20" rx="10"/>
+    <text class="status live-text" x="890" y="56.5">LIVE</text>
+  </g>
+
+  <g>
+    <rect class="card planned-card" x="670" y="126" width="262" height="80" rx="15"/>
+    <circle cx="698" cy="166" r="17" fill="#5577ed" opacity="0.9"/>
+    <path d="m690 166 5 5 11-12" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+    <text class="service-title" x="726" y="162">TickTick</text>
+    <text class="description" x="726" y="181">Planned backend</text>
+    <rect class="planned-pill" x="846" y="169" width="66" height="20" rx="10"/>
+    <text class="status planned-text" x="879" y="182.5">PLANNED</text>
+  </g>
+
+  <g>
+    <rect class="card planned-card" x="670" y="230" width="262" height="80" rx="15"/>
+    <circle cx="698" cy="270" r="17" fill="#3772c5" opacity="0.9"/>
+    <path d="M689 260h7v7h-7zm10 0h7v7h-7zm-10 10h7v7h-7zm10 0h7v7h-7z" fill="#fff" opacity="0.94"/>
+    <text class="service-title" x="726" y="266">Microsoft To Do</text>
+    <text class="description" x="726" y="285">Planned backend</text>
+    <rect class="planned-pill" x="846" y="273" width="66" height="20" rx="10"/>
+    <text class="status planned-text" x="879" y="286.5">PLANNED</text>
+  </g>
+
+  <g>
+    <rect class="card planned-card" x="670" y="334" width="262" height="80" rx="15"/>
+    <circle cx="698" cy="374" r="17" fill="#4285f4" opacity="0.9"/>
+    <path d="m690 374 5 5 11-12" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+    <text class="service-title" x="726" y="370">Google Tasks</text>
+    <text class="description" x="726" y="389">Planned backend</text>
+    <rect class="planned-pill" x="846" y="377" width="66" height="20" rx="10"/>
+    <text class="status planned-text" x="879" y="390.5">PLANNED</text>
+  </g>
+</svg>
