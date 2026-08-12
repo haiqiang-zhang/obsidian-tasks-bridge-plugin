@@ -242,6 +242,7 @@ const makeServices = () => ({
     getStatisticsSnapshot: vi.fn(() => null),
     invalidate: vi.fn(),
     notifyLocalProjectionChanges: vi.fn(),
+    reloadStatisticsCatalogs: vi.fn(),
     refreshStatisticsFromLocalProjection: vi.fn(async () => undefined),
     setConfig: vi.fn(),
     subscribe: vi.fn(() => () => undefined),
@@ -560,6 +561,90 @@ describe("TodoistPlugin async lifecycle", () => {
     await plugin.loadOptions();
 
     expect(runtime.saveData).not.toHaveBeenCalled();
+  });
+
+  it("preserves Project catalogs in plugin data when settings are updated", async () => {
+    const services = makeServices();
+    const stored = {
+      ...makeSettings(),
+      projectSyncCatalogs: {
+        version: 1,
+        items: [
+          {
+            mappingId: "mapping-work",
+            rootProjectId: "work",
+            includeSubprojects: true,
+            syncedAt: "2026-08-12T01:00:00.000Z",
+            projects: [
+              { id: "work", parentId: null, name: "Work", childOrder: 1 },
+              { id: "empty", parentId: "work", name: "Empty", childOrder: 2 },
+            ],
+          },
+        ],
+      },
+    };
+    runtime.loadData.mockResolvedValueOnce(stored);
+    const plugin = makePlugin(services);
+    await plugin.loadOptions();
+    runtime.saveData.mockClear();
+
+    await plugin.writeOptions({ debugLogging: true });
+
+    expect(runtime.saveData).toHaveBeenCalledWith(
+      expect.objectContaining({
+        debugLogging: true,
+        projectSyncCatalogs: stored.projectSyncCatalogs,
+      }),
+    );
+  });
+
+  it("keeps the newest Project catalog when external plugin data arrives", async () => {
+    const services = makeServices();
+    const plugin = makePlugin(services);
+    runtime.loadData.mockResolvedValueOnce({
+      ...makeSettings(),
+      projectSyncCatalogs: {
+        version: 1,
+        items: [
+          {
+            mappingId: "mapping-work",
+            rootProjectId: "work",
+            includeSubprojects: true,
+            syncedAt: "2026-08-12T02:00:00.000Z",
+            projects: [{ id: "work", parentId: null, name: "Newest", childOrder: 1 }],
+          },
+        ],
+      },
+    });
+    await plugin.loadOptions();
+    runtime.saveData.mockClear();
+    runtime.loadData.mockResolvedValueOnce({
+      ...makeSettings({ debugLogging: true }),
+      projectSyncCatalogs: {
+        version: 1,
+        items: [
+          {
+            mappingId: "mapping-work",
+            rootProjectId: "work",
+            includeSubprojects: true,
+            syncedAt: "2026-08-12T01:00:00.000Z",
+            projects: [{ id: "work", parentId: null, name: "Older", childOrder: 1 }],
+          },
+        ],
+      },
+    });
+
+    await plugin.onExternalSettingsChange();
+
+    expect(services.projectSync.reloadStatisticsCatalogs).toHaveBeenCalledOnce();
+    expect(runtime.saveData).toHaveBeenCalledWith(
+      expect.objectContaining({
+        debugLogging: true,
+        projectSyncCatalogs: expect.objectContaining({
+          items: [expect.objectContaining({ syncedAt: "2026-08-12T02:00:00.000Z" })],
+        }),
+      }),
+    );
   });
 
   it("prefers the device-local query cache over a legacy cache received through Sync", async () => {

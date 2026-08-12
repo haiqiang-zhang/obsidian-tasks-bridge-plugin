@@ -47,6 +47,7 @@ export interface ProjectSyncStatisticsRepository {
   notifyLocalChanges(paths: readonly string[]): void;
   getSnapshot(): ProjectSyncStatisticsSnapshot | null;
   clearSnapshot(): void;
+  reloadCatalogs(): void;
   subscribe(listener: () => void): () => void;
   dispose(): void;
 }

@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### 🐛 Bug Fixes
+
+- Prevented the Tasks Bridge settings tab from entering an infinite render loop when a configured Project sync folder has been renamed or removed.
+- Moved Project Overview's internal project catalog from the Vault content tree into the plugin's `data.json`. Existing `_Tasks Bridge` catalog files are migrated before the obsolete folder is moved to the user's configured Obsidian trash.
+
 ## v2.9.5 (2026-08-12)
 
 ### 🔁 Changes

@@ -1,11 +1,18 @@
-import type { TAbstractFile, TFile, Vault } from "obsidian";
+import { dump as dumpYaml } from "js-yaml";
+import type { FileManager, TAbstractFile, TFile, TFolder, Vault } from "obsidian";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { makeProject, makeTask } from "@/factories/data";
 
+import type { ProjectCatalog, ProjectCatalogStorage } from "./catalog";
 import { makeManagedBody, makeTaskFrontmatter, renderNewTaskDocument } from "./document";
 import { projectHierarchyPath } from "./hierarchy";
-import { ObsidianProjectSyncStatisticsRepository, projectCatalogPath } from "./localStatistics";
+import {
+  LEGACY_PROJECT_CATALOG_FOLDER,
+  LEGACY_PROJECT_CATALOG_MARKER,
+  legacyProjectCatalogPath,
+  ObsidianProjectSyncStatisticsRepository,
+} from "./localStatistics";
 import type { ProjectSyncConfig, ProjectSyncMapping, ProjectSyncSnapshot } from "./types";
 
 vi.mock("obsidian", async () => {
@@ -43,10 +50,21 @@ class FakeVault {
     return this.files.get(path)?.file ?? null;
   }
 
-  getFolderByPath(path: string): TAbstractFile | null {
+  getFolderByPath(path: string): TFolder | null {
     const segments = path.split("/");
     return this.folders.has(path)
-      ? ({ path, name: segments[segments.length - 1] ?? path } as TAbstractFile)
+      ? ({
+          path,
+          name: segments[segments.length - 1] ?? path,
+          children: [
+            ...[...this.folders]
+              .filter((candidate) => parentPath(candidate) === path)
+              .map((candidate) => this.getFolderByPath(candidate) as TFolder),
+            ...[...this.files.values()]
+              .filter(({ file }) => parentPath(file.path) === path)
+              .map(({ file }) => file),
+          ],
+        } as unknown as TFolder)
       : null;
   }
 
@@ -88,6 +106,43 @@ class FakeVault {
   }
 }
 
+class FakeFileManager {
+  private readonly vault: FakeVault;
+
+  readonly trashFile = vi.fn(async (file: TAbstractFile) => {
+    if (this.vault.files.delete(file.path)) {
+      return;
+    }
+    this.vault.folders.delete(file.path);
+  });
+
+  constructor(vault: FakeVault) {
+    this.vault = vault;
+  }
+}
+
+class FakeCatalogStorage implements ProjectCatalogStorage {
+  readonly catalogs = new Map<string, ProjectCatalog>();
+  readonly persistCatalogs = vi.fn(async (catalogs: readonly ProjectCatalog[]) => {
+    for (const catalog of catalogs) {
+      const current = this.catalogs.get(catalog.mappingId);
+      if (current === undefined || current.syncedAt <= catalog.syncedAt) {
+        this.catalogs.set(catalog.mappingId, structuredClone(catalog));
+      }
+    }
+  });
+
+  getCatalog(mappingId: string): ProjectCatalog | null {
+    const catalog = this.catalogs.get(mappingId);
+    return catalog === undefined ? null : structuredClone(catalog);
+  }
+}
+
+const parentPath = (path: string): string => {
+  const index = path.lastIndexOf("/");
+  return index < 0 ? "" : path.slice(0, index);
+};
+
 const mapping: ProjectSyncMapping = {
   id: "mapping-root",
   project: { projectId: "root", projectName: "Root" },
@@ -100,13 +155,22 @@ const config: ProjectSyncConfig = { enabled: true, mappings: [mapping] };
 
 describe("ObsidianProjectSyncStatisticsRepository", () => {
   let vault: FakeVault;
+  let fileManager: FakeFileManager;
+  let storage: FakeCatalogStorage;
   let repository: ObsidianProjectSyncStatisticsRepository;
   const root = makeProject("root", { name: "Root" });
   const emptyChild = makeProject("empty", { name: "Empty", parentId: root.id, childOrder: 2 });
 
   beforeEach(() => {
     vault = new FakeVault();
-    repository = new ObsidianProjectSyncStatisticsRepository(vault as unknown as Vault, config);
+    fileManager = new FakeFileManager(vault);
+    storage = new FakeCatalogStorage();
+    repository = new ObsidianProjectSyncStatisticsRepository(
+      vault as unknown as Vault,
+      fileManager as unknown as FileManager,
+      config,
+      storage,
+    );
   });
 
   it("rebuilds cold-start statistics from the project catalog and task Markdown", async () => {
@@ -171,7 +235,9 @@ describe("ObsidianProjectSyncStatisticsRepository", () => {
 
     const afterRestart = new ObsidianProjectSyncStatisticsRepository(
       vault as unknown as Vault,
+      fileManager as unknown as FileManager,
       config,
+      storage,
     );
     await afterRestart.refresh();
 
@@ -196,6 +262,67 @@ describe("ObsidianProjectSyncStatisticsRepository", () => {
         }),
       ],
     });
+  });
+
+  it("moves a recognized legacy Vault catalog into plugin data before trashing its folder", async () => {
+    await vault.createFolder("_Tasks Bridge");
+    await vault.createFolder(LEGACY_PROJECT_CATALOG_FOLDER);
+    const legacyPath = legacyProjectCatalogPath(mapping.id);
+    await vault.create(
+      legacyPath,
+      `---\n${dumpYaml(
+        {
+          [LEGACY_PROJECT_CATALOG_MARKER]: true,
+          tasks_bridge_project_catalog_version: 1,
+          tasks_bridge_mapping_id: mapping.id,
+          tasks_bridge_root_project_id: root.id,
+          tasks_bridge_include_subprojects: true,
+          tasks_bridge_synced_at: "2026-08-12T01:00:00.000Z",
+          tasks_bridge_projects: [
+            { id: root.id, parent_id: null, name: root.name, child_order: root.childOrder },
+            {
+              id: emptyChild.id,
+              parent_id: root.id,
+              name: emptyChild.name,
+              child_order: emptyChild.childOrder,
+            },
+          ],
+        },
+        { lineWidth: -1, noRefs: true },
+      )}---\n`,
+    );
+
+    await repository.refresh();
+
+    expect(storage.getCatalog(mapping.id)).toMatchObject({
+      mappingId: mapping.id,
+      rootProjectId: root.id,
+      projects: [
+        expect.objectContaining({ id: root.id }),
+        expect.objectContaining({ id: emptyChild.id }),
+      ],
+    });
+    expect(vault.getAbstractFileByPath(legacyPath)).toBeNull();
+    expect(vault.getFolderByPath(LEGACY_PROJECT_CATALOG_FOLDER)).toBeNull();
+    expect(vault.getFolderByPath("_Tasks Bridge")).toBeNull();
+    expect(repository.getSnapshot()?.scopes[0]?.projects).toHaveLength(2);
+  });
+
+  it("keeps an unrecognized legacy catalog in place instead of deleting user data", async () => {
+    await vault.createFolder("_Tasks Bridge");
+    await vault.createFolder(LEGACY_PROJECT_CATALOG_FOLDER);
+    const legacyPath = legacyProjectCatalogPath(mapping.id);
+    await vault.create(legacyPath, "# User note\n");
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    try {
+      await repository.refresh();
+      expect(vault.getFileByPath(legacyPath)).not.toBeNull();
+      expect(fileManager.trashFile).not.toHaveBeenCalled();
+      expect(warning).toHaveBeenCalledWith(expect.stringContaining("unrecognized legacy"));
+    } finally {
+      warning.mockRestore();
+    }
   });
 
   it("ignores stale notes and rejects catalog identity mismatches", async () => {
@@ -228,14 +355,11 @@ describe("ObsidianProjectSyncStatisticsRepository", () => {
       completed: 0,
     });
 
-    const catalog = vault.files.get(projectCatalogPath(mapping.id));
+    const catalog = storage.catalogs.get(mapping.id);
     if (catalog === undefined) {
       throw new Error("Missing catalog");
     }
-    catalog.content = catalog.content.replace(
-      "tasks_bridge_mapping_id: mapping-root",
-      "tasks_bridge_mapping_id: another-mapping",
-    );
+    catalog.mappingId = "another-mapping";
     repository.clearSnapshot();
     await repository.refresh();
     expect(repository.getSnapshot()).toBeNull();
@@ -280,7 +404,9 @@ describe("ObsidianProjectSyncStatisticsRepository", () => {
 
     const afterRestart = new ObsidianProjectSyncStatisticsRepository(
       vault as unknown as Vault,
+      fileManager as unknown as FileManager,
       config,
+      storage,
     );
     await afterRestart.refresh();
     expect(afterRestart.getSnapshot()?.scopes[0]?.projects[0]?.directCompletionEvents).toEqual([

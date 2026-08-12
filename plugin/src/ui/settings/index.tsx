@@ -396,6 +396,11 @@ const ProjectSyncMappingsSetting: React.FC<{
   const enabled = useSettingsStore((settings) => settings.projectSyncEnabled);
   const mappings = useSettingsStore((settings) => settings.projectSyncMappings);
   const [status, setStatus] = useState<ProjectSyncValidation>({ ready: false, valid: false });
+  const handleValidityChange = useCallback((valid: boolean, ready: boolean) => {
+    setStatus((current) =>
+      current.valid === valid && current.ready === ready ? current : { valid, ready },
+    );
+  }, []);
 
   useEffect(() => {
     validation.set(status.valid, status.ready);
@@ -413,7 +418,7 @@ const ProjectSyncMappingsSetting: React.FC<{
           ...(enabled && !valid ? { projectSyncEnabled: false } : {}),
         });
       }}
-      onValidityChange={(valid, ready) => setStatus({ valid, ready })}
+      onValidityChange={handleValidityChange}
     />
   );
 };

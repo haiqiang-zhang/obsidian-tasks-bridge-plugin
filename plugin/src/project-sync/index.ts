@@ -3,6 +3,18 @@ export {
   ProjectSyncActivityTracker,
 } from "./autoSync";
 export {
+  cloneProjectCatalog,
+  makeProjectCatalog,
+  mergeProjectCatalogCollections,
+  PROJECT_CATALOG_DATA_KEY,
+  type ProjectCatalog,
+  type ProjectCatalogCollection,
+  type ProjectCatalogStorage,
+  parseProjectCatalog,
+  readProjectCatalogCollection,
+  withProjectCatalogCollection,
+} from "./catalog";
+export {
   applyManagedFrontmatter,
   MANAGED_BODY_END,
   MANAGED_BODY_START,
@@ -14,10 +26,10 @@ export {
 } from "./document";
 export { projectNamePath, selectProjectHierarchy } from "./hierarchy";
 export {
+  LEGACY_PROJECT_CATALOG_FOLDER,
+  LEGACY_PROJECT_CATALOG_MARKER,
+  legacyProjectCatalogPath,
   ObsidianProjectSyncStatisticsRepository,
-  PROJECT_CATALOG_FOLDER,
-  PROJECT_CATALOG_MARKER,
-  projectCatalogPath,
 } from "./localStatistics";
 export {
   isPathInside,

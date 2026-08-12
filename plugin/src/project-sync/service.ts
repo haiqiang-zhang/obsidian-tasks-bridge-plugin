@@ -138,6 +138,10 @@ export class ProjectFolderSyncService {
     this.statisticsRepository?.notifyLocalChanges(paths);
   }
 
+  public reloadStatisticsCatalogs(): void {
+    this.statisticsRepository?.reloadCatalogs();
+  }
+
   public clearStatisticsSnapshot(): void {
     if (this.disposed) {
       return;

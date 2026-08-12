@@ -19,10 +19,17 @@ import type { Task } from "@/data/task";
 import { ObsidianSyncActivityGate } from "@/infra/obsidianSyncGate";
 import { secondsToMillis } from "@/infra/time";
 import {
+  cloneProjectCatalog,
   isProjectSyncPath,
+  mergeProjectCatalogCollections,
+  type ProjectCatalog,
+  type ProjectCatalogCollection,
+  type ProjectCatalogStorage,
   ProjectSyncActivityTracker,
   type ProjectSyncConfig,
   type ProjectSyncResult,
+  readProjectCatalogCollection,
+  withProjectCatalogCollection,
 } from "@/project-sync";
 import { QueryInjector } from "@/query/injector";
 import { makeServices, type Services } from "@/services";
@@ -51,6 +58,7 @@ type AsyncGeneration = {
 export default class TodoistPlugin extends Plugin {
   public readonly services: Services;
   public readonly queryCache = new QueryCache();
+  public readonly projectCatalogStorage: ProjectCatalogStorage;
 
   private settingsQueue: Promise<void> = Promise.resolve();
   private settingsOperationGeneration = 0;
@@ -65,9 +73,17 @@ export default class TodoistPlugin extends Plugin {
   private readonly projectSyncActivity = new ProjectSyncActivityTracker();
   private readonly obsidianSyncGate: ObsidianSyncActivityGate;
   private disposed = false;
+  private projectCatalogs: ProjectCatalogCollection = {};
 
   constructor(app: App, pluginManifest: PluginManifest) {
     super(app, pluginManifest);
+    this.projectCatalogStorage = {
+      getCatalog: (mappingId) => {
+        const catalog = this.projectCatalogs[mappingId];
+        return catalog === undefined ? null : cloneProjectCatalog(catalog);
+      },
+      persistCatalogs: async (catalogs) => await this.persistProjectCatalogs(catalogs),
+    };
     this.services = makeServices(this);
     this.obsidianSyncGate = new ObsidianSyncActivityGate(app, {
       onInbound: () => this.services.projectSync.invalidate(),
@@ -243,6 +259,7 @@ export default class TodoistPlugin extends Plugin {
       }
 
       const options = normalizeSettings(storedData);
+      this.projectCatalogs = readProjectCatalogCollection(storedData);
       useSettingsStore.setState(options, true);
       this.applyProjectSyncConfig();
 
@@ -295,6 +312,11 @@ export default class TodoistPlugin extends Plugin {
       }
 
       const previousSettings = useSettingsStore.getState();
+      const externalCatalogs = readProjectCatalogCollection(storedData);
+      const mergedCatalogs = mergeProjectCatalogCollections(this.projectCatalogs, externalCatalogs);
+      const catalogsNeedRestore =
+        JSON.stringify(mergedCatalogs) !== JSON.stringify(externalCatalogs);
+      this.projectCatalogs = mergedCatalogs;
       const nextSettings = normalizeSettings(
         mergeExternalStoredSettings(storedData, previousSettings),
       );
@@ -304,12 +326,14 @@ export default class TodoistPlugin extends Plugin {
       );
       useSettingsStore.setState(nextSettings, true);
       this.applySettingsRuntime(previousSettings);
+      this.services.projectSync.reloadStatisticsCatalogs();
       if (credentialSettingsChanged) {
         this.reloadApiClientAfterExternalSettingsChange();
       }
 
       if (
         restoreAfterOlderSettingsOperation ||
+        catalogsNeedRestore ||
         !hasCanonicalStoredSettings(storedData, nextSettings)
       ) {
         // Restore the captured external version after any older in-flight local save and ensure a
@@ -769,7 +793,31 @@ export default class TodoistPlugin extends Plugin {
       return Promise.resolve();
     }
 
-    return this.saveData({ ...useSettingsStore.getState() });
+    return this.saveData(
+      withProjectCatalogCollection({ ...useSettingsStore.getState() }, this.projectCatalogs),
+    );
+  }
+
+  private persistProjectCatalogs(catalogs: readonly ProjectCatalog[]): Promise<void> {
+    if (this.disposed || catalogs.length === 0) {
+      return Promise.resolve();
+    }
+
+    return this.enqueueSettingsOperation(async () => {
+      if (this.disposed) {
+        return;
+      }
+      const incoming: Record<string, ProjectCatalog> = {};
+      for (const catalog of catalogs) {
+        incoming[catalog.mappingId] = catalog;
+      }
+      const merged = mergeProjectCatalogCollections(this.projectCatalogs, incoming);
+      if (JSON.stringify(merged) === JSON.stringify(this.projectCatalogs)) {
+        return;
+      }
+      this.projectCatalogs = merged;
+      await this.persistSettings();
+    });
   }
 
   private persistQueryCache(): Promise<void> {
@@ -912,7 +960,11 @@ const isRecord = (value: unknown): value is Record<string, unknown> => {
 };
 
 const hasCanonicalStoredSettings = (storedData: unknown, settings: Settings): boolean =>
-  isRecord(storedData) && JSON.stringify(storedData) === JSON.stringify(settings);
+  isRecord(storedData) &&
+  JSON.stringify(storedData) ===
+    JSON.stringify(
+      withProjectCatalogCollection({ ...settings }, readProjectCatalogCollection(storedData)),
+    );
 
 const hasDifferentCredentialSettings = (left: Settings, right: Settings): boolean =>
   left.apiTokenSecretId !== right.apiTokenSecretId || left.tokenStorage !== right.tokenStorage;
@@ -926,6 +978,7 @@ const mergeExternalStoredSettings = (
   }
 
   const merged: Record<string, unknown> = { ...previousSettings, ...storedData };
+  delete merged.projectSyncCatalogs;
   const externalVersion =
     typeof storedData.version === "number" && Number.isFinite(storedData.version)
       ? Math.max(0, Math.floor(storedData.version))

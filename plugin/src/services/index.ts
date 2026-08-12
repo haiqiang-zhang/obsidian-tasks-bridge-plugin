@@ -58,8 +58,9 @@ export const makeServices = (plugin: TodoistPlugin): Services => {
     projectSyncConfig,
     new ObsidianProjectSyncStatisticsRepository(
       plugin.app.vault,
+      plugin.app.fileManager,
       projectSyncConfig,
-      runInternalMutation,
+      plugin.projectCatalogStorage,
     ),
   );
   const projectTaskProjectionCoordinator: ProjectTaskProjectionCoordinator = {

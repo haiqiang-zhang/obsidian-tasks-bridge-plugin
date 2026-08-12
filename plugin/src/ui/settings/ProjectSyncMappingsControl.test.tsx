@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type React from "react";
+import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import { makeProject } from "@/factories/data";
@@ -309,5 +310,45 @@ describe("ProjectSyncMappingsControl", () => {
     const latestMappings = calls[1]?.[0] ?? [];
     expect(latestMappings).toHaveLength(2);
     expect(new Set(latestMappings.map((candidate) => candidate.id)).size).toBe(2);
+  });
+
+  it("does not re-report unchanged validity when its parent rerenders with a new callback", async () => {
+    const project = makeProject("work", { name: "Work" });
+    const onValidityChange = vi.fn();
+    const plugin = {
+      app: {
+        vault: {
+          getAllFolders: () => [{ path: "Task Projects/Work" }],
+        },
+      },
+      services: {
+        todoist: {
+          isReady: () => true,
+          listActiveProjects: () => [project],
+        },
+      },
+    } as unknown as TodoistPlugin;
+    const Harness: React.FC = () => {
+      const [renderCount, setRenderCount] = useState(0);
+      return (
+        <PluginContext.Provider value={plugin}>
+          <button onClick={() => setRenderCount((count) => count + 1)} type="button">
+            Rerender {renderCount}
+          </button>
+          <ProjectSyncMappingsControl
+            mappings={[mapping(project.id, "Task Projects/Work")]}
+            onChange={async () => undefined}
+            onValidityChange={(valid, ready) => onValidityChange(valid, ready)}
+          />
+        </PluginContext.Provider>
+      );
+    };
+
+    render(<Harness />);
+    await waitFor(() => expect(onValidityChange).toHaveBeenCalledOnce());
+
+    fireEvent.click(screen.getByRole("button", { name: "Rerender 0" }));
+    expect(screen.getByRole("button", { name: "Rerender 1" })).toBeInTheDocument();
+    expect(onValidityChange).toHaveBeenCalledOnce();
   });
 });

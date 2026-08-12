@@ -1,8 +1,18 @@
-import { dump as dumpYaml } from "js-yaml";
-import { getFrontMatterInfo, normalizePath, parseYaml, type TFile, type Vault } from "obsidian";
+import {
+  type FileManager,
+  getFrontMatterInfo,
+  normalizePath,
+  parseYaml,
+  type TFile,
+  type Vault,
+} from "obsidian";
 
-import type { Project } from "@/api/domain/project";
-
+import {
+  makeProjectCatalog,
+  type ProjectCatalog,
+  type ProjectCatalogProject,
+  type ProjectCatalogStorage,
+} from "./catalog";
 import { isPathInside, sanitizePathSegment } from "./paths";
 import type {
   ProjectCompletionEvent,
@@ -15,26 +25,14 @@ import type {
   ProjectSyncStatisticsScope,
   ProjectSyncStatisticsSnapshot,
 } from "./types";
-import type { ProjectSyncInternalMutationRunner } from "./vault";
 
-export const PROJECT_CATALOG_MARKER = "tasks_bridge_project_catalog_managed";
-export const PROJECT_CATALOG_FOLDER = "_Tasks Bridge/Project Catalogs";
-const PROJECT_CATALOG_SCHEMA_VERSION = 1;
-const PROJECT_CATALOG_BODY =
-  "<!-- This Markdown projection is managed by Tasks Bridge. Do not edit it manually. -->\n";
+export const LEGACY_PROJECT_CATALOG_MARKER = "tasks_bridge_project_catalog_managed";
+export const LEGACY_PROJECT_CATALOG_FOLDER = "_Tasks Bridge/Project Catalogs";
+const LEGACY_PROJECT_CATALOG_ROOT = "_Tasks Bridge";
+const LEGACY_PROJECT_CATALOG_SCHEMA_VERSION = 1;
 const LOCAL_EVENT_PREFIX = "local:";
 const LOCAL_EVENT_MATCH_TOLERANCE_MS = 120_000;
 const LOCAL_REFRESH_DEBOUNCE_MS = 50;
-
-type CatalogProject = Pick<Project, "id" | "parentId" | "name" | "childOrder">;
-
-type ProjectCatalog = {
-  mappingId: string;
-  rootProjectId: string;
-  includeSubprojects: boolean;
-  syncedAt: string;
-  projects: CatalogProject[];
-};
 
 type LocalTaskProjection = {
   taskId: string;
@@ -45,28 +43,29 @@ type LocalTaskProjection = {
   completionEvents: ProjectCompletionEvent[];
 };
 
-const runMutationDirectly: ProjectSyncInternalMutationRunner = async (_paths, operation) =>
-  await operation();
-
 export class ObsidianProjectSyncStatisticsRepository implements ProjectSyncStatisticsRepository {
   private readonly vault: Vault;
-  private readonly runInternalMutation: ProjectSyncInternalMutationRunner;
+  private readonly fileManager: FileManager;
+  private readonly catalogStorage: ProjectCatalogStorage;
   private config: ProjectSyncConfig;
   private snapshot: ProjectSyncStatisticsSnapshot | null = null;
   private disposed = false;
   private refreshInFlight: Promise<void> | undefined;
   private refreshAgain = false;
   private refreshTimer: number | undefined;
+  private legacyCatalogMigrationAttempted = false;
   private readonly listeners = new Set<() => void>();
 
   constructor(
     vault: Vault,
+    fileManager: FileManager,
     initialConfig: ProjectSyncConfig,
-    runInternalMutation: ProjectSyncInternalMutationRunner = runMutationDirectly,
+    catalogStorage: ProjectCatalogStorage,
   ) {
     this.vault = vault;
+    this.fileManager = fileManager;
     this.config = cloneConfig(initialConfig);
-    this.runInternalMutation = runInternalMutation;
+    this.catalogStorage = catalogStorage;
   }
 
   public setConfig(config: ProjectSyncConfig): void {
@@ -91,48 +90,8 @@ export class ObsidianProjectSyncStatisticsRepository implements ProjectSyncStati
       throw new Error("Project catalog snapshot does not match its configured mapping");
     }
 
-    await this.ensureCatalogFolder(runContext);
-    const path = projectCatalogPath(mapping.id);
-    const document = renderProjectCatalog(snapshot, mapping);
-    const existing = this.vault.getFileByPath(path);
-    if (existing === null) {
-      if (this.vault.getAbstractFileByPath(path) !== null) {
-        throw new Error(`Project catalog path '${path}' is occupied by a non-file Vault item`);
-      }
-      await this.runInternalMutation([path], async () => await this.vault.create(path, document));
-      runContext.assertValid();
-      return;
-    }
-
-    await this.runInternalMutation([path], async () => {
-      await this.vault.process(existing, (content) => {
-        runContext.assertValid();
-        const current = parseProjectCatalog(content);
-        if (current === null) {
-          throw new Error(`Project catalog '${path}' is not owned by this Project sync mapping`);
-        }
-        if (current.mappingId === mapping.id && current.syncedAt > snapshot.syncedAt) {
-          return content;
-        }
-        return content === document ? content : document;
-      });
-    });
+    await this.catalogStorage.persistCatalogs([makeProjectCatalog(snapshot, mapping)]);
     runContext.assertValid();
-  }
-
-  private async ensureCatalogFolder(runContext: ProjectSyncRunContext): Promise<void> {
-    let current = "";
-    for (const segment of PROJECT_CATALOG_FOLDER.split("/")) {
-      current = normalizePath(current === "" ? segment : `${current}/${segment}`);
-      if (this.vault.getFolderByPath(current) !== null) {
-        continue;
-      }
-      if (this.vault.getAbstractFileByPath(current) !== null) {
-        throw new Error(`Project catalog folder '${current}' is occupied by a Vault file`);
-      }
-      runContext.assertValid();
-      await this.runInternalMutation([current], async () => await this.vault.createFolder(current));
-    }
   }
 
   public refresh(): Promise<void> {
@@ -173,6 +132,14 @@ export class ObsidianProjectSyncStatisticsRepository implements ProjectSyncStati
     this.setSnapshot(null);
   }
 
+  public reloadCatalogs(): void {
+    if (this.disposed) {
+      return;
+    }
+    this.legacyCatalogMigrationAttempted = false;
+    this.scheduleRefresh();
+  }
+
   public subscribe(listener: () => void): () => void {
     if (this.disposed) {
       return () => undefined;
@@ -197,17 +164,16 @@ export class ObsidianProjectSyncStatisticsRepository implements ProjectSyncStati
   private async performRefresh(): Promise<void> {
     const config = cloneConfig(this.config);
     const mappings = config.mappings.filter((mapping) => mapping.project !== null);
-    const catalogs = (
-      await Promise.all(
-        mappings.map(async (mapping) => ({
-          mapping,
-          catalog: await this.readCatalog(mapping),
-        })),
-      )
-    ).filter(
-      (entry): entry is { mapping: ProjectSyncMapping; catalog: ProjectCatalog } =>
-        entry.catalog !== null,
-    );
+    await this.migrateLegacyCatalogs();
+    const catalogs = mappings
+      .map((mapping) => ({
+        mapping,
+        catalog: this.readCatalog(mapping),
+      }))
+      .filter(
+        (entry): entry is { mapping: ProjectSyncMapping; catalog: ProjectCatalog } =>
+          entry.catalog !== null,
+      );
 
     if (catalogs.length === 0) {
       this.setSnapshot(null);
@@ -234,12 +200,8 @@ export class ObsidianProjectSyncStatisticsRepository implements ProjectSyncStati
     this.setSnapshot({ syncedAt, scopes });
   }
 
-  private async readCatalog(mapping: ProjectSyncMapping): Promise<ProjectCatalog | null> {
-    const file = this.vault.getFileByPath(projectCatalogPath(mapping.id));
-    if (file === null) {
-      return null;
-    }
-    const catalog = parseProjectCatalog(await this.vault.read(file));
+  private readCatalog(mapping: ProjectSyncMapping): ProjectCatalog | null {
+    const catalog = this.catalogStorage.getCatalog(mapping.id);
     if (
       catalog === null ||
       catalog.mappingId !== mapping.id ||
@@ -249,6 +211,53 @@ export class ObsidianProjectSyncStatisticsRepository implements ProjectSyncStati
       return null;
     }
     return catalog;
+  }
+
+  private async migrateLegacyCatalogs(): Promise<void> {
+    if (this.legacyCatalogMigrationAttempted) {
+      return;
+    }
+    this.legacyCatalogMigrationAttempted = true;
+
+    try {
+      const legacyCatalogs: ProjectCatalog[] = [];
+      const legacyFiles: TFile[] = [];
+      const files = this.vault
+        .getMarkdownFiles()
+        .filter((file) => isPathInside(LEGACY_PROJECT_CATALOG_FOLDER, file.path));
+      for (const file of files) {
+        const catalog = parseLegacyProjectCatalog(await this.vault.read(file));
+        if (catalog === null || file.path !== legacyProjectCatalogPath(catalog.mappingId)) {
+          console.warn(
+            `Tasks Bridge left an unrecognized legacy Project catalog at '${file.path}'`,
+          );
+          continue;
+        }
+        legacyCatalogs.push(catalog);
+        legacyFiles.push(file);
+      }
+
+      if (legacyCatalogs.length > 0) {
+        await this.catalogStorage.persistCatalogs(legacyCatalogs);
+      }
+
+      for (const file of legacyFiles) {
+        await this.fileManager.trashFile(file);
+      }
+      await this.trashLegacyCatalogFoldersIfEmpty();
+    } catch (error: unknown) {
+      this.legacyCatalogMigrationAttempted = false;
+      throw error;
+    }
+  }
+
+  private async trashLegacyCatalogFoldersIfEmpty(): Promise<void> {
+    for (const path of [LEGACY_PROJECT_CATALOG_FOLDER, LEGACY_PROJECT_CATALOG_ROOT]) {
+      const folder = this.vault.getFolderByPath(path);
+      if (folder !== null && folder.children.length === 0) {
+        await this.fileManager.trashFile(folder);
+      }
+    }
   }
 
   private async readTaskProjection(file: TFile): Promise<LocalTaskProjection | null> {
@@ -276,7 +285,7 @@ export class ObsidianProjectSyncStatisticsRepository implements ProjectSyncStati
 
   private isRelevantPath(path: string): boolean {
     const normalized = normalizePath(path);
-    if (isPathInside(PROJECT_CATALOG_FOLDER, normalized)) {
+    if (isPathInside(LEGACY_PROJECT_CATALOG_FOLDER, normalized)) {
       return true;
     }
     return this.config.mappings.some((mapping) =>
@@ -311,42 +320,17 @@ export class ObsidianProjectSyncStatisticsRepository implements ProjectSyncStati
   }
 }
 
-export const projectCatalogPath = (mappingId: string): string =>
+export const legacyProjectCatalogPath = (mappingId: string): string =>
   normalizePath(
-    `${PROJECT_CATALOG_FOLDER}/${sanitizePathSegment(mappingId, "project-sync-mapping")}.md`,
+    `${LEGACY_PROJECT_CATALOG_FOLDER}/${sanitizePathSegment(mappingId, "project-sync-mapping")}.md`,
   );
 
-const renderProjectCatalog = (
-  snapshot: ProjectSyncSnapshot,
-  mapping: ProjectSyncMapping,
-): string => {
-  const projects = snapshot.projects.map((project) => ({
-    id: project.id,
-    parent_id: project.parentId,
-    name: project.name,
-    child_order: project.childOrder,
-  }));
-  const yaml = dumpYaml(
-    {
-      [PROJECT_CATALOG_MARKER]: true,
-      tasks_bridge_project_catalog_version: PROJECT_CATALOG_SCHEMA_VERSION,
-      tasks_bridge_mapping_id: mapping.id,
-      tasks_bridge_root_project_id: snapshot.rootProjectId,
-      tasks_bridge_include_subprojects: mapping.includeSubprojects,
-      tasks_bridge_synced_at: snapshot.syncedAt,
-      tasks_bridge_projects: projects,
-    },
-    { lineWidth: -1, noRefs: true },
-  );
-  return `---\n${yaml}---\n${PROJECT_CATALOG_BODY}`;
-};
-
-const parseProjectCatalog = (content: string): ProjectCatalog | null => {
+const parseLegacyProjectCatalog = (content: string): ProjectCatalog | null => {
   const frontmatter = parseFrontmatter(content);
   if (
     frontmatter === null ||
-    frontmatter[PROJECT_CATALOG_MARKER] !== true ||
-    frontmatter.tasks_bridge_project_catalog_version !== PROJECT_CATALOG_SCHEMA_VERSION
+    frontmatter[LEGACY_PROJECT_CATALOG_MARKER] !== true ||
+    frontmatter.tasks_bridge_project_catalog_version !== LEGACY_PROJECT_CATALOG_SCHEMA_VERSION
   ) {
     return null;
   }
@@ -366,7 +350,7 @@ const parseProjectCatalog = (content: string): ProjectCatalog | null => {
 
   const projects = frontmatter.tasks_bridge_projects
     .map(readCatalogProject)
-    .filter((project): project is CatalogProject => project !== null);
+    .filter((project): project is ProjectCatalogProject => project !== null);
   if (
     projects.length !== frontmatter.tasks_bridge_projects.length ||
     !projects.some((project) => project.id === rootProjectId)
@@ -395,7 +379,7 @@ const parseFrontmatter = (content: string): Record<string, unknown> | null => {
   }
 };
 
-const readCatalogProject = (value: unknown): CatalogProject | null => {
+const readCatalogProject = (value: unknown): ProjectCatalogProject | null => {
   if (!isRecord(value)) {
     return null;
   }

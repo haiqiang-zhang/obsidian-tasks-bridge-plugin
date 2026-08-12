@@ -54,10 +54,15 @@ export const ProjectSyncMappingsControl: React.FC<Props> = ({
   const i18n = t().settings.projectSync.mappings;
   const [metadata, setMetadata] = useState<SyncMetadata>(() => readSyncMetadata(plugin));
   const mappingsRef = useRef(mappings);
+  const onValidityChangeRef = useRef(onValidityChange);
 
   useEffect(() => {
     mappingsRef.current = mappings;
   }, [mappings]);
+
+  useLayoutEffect(() => {
+    onValidityChangeRef.current = onValidityChange;
+  }, [onValidityChange]);
 
   useEffect(() => {
     let signature = "";
@@ -84,8 +89,8 @@ export const ProjectSyncMappingsControl: React.FC<Props> = ({
   );
 
   useLayoutEffect(() => {
-    onValidityChange(validation.valid, metadata.ready);
-  }, [metadata.ready, onValidityChange, validation.valid]);
+    onValidityChangeRef.current(validation.valid, metadata.ready);
+  }, [metadata.ready, validation.valid]);
 
   const commitMappings = async (next: ProjectSyncMappingValue[]) => {
     const nextValidation = validateProjectSyncMappings(
