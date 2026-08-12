@@ -738,7 +738,7 @@ class Subscription {
         });
       }
     } catch (error: unknown) {
-      console.error(`Failed to refresh task query: ${error}`);
+      console.error("Failed to refresh task query:", error);
 
       nextResult = {
         type: "error",

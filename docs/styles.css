@@ -1,0 +1,38 @@
+:root {
+  --rp-c-brand: #d84437;
+  --rp-c-brand-light: #ed7167;
+  --rp-c-brand-lighter: #f3a29b;
+  --rp-c-brand-dark: #bd352a;
+  --rp-c-brand-darker: #9b2a22;
+  --rp-c-brand-tint: rgb(216 68 55 / 14%);
+  --rp-code-font-size: 0.95em;
+}
+
+.dark {
+  --rp-c-brand: #ed7167;
+  --rp-c-brand-light: #f08a82;
+  --rp-c-brand-lighter: #f5b4ae;
+  --rp-c-brand-dark: #e75a4f;
+  --rp-c-brand-darker: #d84437;
+  --rp-c-brand-tint: rgb(237 113 103 / 16%);
+}
+
+.translation-status td:nth-child(n + 2),
+.translation-status th:nth-child(n + 2) {
+  text-align: right;
+}
+
+.translation-progress {
+  display: inline-flex;
+  gap: 0.6rem;
+  align-items: center;
+  min-width: 12rem;
+}
+
+.translation-progress span {
+  min-width: 5ch;
+}
+
+.translation-progress progress {
+  accent-color: var(--rp-c-brand);
+}

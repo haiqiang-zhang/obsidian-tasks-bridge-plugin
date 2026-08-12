@@ -5,7 +5,7 @@ import {
   normalizePath,
   parseYaml,
   type TAbstractFile,
-  type TFile,
+  TFile,
   type Vault,
 } from "obsidian";
 
@@ -767,7 +767,9 @@ export class ObsidianProjectSyncVault {
           unmanagedCollision,
         };
       }
-      unmanagedCollision ||= occupants.some((occupant) => !managedFiles.has(occupant as TFile));
+      unmanagedCollision ||= occupants.some(
+        (occupant) => !(occupant instanceof TFile) || !managedFiles.has(occupant),
+      );
     }
   }
 
@@ -1916,10 +1918,13 @@ const groupCompletionEventsByTaskId = (
 };
 
 const mergeProjectedCompletionEvents = (current: unknown, desired: unknown): unknown[] => {
-  const desiredEvents = Array.isArray(desired) ? desired : [];
-  const localEvents = Array.isArray(current)
+  const desiredEvents: Record<string, unknown>[] = Array.isArray(desired)
+    ? desired.filter((event): event is Record<string, unknown> => isRecord(event))
+    : [];
+  const localEvents: Record<string, unknown>[] = Array.isArray(current)
     ? current.filter(
-        (event) => isRecord(event) && typeof event.id === "string" && event.id.startsWith("local:"),
+        (event): event is Record<string, unknown> =>
+          isRecord(event) && typeof event.id === "string" && event.id.startsWith("local:"),
       )
     : [];
   const desiredIds = new Set(
@@ -1927,15 +1932,12 @@ const mergeProjectedCompletionEvents = (current: unknown, desired: unknown): unk
       isRecord(event) && typeof event.id === "string" ? [event.id] : [],
     ),
   );
-  const unmatchedDesired = desiredEvents.filter((event): event is Record<string, unknown> =>
-    isRecord(event),
-  );
   return [
     ...desiredEvents,
     ...localEvents.filter(
       (event) =>
         !desiredIds.has(String(event.id)) &&
-        !unmatchedDesired.some((candidate) => completionEventsMatch(event, candidate)),
+        !desiredEvents.some((candidate) => completionEventsMatch(event, candidate)),
     ),
   ];
 };

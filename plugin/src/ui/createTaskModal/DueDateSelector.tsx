@@ -25,7 +25,6 @@ import {
   ListBoxItem,
   Menu,
   MenuItem,
-  Section,
   Select,
   SelectValue,
   TimeField,
@@ -132,11 +131,9 @@ export const DueDateSelector: React.FC<Props> = ({
                 }}
                 aria-label={i18n.suggestionsLabel}
               >
-                <Section>
-                  {suggestions.map((props) => (
-                    <DateSuggestion key={props.id} {...props} />
-                  ))}
-                </Section>
+                {suggestions.map((props) => (
+                  <DateSuggestion key={props.id} {...props} />
+                ))}
               </Menu>
               <hr />
               <Calendar
@@ -360,8 +357,8 @@ const TimeDialog: React.FC<TimeDialogProps> = ({ selectedTimeInfo, setTimeInfo }
           </TimeField>
           <Select
             className="task-duration-select"
-            selectedKey={selectedDurationIndex}
-            onSelectionChange={onDurationChange}
+            value={selectedDurationIndex}
+            onChange={onDurationChange}
           >
             <Label className="task-duration-picker-label">{i18n.durationLabel}</Label>
             <Button className="task-duration-button">

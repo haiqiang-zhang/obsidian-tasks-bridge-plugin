@@ -143,7 +143,7 @@ export const ProjectSyncMappingsControl: React.FC<Props> = ({
           ))}
         </div>
       )}
-      <Setting.ButtonControl icon="plus" label={i18n.add} onClick={addMapping} />
+      <Setting.ButtonControl icon="plus" label={i18n.add} onClick={() => void addMapping()} />
     </div>
   );
 };

@@ -35,9 +35,8 @@ export const normalizeAutoRefreshInterval = (value: unknown): number =>
 let projectSyncMappingIdFallback = 0;
 
 export const createProjectSyncMappingId = (): string => {
-  const randomUUID = globalThis.crypto?.randomUUID;
-  if (typeof randomUUID === "function") {
-    return randomUUID.call(globalThis.crypto);
+  if (typeof window.crypto.randomUUID === "function") {
+    return window.crypto.randomUUID();
   }
 
   projectSyncMappingIdFallback++;

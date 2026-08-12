@@ -11,7 +11,6 @@ import {
   type Key,
   Menu,
   MenuItem,
-  Section,
 } from "react-aria-components";
 
 import type { Deadline as ApiDeadline } from "@/api/domain/task";
@@ -83,11 +82,9 @@ export const DeadlineSelector: React.FC<Props> = ({
                 }}
                 aria-label={i18n.suggestionsLabel}
               >
-                <Section>
-                  {suggestions.map((props) => (
-                    <DateSuggestion key={props.id} {...props} />
-                  ))}
-                </Section>
+                {suggestions.map((props) => (
+                  <DateSuggestion key={props.id} {...props} />
+                ))}
               </Menu>
               <hr />
               <Calendar

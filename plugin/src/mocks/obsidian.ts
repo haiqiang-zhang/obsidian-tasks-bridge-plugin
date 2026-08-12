@@ -181,6 +181,17 @@ export class MenuItem {
 
 // biome-ignore lint/complexity/noStaticOnlyClass: mock must match Obsidian's class-based API
 export class MarkdownRenderer {
+  static render(
+    _app: App,
+    markdown: string,
+    el: HTMLElement,
+    _sourcePath: string,
+    _component: unknown,
+  ): Promise<void> {
+    el.textContent = markdown;
+    return Promise.resolve();
+  }
+
   static renderMarkdown(
     markdown: string,
     el: HTMLElement,

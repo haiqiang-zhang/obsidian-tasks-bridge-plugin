@@ -2,45 +2,48 @@ import { TodoistApiClient } from "@/api";
 import { ObsidianFetcher } from "@/api/fetcher";
 import { t } from "@/i18n";
 
-export namespace TokenValidation {
-  export type Result =
-    | { kind: "none" }
-    | { kind: "error"; message: string }
-    | { kind: "in-progress" }
-    | { kind: "success" };
+export type TokenValidationResult =
+  | { kind: "none" }
+  | { kind: "error"; message: string }
+  | { kind: "in-progress" }
+  | { kind: "success" };
 
-  export const validate = async (token: string, tester: TokenTester): Promise<Result> => {
-    const i18n = t().tokenValidation;
+export type TokenTester = (token: string) => Promise<boolean>;
 
-    if (token.length === 0) {
-      return {
-        kind: "error",
-        message: i18n.emptyTokenError,
-      };
-    }
+const validate = async (token: string, tester: TokenTester): Promise<TokenValidationResult> => {
+  const i18n = t().tokenValidation;
 
-    const isValid = await tester(token);
+  if (token.length === 0) {
+    return {
+      kind: "error",
+      message: i18n.emptyTokenError,
+    };
+  }
 
-    if (!isValid) {
-      return {
-        kind: "error",
-        message: i18n.invalidTokenError,
-      };
-    }
+  const isValid = await tester(token);
 
-    return { kind: "success" };
-  };
+  if (!isValid) {
+    return {
+      kind: "error",
+      message: i18n.invalidTokenError,
+    };
+  }
 
-  export type TokenTester = (token: string) => Promise<boolean>;
+  return { kind: "success" };
+};
 
-  export const DefaultTester: TokenTester = async (token: string): Promise<boolean> => {
-    const api = new TodoistApiClient(token, new ObsidianFetcher());
+const DefaultTester: TokenTester = async (token: string): Promise<boolean> => {
+  const api = new TodoistApiClient(token, new ObsidianFetcher());
 
-    try {
-      await api.getUser();
-      return true;
-    } catch {
-      return false;
-    }
-  };
-}
+  try {
+    await api.getUser();
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+export const TokenValidation = {
+  validate,
+  DefaultTester,
+};

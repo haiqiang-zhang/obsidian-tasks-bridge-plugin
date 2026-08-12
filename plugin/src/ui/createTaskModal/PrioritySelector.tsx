@@ -4,6 +4,7 @@ import { Button, type Key, Label, Menu, MenuItem, MenuTrigger } from "react-aria
 
 import { t } from "@/i18n";
 import type { Translations } from "@/i18n/translation";
+import { assertNever } from "@/utils/types";
 
 import { Priorities, type Priority } from "../../api/domain/task";
 import { ObsidianIcon } from "../components/obsidian-icon";
@@ -74,9 +75,7 @@ const getLabel = (
       return i18n.p2;
     case Priorities.P1:
       return i18n.p1;
-    default: {
-      const _: never = priority;
-      throw new Error("Unknown priority");
-    }
+    default:
+      return assertNever(priority, "Unknown priority");
   }
 };

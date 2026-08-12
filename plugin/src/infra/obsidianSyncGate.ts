@@ -93,7 +93,7 @@ export class ObsidianSyncActivityGate {
   };
 
   constructor(app: App, options: GateOptions = {}) {
-    this.app = app as InternalApp;
+    this.app = app;
     this.now = options.now ?? Date.now;
     this.onInbound = options.onInbound ?? (() => undefined);
     this.pollIntervalMs = options.pollIntervalMs ?? OBSIDIAN_SYNC_POLL_INTERVAL_MS;

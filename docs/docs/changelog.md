@@ -12,6 +12,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### 🔁 Changes
+
+- Updated the plugin manifest description and author profile URL to follow the Obsidian community plugin directory guidelines.
+
+### 🐛 Bug Fixes
+
+- Fixed architecture-diagram arrowheads scaling disproportionately on mobile renderers.
+- Removed React's unused dynamic script-resource injection paths from the production bundle to satisfy the community plugin security review.
+
 ## v2.9.4 (2026-08-12)
 
 ### 🐛 Bug Fixes

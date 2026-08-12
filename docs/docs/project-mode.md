@@ -129,7 +129,7 @@ Project and section headers, nested task indentation, descriptions, status count
 4. Open the view menu on the left side of the Base toolbar. Select the chevron beside the view, and change its layout to **Tasks List**.
 5. Open **Properties** and choose the task properties to display. Their order in the Properties menu is also their display order in each task row.
 
-You can also start with the [Tasks List Base template](/examples/todoist-projects.base). Download it into the Vault, then adjust its filters and properties in Obsidian.
+You can also start with the [Tasks List Base template](https://haiqiang-zhang.github.io/obsidian-tasks-bridge-plugin/examples/todoist-projects.base). Download it into the Vault, then adjust its filters and properties in Obsidian.
 
 Open **Configure view** in the Bases toolbar to customize Tasks List. Native Obsidian controls keep these settings in two clear groups:
 

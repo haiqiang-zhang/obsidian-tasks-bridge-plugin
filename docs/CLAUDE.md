@@ -9,9 +9,6 @@ All commands run from this `docs/` directory:
 - `npm start` - Start local development server
 - `npm run build` - Build documentation site for production
 - `npm run serve` - Serve built site locally
-- `npm run clear` - Clear Docusaurus cache
-- `npm run write-translations` - Extract translatable strings
-- `npm run write-heading-ids` - Add heading IDs to markdown files
 - `npm run typecheck` - TypeScript type checking
 
 Run releases from the repository root with `npm run release -- <version|patch|minor|major>`.
@@ -21,35 +18,34 @@ Run releases from the repository root with `npm run release -- <version|patch|mi
 - `docs/` - Current documentation (markdown/MDX)
 - `docs/commands/` - Command-specific docs
 - `docs/contributing/` - Developer and contributor guides
-- `sidebars.ts` - Navigation structure (update when adding new pages)
+- `rspress.config.ts` - Site metadata, navigation, and sidebar structure
+- `styles.css` - Site-wide styling overrides
+- `docs/public/` - Static assets copied into the built site
 
 ## Documentation Publishing
 
-The site publishes `docs/` as its single current documentation set. Do not create Docusaurus version snapshots or add `versioned_docs`, `versioned_sidebars`, or a docs-level `versions.json`.
+The site publishes `docs/` as its single current documentation set. Do not create version snapshots or add parallel versioned documentation trees.
 
 ## Site Configuration
 
-### Docusaurus Config (`docusaurus.config.ts`)
+### Rspress Config (`rspress.config.ts`)
 
 - Site metadata and URL configuration
 - GitHub Pages deployment settings
 - Theme and navigation configuration
-- Versioning setup
 
 ### Customization
 
-- `src/css/custom.css` - Site-wide styling overrides
-- `src/components/` - Custom React components
-- `src/pages/` - Custom pages (like the homepage)
-- `static/img/` - Static assets and images
+- `styles.css` - Site-wide styling overrides
+- `docs/public/` - Static assets and images
 
 ## Development Notes
 
 ### Adding New Documentation
 
 1. Create markdown files in the `docs/` directory
-2. Update `sidebars.ts` to include new pages in navigation
-3. Use MDX format for pages requiring React components
+2. Update `rspress.config.ts` to include new pages in navigation
+3. Use MDX only for pages that require components
 
 ### Managing Releases
 
@@ -58,6 +54,5 @@ The site publishes `docs/` as its single current documentation set. Do not creat
 
 ### Translation Support
 
-- Site is configured for internationalization but currently English-only
-- Translation status tracking in `translation-status.json`
-- Custom `TranslationStatus` component for displaying translation progress
+- The documentation is currently English-only.
+- Translation status is generated into `translation-status.json`, while the generator also refreshes the status table in `contributing/translation.md`.

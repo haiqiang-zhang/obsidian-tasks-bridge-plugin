@@ -1,5 +1,6 @@
 import type { AddTaskAction } from "@/settings";
 import { todoistTaskAppUrl, todoistTaskWebUrl } from "@/todoist/taskLinks";
+import { assertNever } from "@/utils/types";
 
 export type FileInfo = {
   name: string;
@@ -72,10 +73,8 @@ export const buildClipboardMarkdown = (
     case "add-copy-web":
       url = todoistTaskWebUrl(task.projectId, task.id);
       break;
-    default: {
-      const _: never = options.variant;
-      throw new Error(`Unknown variant: ${options.variant}`);
-    }
+    default:
+      return assertNever(options.variant, "Unknown clipboard-link variant");
   }
 
   const taskParts = [content];

@@ -1,11 +1,11 @@
 import type React from "react";
 
-import type { TokenValidation } from "../../../token";
+import type { TokenValidationResult } from "../../../token";
 import { ObsidianIcon, ObsidianLoadingIcon } from "../obsidian-icon";
 import "./styles.scss";
 
 export const TokenValidationIcon: React.FC<{
-  status: TokenValidation.Result;
+  status: TokenValidationResult;
 }> = ({ status }) => {
   switch (status.kind) {
     case "none":
@@ -16,9 +16,11 @@ export const TokenValidationIcon: React.FC<{
       return <ObsidianIcon id="x-circle" className="token-validation-error" size="m" />;
     case "success":
       return <ObsidianIcon id="check-circle-2" className="token-validation-success" size="m" />;
-    default: {
-      const _: never = status;
-      throw new Error("Unknown token validation status");
-    }
+    default:
+      return assertUnreachable(status);
   }
+};
+
+const assertUnreachable = (value: never): never => {
+  throw new Error(`Unknown token validation status: ${JSON.stringify(value)}`);
 };

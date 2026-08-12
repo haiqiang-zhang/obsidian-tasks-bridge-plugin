@@ -3,14 +3,12 @@ import { nl } from "@/i18n/langs/nl";
 import type { Translations } from "@/i18n/translation";
 import { DeepPartial, type DeepReadonly } from "@/utils/types";
 
-// Global language instance. Expect this to be set once at startup based off
-// the language value in the root HTML element inside Obsidian.
-let _language = "en";
-let _t: DeepReadonly<Translations> = en as DeepReadonly<Translations>;
+// Global translations instance. Expect this to be set once at startup based
+// on the language value in the root HTML element inside Obsidian.
+let _t: DeepReadonly<Translations> = en;
 
 export const setLanguage = (lang: string) => {
-  _language = lang;
-  _t = DeepPartial.merge(en, registry[lang]?.translations ?? {}) as DeepReadonly<Translations>;
+  _t = DeepPartial.merge(en, registry[lang]?.translations ?? {});
 };
 
 export const t = () => {

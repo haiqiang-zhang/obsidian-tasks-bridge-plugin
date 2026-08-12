@@ -1,20 +1,20 @@
 import { render } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import type { TokenValidation } from "@/token";
+import type { TokenValidationResult } from "@/token";
 
 import { TokenValidationIcon } from "./index";
 
 describe("TokenValidationIcon", () => {
   it("should return null for kind 'none'", () => {
-    const status: TokenValidation.Result = { kind: "none" };
+    const status: TokenValidationResult = { kind: "none" };
     const { container } = render(<TokenValidationIcon status={status} />);
 
     expect(container).toBeEmptyDOMElement();
   });
 
   it("should render loader icon for 'in-progress' status", () => {
-    const status: TokenValidation.Result = { kind: "in-progress" };
+    const status: TokenValidationResult = { kind: "in-progress" };
     const { container } = render(<TokenValidationIcon status={status} />);
 
     const icon = container.querySelector(".token-validation-in-progress");
@@ -24,7 +24,7 @@ describe("TokenValidationIcon", () => {
   });
 
   it("should render error icon for 'error' status", () => {
-    const status: TokenValidation.Result = { kind: "error", message: "Bad token" };
+    const status: TokenValidationResult = { kind: "error", message: "Bad token" };
     const { container } = render(<TokenValidationIcon status={status} />);
 
     const icon = container.querySelector(".token-validation-error");
@@ -32,7 +32,7 @@ describe("TokenValidationIcon", () => {
   });
 
   it("should render success icon for 'success' status", () => {
-    const status: TokenValidation.Result = { kind: "success" };
+    const status: TokenValidationResult = { kind: "success" };
     const { container } = render(<TokenValidationIcon status={status} />);
 
     const icon = container.querySelector(".token-validation-success");

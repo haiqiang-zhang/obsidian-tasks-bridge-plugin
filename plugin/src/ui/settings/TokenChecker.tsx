@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { t } from "@/i18n";
 import { PluginContext } from "@/ui/context";
 
-import { TokenValidation } from "../../token";
+import { TokenValidation, type TokenValidationResult } from "../../token";
 import { TokenValidationIcon } from "../components/token-validation-icon";
 import { Setting } from "./SettingItem";
 
@@ -16,7 +16,7 @@ export const TokenChecker: React.FC<Props> = ({ tester }) => {
   const plugin = PluginContext.use();
   const { token: tokenAccessor, modals } = plugin.services;
 
-  const [tokenState, setTokenState] = useState<TokenValidation.Result>({
+  const [tokenState, setTokenState] = useState<TokenValidationResult>({
     kind: "in-progress",
   });
   const [tokenValidationCount, setTokenValidationCount] = useState(0);
@@ -24,7 +24,7 @@ export const TokenChecker: React.FC<Props> = ({ tester }) => {
   // biome-ignore lint/correctness/useExhaustiveDependencies: we are using tokenValidationCount to force a refresh when the modal is closed.
   useEffect(() => {
     setTokenState({ kind: "in-progress" });
-    (async () => {
+    void (async () => {
       const token = await tokenAccessor.read();
       if (token === null) {
         setTokenState({
@@ -35,7 +35,10 @@ export const TokenChecker: React.FC<Props> = ({ tester }) => {
       }
 
       setTokenState(await TokenValidation.validate(token, tester));
-    })();
+    })().catch((error: unknown) => {
+      console.error("Failed to read or validate Todoist token", error);
+      setTokenState({ kind: "error", message: "Unable to validate API token" });
+    });
   }, [plugin, tester, tokenValidationCount]);
 
   const openModal = () => {

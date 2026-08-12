@@ -164,7 +164,7 @@ export const EditTaskModal: React.FC<EditTaskModalProps> = ({
         <Button className="mod-ghost" onPress={modal.close} isDisabled={isSaving}>
           {i18n.cancelButtonLabel}
         </Button>
-        <Button className="mod-cta" onPress={save} isDisabled={!canSave}>
+        <Button className="mod-cta" onPress={() => void save()} isDisabled={!canSave}>
           {isSaving ? i18n.savingButtonLabel : i18n.saveButtonLabel}
         </Button>
       </div>

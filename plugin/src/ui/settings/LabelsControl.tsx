@@ -63,7 +63,7 @@ export const LabelsControl: React.FC<Props> = ({ value, onChange }) => {
       <select
         className="dropdown"
         value=""
-        onChange={handleAddLabelChange}
+        onChange={(event) => void handleAddLabelChange(event)}
         disabled={availableLabels.length === 0}
       >
         <option value="" disabled>
@@ -108,7 +108,7 @@ export const LabelsControl: React.FC<Props> = ({ value, onChange }) => {
               <button
                 type="button"
                 className="labels-control-remove-button clickable-icon"
-                onClick={() => removeLabel(labelSetting.labelId)}
+                onClick={() => void removeLabel(labelSetting.labelId)}
               >
                 <ObsidianIcon size="xs" id="cross" />
               </button>

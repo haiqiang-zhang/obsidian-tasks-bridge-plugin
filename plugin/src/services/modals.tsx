@@ -1,3 +1,4 @@
+import { UNSAFE_PortalProvider } from "@react-aria/overlays";
 import { Modal, Platform } from "obsidian";
 import type React from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -14,7 +15,7 @@ type ModalOptions = {
   dontCloseOnExternalClick?: boolean;
 };
 
-class ReactModal<T extends {}> extends Modal {
+class ReactModal<T extends object> extends Modal {
   private readonly reactRoot: Root;
 
   constructor(plugin: TodoistPlugin, Component: React.FC<T>, props: T, opts: ModalOptions) {
@@ -25,8 +26,9 @@ class ReactModal<T extends {}> extends Modal {
 
     this.reactRoot = createRoot(this.contentEl);
 
-    const popoverContainerEl = this.containerEl.createDiv();
-    popoverContainerEl.style.position = "relative";
+    const popoverContainerEl = this.containerEl.createDiv({
+      cls: "tasks-bridge-popover-container",
+    });
 
     const modal: ModalInfo = {
       close: () => this.close(),
@@ -41,10 +43,7 @@ class ReactModal<T extends {}> extends Modal {
         createDiv({
           prepend: true,
           parent: this.containerEl,
-          cls: ["modal-bg"],
-          attr: {
-            style: "opacity: 0.85;",
-          },
+          cls: ["modal-bg", "tasks-bridge-modal-bg-strong"],
         });
       }
     }
@@ -52,7 +51,9 @@ class ReactModal<T extends {}> extends Modal {
     this.reactRoot.render(
       <PluginContext.Provider value={plugin}>
         <ModalContext.Provider value={modal}>
-          <Component {...props} />
+          <UNSAFE_PortalProvider getContainer={() => popoverContainerEl}>
+            <Component {...props} />
+          </UNSAFE_PortalProvider>
         </ModalContext.Provider>
       </PluginContext.Provider>,
     );

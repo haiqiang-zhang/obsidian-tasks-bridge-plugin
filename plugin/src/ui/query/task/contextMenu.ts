@@ -47,7 +47,7 @@ export function showTaskContext(ctx: TaskContext, position: Point) {
 // then remove the link. Using electron's openExternal doesn't
 // work on mobile unfortunately.
 function openExternal(url: string): void {
-  const link = document.createElement("a");
+  const link = createEl("a");
   link.href = url;
 
   const clickEvent = new MouseEvent("click", {

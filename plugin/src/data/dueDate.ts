@@ -13,6 +13,7 @@ import type { Duration as ApiDuration } from "@/api/domain/task";
 import { t } from "@/i18n";
 import { locale } from "@/infra/locale";
 import { now, timezone, today } from "@/infra/time";
+import { assertNever } from "@/utils/types";
 
 export type DateInfo = {
   raw: Date;
@@ -56,9 +57,8 @@ const parseDueDate = (dueDate: ApiDueDate, duration?: ApiDuration): DueDate => {
           minutes: duration.amount,
         });
         break;
-      default: {
-        const _: never = duration.unit;
-      }
+      default:
+        assertNever(duration.unit, "Unknown duration unit");
     }
   }
 

@@ -29,7 +29,7 @@ export const ProjectSyncNowControl: React.FC<Props> = ({ disabled }) => {
       disabled={disabled || isSyncing}
       icon="refresh-cw"
       label={isSyncing ? i18n.syncingLabel : i18n.buttonLabel}
-      onClick={synchronize}
+      onClick={() => void synchronize()}
     />
   );
 };

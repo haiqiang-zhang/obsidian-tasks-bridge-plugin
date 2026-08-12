@@ -25,7 +25,7 @@ export function groupBy(tasks: Task[], groupBy: GroupingKey): GroupedTasks[] {
     case "label":
       return groupByLabel(tasks);
     default:
-      throw new Error(`Cannot group by ${groupBy}`);
+      throw new Error("Cannot group by an unsupported value");
   }
 }
 

@@ -78,7 +78,7 @@ export const ProjectSyncProjectControl: React.FC<Props> = ({
         className="dropdown project-sync-project-dropdown"
         disabled={!metadata.ready && value === null}
         id={id}
-        onChange={handleChange}
+        onChange={(event) => void handleChange(event)}
         value={value?.projectId ?? ""}
       >
         <option value="">{metadata.ready ? i18n.noProject : i18n.loading}</option>

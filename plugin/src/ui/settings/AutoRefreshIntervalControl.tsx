@@ -42,7 +42,7 @@ export const AutoRefreshIntervalControl: React.FC<Props> = ({ initialValue, onCh
         type="number"
         min={0}
         step={1}
-        onBlur={onBlur}
+        onBlur={() => void onBlur()}
       />
     </TextField>
   );

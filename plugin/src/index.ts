@@ -235,7 +235,7 @@ export default class TodoistPlugin extends Plugin {
         return;
       }
 
-      const localQueryCache = this.app.loadLocalStorage(queryCacheStorageKey);
+      const localQueryCache: unknown = this.app.loadLocalStorage(queryCacheStorageKey);
       const legacyQueryCache = isRecord(storedData) ? storedData.queryCache : undefined;
       this.queryCache.load(localQueryCache ?? legacyQueryCache);
       if (localQueryCache === null && legacyQueryCache !== undefined) {
@@ -971,7 +971,7 @@ const isSameProjectSyncConfig = (left: ProjectSyncConfig, right: ProjectSyncConf
 
 const fingerprintCredential = async (token: string): Promise<string> => {
   const tokenBytes = new TextEncoder().encode(token);
-  const digest = await globalThis.crypto.subtle.digest("SHA-256", tokenBytes);
+  const digest = await window.crypto.subtle.digest("SHA-256", tokenBytes);
   return Array.from(new Uint8Array(digest), (byte) =>
     byte.toString(hexadecimalRadix).padStart(byteHexWidth, "0"),
   ).join("");

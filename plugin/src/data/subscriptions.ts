@@ -30,7 +30,7 @@ export type UnsubscribeCallback = () => void;
 
 export class SubscriptionManager<T> {
   private readonly subscriptions: Map<SubscriptionId, T> = new Map();
-  private readonly generator: Generator<SubscriptionId> = subscriptionIdGenerator();
+  private readonly generator: Generator<SubscriptionId, never, void> = subscriptionIdGenerator();
 
   public subscribe(value: T): UnsubscribeCallback {
     const id = this.generator.next().value;
@@ -44,7 +44,7 @@ export class SubscriptionManager<T> {
   }
 }
 
-function* subscriptionIdGenerator(): Generator<SubscriptionId> {
+function* subscriptionIdGenerator(): Generator<SubscriptionId, never, void> {
   let next = 0;
 
   while (true) {

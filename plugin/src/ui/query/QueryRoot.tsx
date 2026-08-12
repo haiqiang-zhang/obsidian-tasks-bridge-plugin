@@ -23,6 +23,7 @@ import { Displays } from "@/ui/query/displays";
 import { QueryHeader } from "@/ui/query/QueryHeader";
 import { QueryResponseHandler } from "@/ui/query/QueryResponseHandler";
 import { QueryWarnings } from "@/ui/query/QueryWarnings";
+import { assertNever } from "@/utils/types";
 import "./styles.scss";
 
 import { secondsToMillis } from "@/infra/time";
@@ -98,7 +99,7 @@ const useSubscription = (
   }, [refresher, query, runRefresh]);
 
   useEffect(() => {
-    forceRefresh();
+    void forceRefresh();
   }, [forceRefresh]);
 
   const loadMoreCompleted = useCallback(async () => {
@@ -139,10 +140,14 @@ type RefreshCadenceState = {
   isMounted: boolean;
 };
 
+type WritableRef<T> = {
+  current: T;
+};
+
 const useRefreshCadence = (
   interval: number | undefined,
   configurationKey: string,
-): [(refresh: Refresh) => Promise<void>, React.MutableRefObject<Refresh | undefined>] => {
+): [(refresh: Refresh) => Promise<void>, WritableRef<Refresh | undefined>] => {
   const state = useRef<RefreshCadenceState>({
     configurationKey: "",
     configurationGeneration: 0,
@@ -374,7 +379,7 @@ export const QueryRoot: React.FC<Props> = ({ query, warnings }) => {
                 type="button"
                 className="todoist-load-earlier-completed"
                 disabled={isLoadingMore}
-                onClick={loadMoreCompleted}
+                onClick={() => void loadMoreCompleted()}
               >
                 {isLoadingMore ? (
                   <ObsidianLoadingIcon size="s" />
@@ -431,10 +436,8 @@ const getTitle = (query: TaskQuery, result: SubscriptionResult): string => {
       return replaceTaskCountPlaceholder(name, result.tasks.length.toString());
     case "not-ready":
       return replaceTaskCountPlaceholder(name, "…");
-    default: {
-      const _: never = result;
-      throw new Error("Unknown result type");
-    }
+    default:
+      return assertNever(result, "Unknown subscription result");
   }
 };
 

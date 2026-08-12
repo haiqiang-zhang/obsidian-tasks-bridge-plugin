@@ -23,7 +23,7 @@ function formatZodError(error: z.ZodError): string[] {
 }
 
 export function parseApiResponse<T>(schema: z.ZodType<T>, jsonBody: string): T {
-  const parsed = JSON.parse(jsonBody);
+  const parsed: unknown = JSON.parse(jsonBody);
   const camelized = camelize(parsed);
   const result = schema.safeParse(camelized);
   if (!result.success) {

@@ -174,9 +174,8 @@ export class ProjectTaskCommandService {
       throw new ProjectTaskCommandError("The managed task note no longer exists");
     }
 
-    const frontmatter = this.metadataCache.getFileCache(file)?.frontmatter as
-      | ManagedFrontmatter
-      | undefined;
+    const frontmatter: ManagedFrontmatter | undefined =
+      this.metadataCache.getFileCache(file)?.frontmatter;
     if (frontmatter === undefined) {
       throw new ProjectTaskCommandError("The managed task note metadata is not ready yet");
     }

@@ -1,11 +1,11 @@
 import {
+  type BasesAllOptions,
   BasesView,
   type BasesViewConfig,
   type BasesViewRegistration,
   type HoverParent,
   type HoverPopover,
   type QueryController,
-  type ViewOption,
 } from "obsidian";
 import { createRoot, type Root } from "react-dom/client";
 
@@ -39,7 +39,7 @@ const allSynchronizedProjectsValue = "__tasks_bridge_all_synchronized_projects__
 export const tasksListViewOptions = (
   projectStatistics: TodoistListProjectStatisticsSource,
   config?: BasesViewConfig,
-): ViewOption[] => [
+): BasesAllOptions[] => [
   {
     type: "group",
     displayName: "Project scope",
@@ -94,7 +94,7 @@ export const createTasksListViewRegistration = (
   // Obsidian 1.11.4 declares this callback without an argument, while newer API declarations pass
   // the current view config. An optional argument supports both and lets us preserve an unavailable
   // saved selection in newer Obsidian versions.
-  options: (config?: BasesViewConfig) => tasksListViewOptions(projectStatistics, config),
+  options: (config: BasesViewConfig) => tasksListViewOptions(projectStatistics, config),
 });
 
 export class TasksListView extends BasesView implements HoverParent {
@@ -122,11 +122,8 @@ export class TasksListView extends BasesView implements HoverParent {
     this.actions = actions;
     this.projectStatistics = projectStatistics;
     this.projectStatisticsSnapshot = projectStatistics.getSnapshot();
-    const ownerDocument = parentEl.ownerDocument;
-    this.viewWindow = ownerDocument.defaultView ?? window;
-    this.containerEl = ownerDocument.createElement("div");
-    this.containerEl.className = "todoist-bases-list-container";
-    parentEl.append(this.containerEl);
+    this.viewWindow = parentEl.ownerDocument.defaultView ?? window;
+    this.containerEl = parentEl.createDiv({ cls: "todoist-bases-list-container" });
     this.reactRoot = createRoot(this.containerEl);
     this.unsubscribeProjectStatistics = projectStatistics.subscribe(() => {
       this.projectStatisticsSnapshot = this.projectStatistics.getSnapshot();
@@ -243,7 +240,9 @@ const buildRootProjectDropdownOptions = (
   }
 
   const selectedProjectId =
-    config === undefined ? null : readRootProjectId(config.get(rootProjectConfigKey));
+    config === undefined || typeof config.get !== "function"
+      ? null
+      : readRootProjectId(config.get(rootProjectConfigKey));
   if (selectedProjectId !== null && options[selectedProjectId] === undefined) {
     options[selectedProjectId] = `Unavailable project (${selectedProjectId})`;
   }

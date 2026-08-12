@@ -61,7 +61,11 @@ export const ProjectDropdownControl: React.FC<Props> = ({ value, onChange }) => 
           <ObsidianIcon size="s" id="lucide-alert-triangle" />
         </div>
       )}
-      <select className="dropdown" value={selected?.projectId ?? ""} onChange={handleChange}>
+      <select
+        className="dropdown"
+        value={selected?.projectId ?? ""}
+        onChange={(event) => void handleChange(event)}
+      >
         <option value="">{i18n.noDefault}</option>
         {projects.map((project) => (
           <option key={project.id} value={project.id}>

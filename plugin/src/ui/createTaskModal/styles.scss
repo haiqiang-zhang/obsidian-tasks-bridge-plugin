@@ -1,5 +1,13 @@
 @use "../../styles/colors.scss";
 
+.tasks-bridge-popover-container {
+  position: relative;
+}
+
+.tasks-bridge-modal-bg-strong {
+  opacity: 0.85;
+}
+
 .modal-popover {
   overflow-y: auto;
 }

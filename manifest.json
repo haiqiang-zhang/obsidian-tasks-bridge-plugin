@@ -3,9 +3,9 @@
   "name": "Tasks Bridge",
   "version": "2.9.4",
   "minAppVersion": "1.11.4",
-  "description": "Use Obsidian to interact with tasks stored in external task-management services.",
+  "description": "Sync and interact with tasks stored in external task-management services.",
   "author": "Haiqiang Zhang and Jamie Brynes",
-  "authorUrl": "https://github.com/haiqiang-zhang/obsidian-tasks-bridge-plugin",
+  "authorUrl": "https://github.com/haiqiang-zhang",
   "isDesktopOnly": false,
   "fundingUrl": "https://www.buymeacoffee.com/jamiebrynes"
 }

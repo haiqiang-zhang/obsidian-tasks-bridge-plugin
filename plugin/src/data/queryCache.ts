@@ -83,12 +83,12 @@ export type SerializedQueryCache = {
 };
 
 export class QueryCache {
-  private entries: Record<string, SerializedQuery> = Object.create(null);
+  private entries = new Map<string, SerializedQuery>();
   private credentialFingerprint: string | null = null;
   private readonly clearListeners: Set<() => void> = new Set();
 
   public load(value: unknown): void {
-    this.entries = Object.create(null);
+    this.entries.clear();
     this.credentialFingerprint = null;
 
     const cache = serializedCacheSchema.safeParse(value);
@@ -100,7 +100,7 @@ export class QueryCache {
     for (const [key, entry] of Object.entries(cache.data.entries)) {
       const parsedEntry = cachedQuerySchema.safeParse(entry);
       if (parsedEntry.success) {
-        this.entries[key] = parsedEntry.data;
+        this.entries.set(key, parsedEntry.data);
       }
     }
 
@@ -108,7 +108,7 @@ export class QueryCache {
   }
 
   public get(filter: string, completedTasks = false): CachedQuery | undefined {
-    const entry = this.entries[makeCacheKey(filter, completedTasks)];
+    const entry = this.entries.get(makeCacheKey(filter, completedTasks));
     if (entry === undefined) {
       return undefined;
     }
@@ -130,16 +130,16 @@ export class QueryCache {
     completedTasksProgress?: CompletedTasksProgress,
   ): boolean {
     const key = makeCacheKey(filter, completedTasks);
-    const existing = this.entries[key];
+    const existing = this.entries.get(key);
     if (existing !== undefined && Date.parse(existing.updatedAt) >= updatedAt.getTime()) {
       return false;
     }
 
-    this.entries[key] = {
+    this.entries.set(key, {
       tasks,
       updatedAt: updatedAt.toISOString(),
       ...(completedTasksProgress !== undefined ? { completedTasksProgress } : {}),
-    };
+    });
     this.prune();
     return true;
   }
@@ -147,7 +147,7 @@ export class QueryCache {
   public removeTaskFromAll(taskId: TaskId, updatedAt: Date): boolean {
     let changed = false;
 
-    for (const [key, existing] of Object.entries(this.entries)) {
+    for (const [key, existing] of this.entries) {
       const tasks = existing.tasks.filter((task) => task.id !== taskId);
       if (tasks.length === existing.tasks.length) {
         continue;
@@ -156,11 +156,11 @@ export class QueryCache {
       const nextUpdatedAt = new Date(
         Math.max(Date.parse(existing.updatedAt), updatedAt.getTime()),
       ).toISOString();
-      this.entries[key] = {
+      this.entries.set(key, {
         ...existing,
         tasks,
         updatedAt: nextUpdatedAt,
-      };
+      });
       changed = true;
     }
 
@@ -174,7 +174,7 @@ export class QueryCache {
     let changed = false;
     const completedAtIso = completedAt.toISOString();
 
-    for (const [key, existing] of Object.entries(this.entries)) {
+    for (const [key, existing] of this.entries) {
       if (!existing.tasks.some((task) => task.id === taskId)) {
         continue;
       }
@@ -187,11 +187,11 @@ export class QueryCache {
       const nextUpdatedAt = new Date(
         Math.max(Date.parse(existing.updatedAt), completedAt.getTime()),
       ).toISOString();
-      this.entries[key] = {
+      this.entries.set(key, {
         ...existing,
         tasks,
         updatedAt: nextUpdatedAt,
-      };
+      });
       changed = true;
     }
 
@@ -202,7 +202,7 @@ export class QueryCache {
   }
 
   public clear(): void {
-    this.entries = Object.create(null);
+    this.entries.clear();
     this.notifyClear();
   }
 
@@ -225,18 +225,18 @@ export class QueryCache {
     return {
       version: cacheVersion,
       credentialFingerprint: this.credentialFingerprint,
-      entries: { ...this.entries },
+      entries: Object.fromEntries(this.entries),
     };
   }
 
   private prune(): void {
-    const entries = Object.entries(this.entries);
+    const entries = [...this.entries];
     if (entries.length <= maxCacheEntries) {
       return;
     }
 
     entries.sort(([, left], [, right]) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt));
-    this.entries = Object.fromEntries(entries.slice(0, maxCacheEntries));
+    this.entries = new Map(entries.slice(0, maxCacheEntries));
   }
 
   private notifyClear(): void {

@@ -14,6 +14,7 @@ import {
   useSettingsStore,
 } from "@/settings";
 import { ModalContext, PluginContext } from "@/ui/context";
+import { assertNever } from "@/utils/types";
 
 import type TodoistPlugin from "../..";
 import type { Label as TodoistLabel } from "../../api/domain/label";
@@ -86,10 +87,8 @@ const calculateDefaultDueDate = (setting: DueDateDefaultSetting): DueDate | unde
         date: today().add({ days: 1 }),
         timeInfo: undefined,
       };
-    default: {
-      const _: never = setting;
-      throw new Error("Unknown due date default setting");
-    }
+    default:
+      return assertNever(setting, "Unknown due date default setting");
   }
 };
 
@@ -283,10 +282,8 @@ const CreateTaskModalContent: React.FC<CreateTaskProps> = ({
         return i18n.addTaskAndCopyAppLabel;
       case "add-copy-web":
         return i18n.addTaskAndCopyWebLabel;
-      default: {
-        const _: never = action;
-        throw new Error("Unknown add task action");
-      }
+      default:
+        return assertNever(action, "Unknown add task action");
     }
   };
 
@@ -335,7 +332,7 @@ const CreateTaskModalContent: React.FC<CreateTaskProps> = ({
             <Button
               className="mod-cta add-task-primary"
               isDisabled={isSubmitButtonDisabled}
-              onPress={() => createTask(currentAction)}
+              onPress={() => void createTask(currentAction)}
               aria-label={getActionLabel(currentAction)}
             >
               {getActionLabel(currentAction)}

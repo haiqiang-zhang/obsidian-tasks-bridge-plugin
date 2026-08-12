@@ -56,7 +56,7 @@ export class ObsidianProjectSyncStatisticsRepository implements ProjectSyncStati
   private disposed = false;
   private refreshInFlight: Promise<void> | undefined;
   private refreshAgain = false;
-  private refreshTimer: ReturnType<typeof setTimeout> | undefined;
+  private refreshTimer: number | undefined;
   private readonly listeners = new Set<() => void>();
 
   constructor(
@@ -187,7 +187,7 @@ export class ObsidianProjectSyncStatisticsRepository implements ProjectSyncStati
     }
     this.disposed = true;
     if (this.refreshTimer !== undefined) {
-      clearTimeout(this.refreshTimer);
+      window.clearTimeout(this.refreshTimer);
       this.refreshTimer = undefined;
     }
     this.snapshot = null;
@@ -288,7 +288,7 @@ export class ObsidianProjectSyncStatisticsRepository implements ProjectSyncStati
     if (this.disposed || this.refreshTimer !== undefined) {
       return;
     }
-    this.refreshTimer = setTimeout(() => {
+    this.refreshTimer = window.setTimeout(() => {
       this.refreshTimer = undefined;
       void this.refresh().catch((error: unknown) => {
         console.error("Failed to rebuild Project Overview from local Markdown:", error);

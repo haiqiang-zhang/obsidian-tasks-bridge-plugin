@@ -13,14 +13,16 @@ import { debug } from "@/log";
 export type MakeCommand = (
   plugin: TodoistPlugin,
   i18n: Translations["commands"],
-) => Omit<ObsidianCommand, "id">;
+) => Omit<ObsidianCommand, "id" | "callback"> & {
+  callback?: () => void | Promise<void>;
+};
 
 const syncCommand: MakeCommand = (plugin: TodoistPlugin, i18n: Translations["commands"]) => {
   return {
     name: i18n.sync,
     callback: async () => {
       debug("Syncing with Todoist API");
-      plugin.services.todoist.sync();
+      await plugin.services.todoist.sync();
     },
   };
 };
@@ -55,5 +57,10 @@ export const registerCommands = (plugin: TodoistPlugin) => {
 export const fireCommand = <K extends CommandId>(id: K, plugin: TodoistPlugin) => {
   const i18n = t().commands;
   const make = commands[id];
-  make(plugin, i18n).callback?.();
+  const result = make(plugin, i18n).callback?.();
+  if (result instanceof Promise) {
+    void result.catch((error: unknown) => {
+      console.error(`Failed to execute command '${id}':`, error);
+    });
+  }
 };

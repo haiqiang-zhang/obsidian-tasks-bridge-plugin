@@ -10,6 +10,7 @@ import { type Settings, useSettingsStore } from "@/settings";
 import { ObsidianIcon } from "@/ui/components/obsidian-icon";
 import { PluginContext, RenderChildContext } from "@/ui/context";
 import { useObsidianTooltip } from "@/ui/hooks";
+import { assertNever } from "@/utils/types";
 
 const getAddTaskCommandId = (settings: Settings): CommandId => {
   switch (settings.addTaskButtonAddsPageLink) {
@@ -19,10 +20,8 @@ const getAddTaskCommandId = (settings: Settings): CommandId => {
       return "add-task-page-description";
     case "off":
       return "add-task";
-    default: {
-      const _: never = settings.addTaskButtonAddsPageLink;
-      throw new Error("Unknown add task button setting");
-    }
+    default:
+      return assertNever(settings.addTaskButtonAddsPageLink, "Unknown add task button setting");
   }
 };
 
@@ -137,7 +136,7 @@ const HeaderButton: React.FC<ButtonProps> = ({ iconId, action, className, label,
     <Button
       aria-label={label}
       className={classNames("embed-action clickable-icon todoist-query-control-button", className)}
-      onPress={handler}
+      onPress={() => void handler()}
       ref={setButtonEl}
     >
       <ObsidianIcon id={iconId} size="s" />

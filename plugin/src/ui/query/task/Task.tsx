@@ -86,7 +86,7 @@ export const Task: React.FC<Props> = ({ tree }) => {
           className="todoist-task-checkbox"
           isDisabled={isDisabled}
           isSelected={isCompleted}
-          onChange={onClickTask}
+          onChange={() => void onClickTask()}
         >
           <div>
             {isCompleted && (

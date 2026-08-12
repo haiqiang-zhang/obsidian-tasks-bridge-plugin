@@ -20,7 +20,7 @@ All commands run from this `plugin/` directory:
 - `src/api/` - Todoist REST API client and domain models
 - `src/data/` - Repository pattern for caching API data with sync
 - `src/query/` - Custom query language parser and `todoist` code block renderer
-- `src/ui/` - React components (React 19 + React Aria Components + Framer Motion)
+- `src/ui/` - React components (React 18 + React Aria Components + Framer Motion)
 - `src/services/` - Business logic (token management, modal orchestration)
 - `src/commands/` - Obsidian command definitions
 - `src/i18n/` - Internationalization (interface in `translation.ts`, implementations in `langs/`)

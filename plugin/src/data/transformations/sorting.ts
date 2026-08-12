@@ -49,7 +49,7 @@ function compareTask<T extends Task>(self: T, other: T, sorting: SortingKey): nu
     case "deadlineDescending":
       return -compareTaskDeadline(self, other);
     default:
-      throw new Error(`Unexpected sorting type: '${sorting}'`);
+      throw new Error("Unexpected sorting type");
   }
 }
 

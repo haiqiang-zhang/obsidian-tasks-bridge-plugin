@@ -59,7 +59,7 @@ type ButtonProps = {
 
 const ButtonControl: React.FC<ButtonProps> = ({ label, icon, onClick, disabled }) => {
   return (
-    <button className="mod-cta" onClick={onClick} type="button" disabled={disabled}>
+    <button className="mod-cta" onClick={() => void onClick()} type="button" disabled={disabled}>
       {icon !== undefined && <ObsidianIcon size="l" id={icon} className="setting-button-icon" />}
       {label}
     </button>
@@ -132,7 +132,7 @@ const DropdownControl = <T extends DropdownOptionValue>({
   };
 
   return (
-    <select className="dropdown" value={selected} onChange={onChange}>
+    <select className="dropdown" value={selected} onChange={(event) => void onChange(event)}>
       {options.map(({ label, value }) => (
         <option key={label} value={value}>
           {label}

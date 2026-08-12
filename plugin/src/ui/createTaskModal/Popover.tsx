@@ -17,13 +17,12 @@ export const Popover: React.FC<PropsWithChildren<Props>> = ({
   defaultPlacement,
   maxHeight,
 }) => {
-  const modal = ModalContext.use();
+  ModalContext.use();
 
   return (
     <AriaPopover
       maxHeight={maxHeight ?? defaultMaxHeight}
       offset={5}
-      UNSTABLE_portalContainer={modal.popoverContainerEl}
       className="modal-popover"
       {...getPlacementDetails(defaultPlacement)}
     >

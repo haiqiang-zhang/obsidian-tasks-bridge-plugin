@@ -11,6 +11,8 @@ import path, { resolve } from "node:path";
 
 const { version } = require("./package.json");
 const { id: pluginId } = require("../manifest.json");
+const BUILD_TIMESTAMP_START = 2;
+const BUILD_TIMESTAMP_END = 16;
 
 function getOutDir(): string | undefined {
   const env = loadEnv("prod", process.cwd());
@@ -28,7 +30,10 @@ function getOutDir(): string | undefined {
 
 function getBuildStamp(): string {
   const commitSha = execSync("git rev-parse --short HEAD").toString().trim();
-  const timestamp = new Date().toISOString().slice(2, 16).replace(/[-:]/g, "");
+  const timestamp = new Date()
+    .toISOString()
+    .slice(BUILD_TIMESTAMP_START, BUILD_TIMESTAMP_END)
+    .replace(/[-:]/g, "");
   return `v${version}-${commitSha}-${timestamp}`;
 }
 
@@ -50,6 +55,28 @@ function bundleAnalyzerPlugin(): PluginOption {
   return undefined;
 }
 
+function rejectDynamicScriptElements(): PluginOption {
+  return {
+    name: "reject-dynamic-script-elements",
+    enforce: "post",
+    generateBundle(_options, bundle) {
+      for (const output of Object.values(bundle)) {
+        if (
+          output.type !== "chunk" ||
+          !/\.createElement\(\s*["']script["']\s*\)/.test(output.code)
+        ) {
+          continue;
+        }
+
+        this.error(
+          `Dynamic <script> element creation found in ${output.fileName}. ` +
+            "Community plugins must not inject executable scripts at runtime.",
+        );
+      }
+    },
+  };
+}
+
 export default defineConfig({
   plugins: [
     react(),
@@ -63,13 +90,23 @@ export default defineConfig({
       ],
     }),
     replace({
+      preventAssignment: true,
       "process.env.NODE_ENV": JSON.stringify(process.env.NODE_ENV),
       SYNC_WITH_TODOIST_BUILD_STAMP: getBuildStamp(),
     }),
+    rejectDynamicScriptElements(),
     bundleAnalyzerPlugin(),
   ],
   resolve: {
-    dedupe: ["react", "react-dom"],
+    alias: {
+      "react-dom/client": "preact/compat/client",
+      "react-dom/test-utils": "preact/test-utils",
+      "react-dom": "preact/compat",
+      "react/jsx-dev-runtime": "preact/jsx-dev-runtime",
+      "react/jsx-runtime": "preact/jsx-runtime",
+      react: "preact/compat",
+    },
+    dedupe: ["preact"],
   },
   build: {
     // The output directory may be symlinked into a live Vault. Preserve Obsidian's data.json.
@@ -103,6 +140,12 @@ export default defineConfig({
     environment: "jsdom",
     alias: {
       obsidian: resolve(__dirname, "src/mocks/obsidian.ts"),
+      "react-dom/client": "react-dom/client",
+      "react-dom/test-utils": "react-dom/test-utils",
+      "react-dom": "react-dom",
+      "react/jsx-dev-runtime": "react/jsx-dev-runtime",
+      "react/jsx-runtime": "react/jsx-runtime",
+      react: "react",
     },
     setupFiles: ["./vitest-setup.ts"],
   },

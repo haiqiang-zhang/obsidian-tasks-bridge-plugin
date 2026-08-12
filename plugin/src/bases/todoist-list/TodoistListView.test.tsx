@@ -1,4 +1,4 @@
-import type { BasesPropertyId, BasesViewConfig, QueryController, ViewOption } from "obsidian";
+import type { BasesAllOptions, BasesPropertyId, BasesViewConfig, QueryController } from "obsidian";
 import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -172,7 +172,7 @@ describe("TasksListView", () => {
     expect(TASKS_LIST_VIEW_ID).toBe("tasks-list");
     expect(TASKS_LIST_VIEW_NAME).toBe("Tasks List");
     expect(registration).toMatchObject({ name: "Tasks List", icon: "lucide-list-tree" });
-    expect(registration.options?.()).toEqual([
+    expect(registration.options?.({} as BasesViewConfig)).toEqual([
       {
         type: "group",
         displayName: "Project scope",
@@ -234,8 +234,8 @@ describe("TasksListView", () => {
     });
 
     const registration = createTasksListViewRegistration(actions(), statistics);
-    const options = registration.options?.() ?? [];
-    const rootDropdown = (options[0] as { items: ViewOption[] }).items[0] as {
+    const options = registration.options?.({} as BasesViewConfig) ?? [];
+    const rootDropdown = (options[0] as { items: BasesAllOptions[] }).items[0] as {
       options: Record<string, string>;
     };
 
@@ -270,8 +270,8 @@ describe("TasksListView", () => {
     });
 
     const registration = createTasksListViewRegistration(actions(), statistics);
-    const options = registration.options?.() ?? [];
-    const rootDropdown = (options[0] as { items: ViewOption[] }).items[0] as {
+    const options = registration.options?.({} as BasesViewConfig) ?? [];
+    const rootDropdown = (options[0] as { items: BasesAllOptions[] }).items[0] as {
       options: Record<string, string>;
     };
 
@@ -286,11 +286,11 @@ describe("TasksListView", () => {
     const registration = createTasksListViewRegistration(actions(), projectStatistics());
     const optionsCallback = registration.options as unknown as (
       config?: BasesViewConfig,
-    ) => ViewOption[];
+    ) => BasesAllOptions[];
     const options = optionsCallback({
       get: vi.fn((key: string) => (key === "todoistRootProjectId" ? "missing" : undefined)),
     } as unknown as BasesViewConfig);
-    const rootDropdown = (options[0] as { items: ViewOption[] }).items[0] as {
+    const rootDropdown = (options[0] as { items: BasesAllOptions[] }).items[0] as {
       options: Record<string, string>;
     };
 

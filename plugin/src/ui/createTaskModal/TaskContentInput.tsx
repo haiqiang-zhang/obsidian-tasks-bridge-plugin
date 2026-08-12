@@ -24,7 +24,7 @@ export const TaskContentInput: React.FC<Props> = ({
     onChange(ev.target.value);
   };
 
-  const onKeyDown = async (ev: React.KeyboardEvent<HTMLTextAreaElement>) => {
+  const onKeyDown = (ev: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (onEnterKey === undefined) {
       return;
     }
@@ -35,7 +35,7 @@ export const TaskContentInput: React.FC<Props> = ({
 
     if (ev.key === "Enter") {
       ev.preventDefault();
-      await onEnterKey();
+      void onEnterKey();
     }
   };
 

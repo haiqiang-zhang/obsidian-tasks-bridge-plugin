@@ -10,6 +10,18 @@ import { ObsidianProjectSyncVault } from "./vault";
 
 vi.mock("obsidian", async () => {
   const { load } = await import("js-yaml");
+  // biome-ignore lint/complexity/noStaticOnlyClass: constructor-shaped mock for instanceof checks
+  class MockTFile {
+    static [Symbol.hasInstance](value: unknown): boolean {
+      return (
+        typeof value === "object" &&
+        value !== null &&
+        "path" in value &&
+        typeof value.path === "string" &&
+        value.path.endsWith(".md")
+      );
+    }
+  }
   const getFrontmatterInfo = (content: string) => {
     if (!content.startsWith("---\n")) {
       return { exists: false, frontmatter: "", from: 0, to: 0, contentStart: 0 };
@@ -27,6 +39,7 @@ vi.mock("obsidian", async () => {
     };
   };
   return {
+    TFile: MockTFile,
     normalizePath: (path: string) =>
       path
         .split("/")

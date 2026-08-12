@@ -2,6 +2,7 @@ import type { SecretStorage, Vault } from "obsidian";
 
 import type { TokenStorageSetting } from "@/settings";
 import { useSettingsStore } from "@/settings";
+import { assertNever } from "@/utils/types";
 
 export class VaultTokenAccessor {
   private readonly secrets: SecretStorage;
@@ -54,10 +55,8 @@ export class VaultTokenAccessor {
         const value = this.secrets.getSecret(secretId);
         return value === "" ? null : value;
       }
-      default: {
-        const _: never = storage;
-        throw new Error("Unknown token storage setting");
-      }
+      default:
+        return assertNever(storage, "Unknown token storage setting");
     }
   }
 
@@ -71,10 +70,8 @@ export class VaultTokenAccessor {
         this.secrets.setSecret(secretId, token);
         return;
       }
-      default: {
-        const _: never = storage;
-        throw new Error("Unknown token storage setting");
-      }
+      default:
+        assertNever(storage, "Unknown token storage setting");
     }
   }
 
@@ -92,10 +89,8 @@ export class VaultTokenAccessor {
         this.secrets.setSecret(secretId, "");
         return;
       }
-      default: {
-        const _: never = storage;
-        throw new Error("Unknown token storage setting");
-      }
+      default:
+        assertNever(storage, "Unknown token storage setting");
     }
   }
 }

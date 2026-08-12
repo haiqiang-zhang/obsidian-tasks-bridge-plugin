@@ -8,17 +8,18 @@ type ErrorTree = string | { msg: string; children: ErrorTree[] };
 
 export class ParsingError extends Error {
   messages: ErrorTree[];
-  inner: unknown | undefined;
+  inner?: unknown;
 
-  constructor(msgs: ErrorTree[], inner: unknown | undefined = undefined) {
+  constructor(msgs: ErrorTree[], inner?: unknown) {
     super(msgs.map((tree) => ParsingError.formatErrorTree(tree)).join("\n"));
     this.inner = inner;
     this.messages = msgs;
   }
 
   public toString(): string {
-    if (this.inner) {
-      return `${this.message}: '${this.inner}'`;
+    if (this.inner !== undefined) {
+      const detail = this.inner instanceof Error ? this.inner.message : "Unknown parsing error";
+      return `${this.message}: '${detail}'`;
     }
 
     return super.toString();
@@ -42,7 +43,7 @@ export function parseQuery<T extends z.ZodObject>(
   raw: string,
   definition: QueryDefinition<T>,
 ): [z.infer<T>, QueryWarning[]] {
-  let obj: Record<string, unknown> | null = null;
+  let obj: unknown = null;
   const warnings: QueryWarning[] = [];
 
   try {
@@ -66,17 +67,18 @@ export function parseQuery<T extends z.ZodObject>(
   return [query, warnings];
 }
 
-function tryParseAsJson(raw: string): Record<string, unknown> {
+function tryParseAsJson(raw: string): unknown {
   try {
-    return JSON.parse(raw);
+    const value: unknown = JSON.parse(raw);
+    return value;
   } catch (e) {
     throw new ParsingError(["Invalid JSON"], e);
   }
 }
 
-function tryParseAsYaml(raw: string): Record<string, unknown> {
+function tryParseAsYaml(raw: string): unknown {
   try {
-    return loadYaml(raw) as Record<string, unknown>;
+    return loadYaml(raw);
   } catch (e) {
     throw new ParsingError(["Invalid YAML"], e);
   }
@@ -99,7 +101,8 @@ function findUnknownKeys(obj: Record<string, unknown>, schema: z.ZodObject): str
     }
 
     let childSchema: z.ZodObject | undefined;
-    const schemaField = schema.shape[key];
+    const shape = schema.shape as unknown as Record<string, z.core.SomeType>;
+    const schemaField = shape[key];
 
     // If the subobject is directly a ZodObject, use that.
     if (schemaField instanceof z.ZodObject) {
@@ -124,12 +127,14 @@ function findUnknownKeys(obj: Record<string, unknown>, schema: z.ZodObject): str
 }
 
 function parseObjectZod<T extends z.ZodObject>(
-  query: Record<string, unknown>,
+  query: unknown,
   definition: QueryDefinition<T>,
 ): [z.infer<T>, QueryWarning[]] {
   const warnings: QueryWarning[] = [];
-  for (const key of findUnknownKeys(query, definition.schema)) {
-    warnings.push(t().query.warning.unknownKey(key));
+  if (typeof query === "object" && query !== null && !Array.isArray(query)) {
+    for (const key of findUnknownKeys(query as Record<string, unknown>, definition.schema)) {
+      warnings.push(t().query.warning.unknownKey(key));
+    }
   }
 
   const out = definition.schema.safeParse(query);
