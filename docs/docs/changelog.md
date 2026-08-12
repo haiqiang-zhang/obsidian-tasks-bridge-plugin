@@ -12,6 +12,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### ✨ Features
+
+- Moved the Tasks List root-project choice into Obsidian's native **Configure view** menu and persist it in the `.base` view definition, so each view can keep an independent hierarchy root.
+- Expanded Project overview data to consistently cover the selected root project and all descendants.
+
+### 🔁 Changes
+
+- Automatic Project sync now schedules each interval after the previous refresh finishes, preventing long refreshes from shortening the configured delay.
+- Updated the README backend diagram with distinct implemented and planned integrations, including TickTick, Microsoft To Do, and Google Tasks.
+
+### 🐛 Bug Fixes
+
+- Reconciled Project sync notes by stable Todoist task identity, repairing canonical paths and removing true duplicates without discarding conflicting user-written content.
+- Rejects Project mappings that do not belong to the currently authenticated Todoist account, while still supporting an intentional account switch after mappings are updated.
+- Fixed Tasks List completion and reopen refresh states, including stale loading indicators and invalid completed-task responses.
+- Restored square, first-line-aligned task checkboxes that follow Obsidian's native typography and control styling.
+
 ## v2.9.1 (2026-08-12)
 
 ### 🔁 Changes
