@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### 🐛 Bug Fixes
+
+- Project overview now restores immediately from the synchronized local Markdown projection when the Vault opens instead of waiting for a new Todoist refresh.
+- Project sync now preserves zero-task projects and repeated complete → reopen → complete events in the local projection, keeping overview totals and heatmap history complete after restarts and across devices.
+
 ## v2.9.3 (2026-08-12)
 
 ### 🔁 Changes
