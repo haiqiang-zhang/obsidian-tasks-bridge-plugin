@@ -1,7 +1,7 @@
 # Obsidian Tasks Bridge
 
 <p align="center">
-  <img src="docs/static/img/logo.svg" alt="Tasks Bridge logo" width="96">
+  <img src="docs/docs/public/img/logo.svg" alt="Tasks Bridge logo" width="96">
 </p>
 
 Tasks Bridge is based on the original [Todoist Sync](https://github.com/jamiebrynes7/obsidian-todoist-plugin) plugin created by [Jamie Brynes](https://github.com/jamiebrynes7).
@@ -13,7 +13,7 @@ Tasks Bridge is based on the original [Todoist Sync](https://github.com/jamiebry
 ## Architecture
 
 <p align="center">
-  <img src="docs/static/img/architecture.svg" alt="Tasks Bridge architecture: Obsidian connects through Tasks Bridge to Todoist, with TickTick, Microsoft To Do, and Google Tasks planned." width="960">
+  <img src="docs/docs/public/img/architecture.svg" alt="Tasks Bridge architecture: Obsidian connects through Tasks Bridge to Todoist, with TickTick, Microsoft To Do, and Google Tasks planned." width="960">
 </p>
 
 The red backend node and solid connection are available now. Purple-gray nodes and dashed connections are planned integrations. Every task service remains the system of record for its own data.
