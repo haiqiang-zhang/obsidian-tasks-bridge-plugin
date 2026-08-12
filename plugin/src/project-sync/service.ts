@@ -25,6 +25,12 @@ type MappingPlan = {
   projects: Project[];
 };
 
+type MappingPlans = {
+  activeConfig: ProjectSyncConfig;
+  plans: MappingPlan[];
+  unavailableMappings: ProjectSyncMapping[];
+};
+
 type PendingSnapshot = {
   mapping: ProjectSyncMapping;
   rootProjectId: string;
@@ -186,7 +192,7 @@ export class ProjectFolderSyncService {
 
     try {
       this.assertCurrent(generation);
-      const plans = this.makeMappingPlans(config);
+      const { activeConfig, plans, unavailableMappings } = this.makeMappingPlans(config);
       const pendingSnapshots: PendingSnapshot[] = [];
 
       for (const plan of plans) {
@@ -205,7 +211,9 @@ export class ProjectFolderSyncService {
       // Destination folders may change while Todoist history is loading. Re-run the complete
       // synchronous preflight before the first Vault mutation so a later mapping cannot turn a
       // multi-project run into a partial write.
-      this.vault.validateConfig(config);
+      if (plans.length > 0) {
+        this.vault.validateConfig(activeConfig);
+      }
       const syncedAt = new Date().toISOString();
       const snapshots = pendingSnapshots.map(
         ({ mapping, rootProjectId, projects, tasks, completionEvents }) => ({
@@ -214,20 +222,30 @@ export class ProjectFolderSyncService {
           snapshot: { rootProjectId, projects, tasks, syncedAt } satisfies ProjectSyncSnapshot,
         }),
       );
-      const mappingRoots = snapshots.flatMap(({ mapping, snapshot }) => [
-        {
-          mappingId: mapping.id,
-          rootProjectId: snapshot.rootProjectId,
-          folder: mapping.folder,
-        },
-        ...mapping.previousFolders.map((folder) => ({
-          mappingId: mapping.id,
-          rootProjectId: snapshot.rootProjectId,
-          folder,
-        })),
-      ]);
+      const activeMappingIds = new Set(snapshots.map(({ mapping }) => mapping.id));
+      const mappingRoots = config.mappings.flatMap((mapping) => {
+        const project = requireProject(mapping);
+        const active = activeMappingIds.has(mapping.id);
+        return [
+          {
+            mappingId: mapping.id,
+            rootProjectId: project.projectId,
+            folder: mapping.folder,
+            active,
+          },
+          ...mapping.previousFolders.map((folder) => ({
+            mappingId: mapping.id,
+            rootProjectId: project.projectId,
+            folder,
+            active,
+          })),
+        ];
+      });
       const scanToken = {};
       const result = emptyResult();
+      for (const mapping of unavailableMappings) {
+        result.pausedMappingIds.push(mapping.id);
+      }
       for (const { mapping, snapshot } of snapshots) {
         this.assertCurrent(generation);
         const mappingResult = await this.vault.reconcile(snapshot, mapping, {
@@ -254,14 +272,24 @@ export class ProjectFolderSyncService {
     }
   }
 
-  private makeMappingPlans(config: ProjectSyncConfig): MappingPlan[] {
-    validateMappingContents(config);
-    this.vault.validateConfig(config);
-
+  private makeMappingPlans(config: ProjectSyncConfig): MappingPlans {
+    validateMappingIdentities(config);
     const availableProjects = this.source.listProjects();
+    const availableProjectIds = new Set(availableProjects.map((project) => project.id));
     const owners = new Map<string, number>();
-    return config.mappings.map((mapping, mappingIndex) => {
+    const plans: MappingPlan[] = [];
+    const unavailableMappings: ProjectSyncMapping[] = [];
+    for (const [mappingIndex, mapping] of config.mappings.entries()) {
       const project = requireProject(mapping);
+      if (!availableProjectIds.has(project.projectId)) {
+        unavailableMappings.push(mapping);
+        continue;
+      }
+      if (normalizeConfiguredRoot(mapping.folder) === null) {
+        throw new Error(
+          `Project sync mapping ${mappingIndex + 1} requires a vault folder and Todoist project`,
+        );
+      }
       const projects = selectProjectHierarchy(
         availableProjects,
         project.projectId,
@@ -277,8 +305,19 @@ export class ProjectFolderSyncService {
         }
         owners.set(includedProject.id, mappingIndex);
       }
-      return { mapping, projects };
-    });
+      plans.push({ mapping, projects });
+    }
+
+    validateConfiguredRootSeparation(config);
+
+    const activeConfig: ProjectSyncConfig = {
+      enabled: config.enabled,
+      mappings: plans.map(({ mapping }) => mapping),
+    };
+    if (plans.length > 0) {
+      this.vault.validateConfig(activeConfig);
+    }
+    return { activeConfig, plans, unavailableMappings };
   }
 
   private async fetchMappingTasks(
@@ -482,24 +521,64 @@ const hasSameStatisticsScopes = (left: ProjectSyncConfig, right: ProjectSyncConf
   });
 };
 
-const validateMappingContents = (config: ProjectSyncConfig): void => {
+const validateMappingIdentities = (config: ProjectSyncConfig): void => {
   if (config.mappings.length === 0) {
     throw new Error("Project sync requires at least one project mapping");
   }
   const mappingIds = new Set<string>();
   config.mappings.forEach((mapping, index) => {
-    if (
-      mapping.id.trim() === "" ||
-      mappingIds.has(mapping.id) ||
-      mapping.folder.trim() === "" ||
-      mapping.project === null
-    ) {
+    if (mapping.id.trim() === "" || mappingIds.has(mapping.id) || mapping.project === null) {
       throw new Error(
         `Project sync mapping ${index + 1} requires a vault folder and Todoist project`,
       );
     }
     mappingIds.add(mapping.id);
   });
+};
+
+const validateConfiguredRootSeparation = (config: ProjectSyncConfig): void => {
+  const roots = config.mappings.flatMap((mapping) =>
+    [mapping.folder, ...mapping.previousFolders]
+      .map(normalizeConfiguredRoot)
+      .filter((path): path is string => path !== null)
+      .map((path) => ({ mappingId: mapping.id, path })),
+  );
+
+  for (let leftIndex = 0; leftIndex < roots.length; leftIndex++) {
+    const left = roots[leftIndex];
+    for (let rightIndex = leftIndex + 1; rightIndex < roots.length; rightIndex++) {
+      const right = roots[rightIndex];
+      if (
+        left.mappingId === right.mappingId ||
+        (left.path !== right.path &&
+          !left.path.startsWith(`${right.path}/`) &&
+          !right.path.startsWith(`${left.path}/`))
+      ) {
+        continue;
+      }
+      throw new Error(
+        `Project sync folders '${left.path}' and '${right.path}' overlap; paused mappings keep ownership of their Vault roots`,
+      );
+    }
+  }
+};
+
+const normalizeConfiguredRoot = (path: string): string | null => {
+  const normalized = path
+    .trim()
+    .normalize("NFC")
+    .split("\\")
+    .join("/")
+    .replace(/^\/+|\/+$/g, "")
+    .replace(/\/{2,}/g, "/")
+    .toLocaleLowerCase("en-US");
+  if (
+    normalized === "" ||
+    normalized.split("/").some((segment) => segment === "." || segment === "..")
+  ) {
+    return null;
+  }
+  return normalized;
 };
 
 const requireProject = (
@@ -535,6 +614,7 @@ const emptyResult = (): ProjectSyncResult => ({
   outOfScope: 0,
   deferred: 0,
   conflicts: [],
+  pausedMappingIds: [],
   settledMappingIds: [],
 });
 
@@ -547,6 +627,11 @@ const addResult = (target: ProjectSyncResult, source: ProjectSyncResult): void =
   target.outOfScope += source.outOfScope;
   target.deferred += source.deferred;
   target.conflicts.push(...source.conflicts);
+  for (const mappingId of source.pausedMappingIds) {
+    if (!target.pausedMappingIds.includes(mappingId)) {
+      target.pausedMappingIds.push(mappingId);
+    }
+  }
   for (const mappingId of source.settledMappingIds) {
     if (!target.settledMappingIds.includes(mappingId)) {
       target.settledMappingIds.push(mappingId);

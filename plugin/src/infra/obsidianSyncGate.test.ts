@@ -66,11 +66,6 @@ const makeSyncHarness = (
   };
 };
 
-const flushPromises = async (): Promise<void> => {
-  await Promise.resolve();
-  await Promise.resolve();
-};
-
 describe("observeSyncPhase", () => {
   it("treats Fully synced as idle even while the coarse engine status remains syncing", () => {
     const { instance } = makeSyncHarness({
@@ -132,7 +127,7 @@ describe("observeSyncPhase", () => {
     expect(observeSyncPhase(instance)).toBe("indeterminate");
   });
 
-  it("does not block indefinitely while Sync is only connecting", () => {
+  it("classifies a persistent connection attempt as preparing", () => {
     const { instance } = makeSyncHarness({ syncStatus: "Connecting to server" });
 
     expect(observeSyncPhase(instance)).toBe("preparing");
@@ -143,13 +138,13 @@ describe("observeSyncPhase", () => {
     "error",
     "disconnected",
     "uninitialized",
-  ])("does not block an inactive Sync engine with an empty inbound queue: %s", (coreStatus) => {
+  ])("classifies an inactive Sync engine with an empty inbound queue: %s", (coreStatus) => {
     const { instance } = makeSyncHarness({ coreStatus, syncStatus: "" });
 
     expect(observeSyncPhase(instance)).toBe("inactive");
   });
 
-  it("fails open when the private Sync surface is missing or only exposes coarse status", () => {
+  it("classifies a missing or coarse-only private Sync surface as unavailable", () => {
     expect(observeSyncPhase(undefined)).toBe("unavailable");
     expect(observeSyncPhase({ getStatus: () => "syncing" })).toBe("unavailable");
     expect(observeSyncPhase({ getStatus: () => "unknown", newServerFiles: undefined })).toBe(
@@ -197,20 +192,27 @@ describe("ObsidianSyncActivityGate", () => {
     expect(harness.instance.off).toHaveBeenCalledWith("status-change", expect.any(Function));
   });
 
-  it("does not defer a pure local upload", async () => {
-    const harness = makeSyncHarness({ syncStatus: "Uploading Tasks/Local.md" });
+  it("allows a pure local upload only after observing the startup Fully synced baseline", async () => {
+    const harness = makeSyncHarness({ syncStatus: "Fully synced" });
     const gate = new ObsidianSyncActivityGate(harness.app);
     gate.start(vi.fn());
 
-    await expect(gate.waitForSafePermit()).resolves.toEqual({ inboundGeneration: 0 });
+    const pending = gate.waitForSafePermit();
+    await vi.advanceTimersByTimeAsync(OBSIDIAN_SYNC_SETTLE_MS);
+    await expect(pending).resolves.toEqual({ generation: 0 });
+
+    harness.instance.syncStatus = "Uploading Tasks/Local.md";
+    harness.emitStatusChange();
+
+    await expect(gate.waitForSafePermit()).resolves.toEqual({ generation: 0 });
   });
 
-  it("does not defer a persistent connection attempt", async () => {
+  it("skips an automatic run during a persistent connection attempt", async () => {
     const harness = makeSyncHarness({ syncStatus: "Connecting to server" });
     const gate = new ObsidianSyncActivityGate(harness.app);
     gate.start(vi.fn());
 
-    await expect(gate.waitForSafePermit()).resolves.toEqual({ inboundGeneration: 0 });
+    await expect(gate.waitForSafePermit()).resolves.toBeNull();
     expect(vi.getTimerCount()).toBe(0);
   });
 
@@ -249,12 +251,56 @@ describe("ObsidianSyncActivityGate", () => {
         },
       },
     ],
-  ])("fails open for a %s private Sync API", async (_label, appShape) => {
+  ])("fails closed for a %s private Sync API", async (_label, appShape) => {
     const gate = new ObsidianSyncActivityGate(appShape as unknown as App);
     gate.start(vi.fn());
 
-    await expect(gate.waitForSafePermit()).resolves.toEqual({ inboundGeneration: 0 });
+    await expect(gate.waitForSafePermit()).resolves.toBeNull();
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("requires the first exact Fully synced state to remain stable after startup", async () => {
+    const harness = makeSyncHarness({ syncStatus: "Uploading Tasks/Local.md" });
+    const gate = new ObsidianSyncActivityGate(harness.app);
+    gate.start(vi.fn());
+    let permit: unknown;
+    void gate.waitForSafePermit().then((value) => {
+      permit = value;
+    });
+
+    await vi.advanceTimersByTimeAsync(250);
+    expect(permit).toBeUndefined();
+
+    harness.instance.syncStatus = "Fully synced";
+    harness.emitStatusChange();
+    await vi.advanceTimersByTimeAsync(OBSIDIAN_SYNC_SETTLE_MS - 1);
+    expect(permit).toBeUndefined();
+
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(permit).toEqual({ generation: 0 });
+  });
+
+  it("skips a startup run when stale Fully synced changes to Connecting during settling", async () => {
+    const harness = makeSyncHarness({ syncStatus: "Fully synced" });
+    const gate = new ObsidianSyncActivityGate(harness.app);
+    gate.start(vi.fn());
+    const pending = gate.waitForSafePermit();
+
+    await vi.advanceTimersByTimeAsync(OBSIDIAN_SYNC_SETTLE_MS - 1);
+    harness.instance.syncStatus = "Connecting to server";
+    harness.emitStatusChange();
+
+    await expect(pending).resolves.toBeNull();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("does not accept a coarse synced status as the startup baseline", async () => {
+    const harness = makeSyncHarness({ coreStatus: "synced", syncStatus: "" });
+    const gate = new ObsidianSyncActivityGate(harness.app);
+    gate.start(vi.fn());
+
+    await expect(gate.waitForSafePermit()).resolves.toBeNull();
   });
 
   it("waits through the complete incoming cycle and a short settle window", async () => {
@@ -285,31 +331,38 @@ describe("ObsidianSyncActivityGate", () => {
     expect(permit).toBeUndefined();
 
     await vi.advanceTimersByTimeAsync(1);
-    expect(permit).toEqual({ inboundGeneration: 1 });
+    expect(permit).toEqual({ generation: 0 });
   });
 
-  it("releases an indeterminate upload-only cycle as soon as its direction is known", async () => {
-    const harness = makeSyncHarness({ syncStatus: "Indexing..." });
+  it("requires a new stable Fully synced baseline after an indeterminate phase", async () => {
+    const harness = makeSyncHarness({ syncStatus: "Fully synced" });
     const gate = new ObsidianSyncActivityGate(harness.app);
     gate.start(vi.fn());
+    const initialPermit = gate.waitForSafePermit();
+    await vi.advanceTimersByTimeAsync(OBSIDIAN_SYNC_SETTLE_MS);
+    await expect(initialPermit).resolves.toEqual({ generation: 0 });
+    harness.instance.syncStatus = "Indexing...";
+    harness.emitStatusChange();
     let permit: unknown;
     void gate.waitForSafePermit().then((value) => {
       permit = value;
     });
 
-    harness.instance.syncStatus = "Uploading Tasks/Local.md";
+    harness.instance.syncStatus = "Fully synced";
     harness.emitStatusChange();
-    await flushPromises();
+    await vi.advanceTimersByTimeAsync(OBSIDIAN_SYNC_SETTLE_MS);
 
-    expect(permit).toEqual({ inboundGeneration: 0 });
+    expect(permit).toEqual({ generation: 1 });
   });
 
   it("polls the inbound queue while an automatic operation is active", async () => {
-    const harness = makeSyncHarness({ syncStatus: "Uploading Tasks/Local.md" });
+    const harness = makeSyncHarness({ syncStatus: "Fully synced" });
     const onInbound = vi.fn();
     const gate = new ObsidianSyncActivityGate(harness.app, { onInbound });
     gate.start(vi.fn());
-    const permit = await gate.waitForSafePermit();
+    const pendingPermit = gate.waitForSafePermit();
+    await vi.advanceTimersByTimeAsync(OBSIDIAN_SYNC_SETTLE_MS);
+    const permit = await pendingPermit;
     expect(permit).not.toBeNull();
     if (permit === null) {
       throw new Error("Expected an initial Sync permit");
@@ -332,11 +385,13 @@ describe("ObsidianSyncActivityGate", () => {
   });
 
   it("advances the inbound generation only once per incoming cycle", async () => {
-    const harness = makeSyncHarness({ syncStatus: "Uploading Tasks/Local.md" });
+    const harness = makeSyncHarness({ syncStatus: "Fully synced" });
     const onInbound = vi.fn();
     const gate = new ObsidianSyncActivityGate(harness.app, { onInbound });
     gate.start(vi.fn());
-    const firstPermit = await gate.waitForSafePermit();
+    const pendingFirstPermit = gate.waitForSafePermit();
+    await vi.advanceTimersByTimeAsync(OBSIDIAN_SYNC_SETTLE_MS);
+    const firstPermit = await pendingFirstPermit;
     if (firstPermit === null) {
       throw new Error("Expected the first Sync permit");
     }
@@ -366,6 +421,70 @@ describe("ObsidianSyncActivityGate", () => {
     expect(gate.isPermitCurrent(secondPermit)).toBe(false);
   });
 
+  it("resets convergence across disconnect and blocks the reconnect upload until Fully synced", async () => {
+    const harness = makeSyncHarness({ syncStatus: "Fully synced" });
+    const gate = new ObsidianSyncActivityGate(harness.app);
+    gate.start(vi.fn());
+    const pendingInitialPermit = gate.waitForSafePermit();
+    await vi.advanceTimersByTimeAsync(OBSIDIAN_SYNC_SETTLE_MS);
+    const initialPermit = await pendingInitialPermit;
+    expect(initialPermit).toEqual({ generation: 0 });
+
+    harness.setCoreStatus("disconnected");
+    harness.instance.syncStatus = "";
+    harness.emitStatusChange();
+    expect(gate.isPermitCurrent(initialPermit as { generation: number })).toBe(false);
+
+    harness.setCoreStatus("syncing");
+    harness.instance.syncStatus = "Uploading Tasks/Local.md";
+    harness.emitStatusChange();
+    let reconnectPermit: unknown;
+    void gate.waitForSafePermit().then((value) => {
+      reconnectPermit = value;
+    });
+    await vi.advanceTimersByTimeAsync(250);
+    expect(reconnectPermit).toBeUndefined();
+
+    harness.instance.newServerFiles = [{ path: "Tasks/Delayed remote.md" }];
+    harness.instance.syncStatus = "Downloading Tasks/Delayed remote.md";
+    harness.emitStatusChange();
+    harness.instance.newServerFiles = [];
+    harness.instance.syncStatus = "Fully synced";
+    harness.emitStatusChange();
+    await vi.advanceTimersByTimeAsync(OBSIDIAN_SYNC_SETTLE_MS);
+
+    expect(reconnectPermit).toEqual({ generation: 1 });
+  });
+
+  it("requires a fresh stable baseline when the private Sync instance is replaced", async () => {
+    const first = makeSyncHarness({ syncStatus: "Fully synced" });
+    let currentInstance: MutableSyncInstance = first.instance;
+    const app = {
+      internalPlugins: {
+        getEnabledPluginById: () => currentInstance,
+      },
+    } as unknown as App;
+    const gate = new ObsidianSyncActivityGate(app);
+    gate.start(vi.fn());
+    const firstPending = gate.waitForSafePermit();
+    await vi.advanceTimersByTimeAsync(OBSIDIAN_SYNC_SETTLE_MS);
+    const firstPermit = await firstPending;
+    expect(firstPermit).toEqual({ generation: 0 });
+
+    const replacement = makeSyncHarness({ syncStatus: "Fully synced" });
+    currentInstance = replacement.instance;
+    expect(gate.isPermitCurrent(firstPermit as { generation: number })).toBe(false);
+
+    let replacementPermit: unknown;
+    void gate.waitForSafePermit().then((value) => {
+      replacementPermit = value;
+    });
+    await vi.advanceTimersByTimeAsync(OBSIDIAN_SYNC_SETTLE_MS - 1);
+    expect(replacementPermit).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(replacementPermit).toEqual({ generation: 1 });
+  });
+
   it("cancels a deferred operation on dispose", async () => {
     const harness = makeSyncHarness({
       newServerFiles: [{ path: "Tasks/Remote.md" }],
@@ -382,9 +501,11 @@ describe("ObsidianSyncActivityGate", () => {
   });
 
   it("cancels a waiter whose owning plugin generation is no longer current", async () => {
-    const harness = makeSyncHarness({ syncStatus: "Indexing..." });
+    const harness = makeSyncHarness({ syncStatus: "Fully synced" });
     const gate = new ObsidianSyncActivityGate(harness.app);
     gate.start(vi.fn());
+    harness.instance.syncStatus = "Indexing...";
+    harness.emitStatusChange();
     let current = true;
     const pending = gate.waitForSafePermit(() => current);
 

@@ -37,6 +37,7 @@
 .todoist-bases-list-toolbar-summary {
   display: flex;
   min-width: 0;
+  flex: 1 1 auto;
   align-items: center;
   gap: var(--size-2-2);
   color: var(--text-muted);
@@ -500,114 +501,6 @@
   text-align: center;
 }
 
-.todoist-bases-root-picker {
-  position: relative;
-  min-width: 0;
-}
-
-.todoist-bases-root-picker-trigger {
-  display: flex;
-  max-width: min(440px, 45vw);
-  min-width: 0;
-  align-items: center;
-  gap: var(--size-2-2);
-  padding: var(--size-2-2) var(--size-4-2);
-  border: 1px solid transparent;
-  border-radius: var(--radius-s);
-  background: transparent;
-  box-shadow: none;
-  color: var(--text-normal);
-  font-size: var(--font-ui-small);
-
-  &:hover,
-  &:focus-visible,
-  &[aria-expanded="true"] {
-    border-color: var(--background-modifier-border-hover);
-    background: var(--background-modifier-hover);
-    box-shadow: none;
-  }
-}
-
-.todoist-bases-root-picker-label {
-  color: var(--text-muted);
-  font-size: var(--font-ui-smaller);
-  font-weight: var(--font-medium);
-}
-
-.todoist-bases-root-picker-value {
-  overflow: hidden;
-  min-width: 0;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.todoist-bases-root-picker-popover {
-  position: absolute;
-  z-index: var(--layer-menu);
-  top: calc(100% + var(--size-2-2));
-  inset-inline-start: 0;
-  width: min(360px, calc(100vw - var(--size-4-8)));
-  padding: var(--size-4-2);
-  border: 1px solid var(--background-modifier-border);
-  border-radius: var(--radius-m);
-  background: var(--background-primary);
-  box-shadow: var(--shadow-s);
-
-  .search-input-container,
-  input[type="search"] {
-    width: 100%;
-  }
-}
-
-.todoist-bases-root-options {
-  max-height: min(420px, 50vh);
-  margin-block-start: var(--size-4-2);
-  overflow-y: auto;
-  overscroll-behavior: contain;
-}
-
-.todoist-bases-root-option {
-  display: flex;
-  width: 100%;
-  min-width: 0;
-  align-items: center;
-  justify-content: flex-start;
-  gap: var(--size-4-2);
-  padding: var(--size-4-2);
-  padding-inline-start: calc(
-    var(--size-4-2) + var(--todoist-bases-depth) * var(--todoist-bases-indent)
-  );
-  border: 0;
-  border-radius: var(--radius-s);
-  background: transparent;
-  box-shadow: none;
-  color: var(--text-normal);
-  text-align: start;
-
-  &:hover,
-  &:focus-visible,
-  &[aria-current="true"] {
-    background: var(--background-modifier-hover);
-    box-shadow: none;
-  }
-
-  &[aria-current="true"] {
-    color: var(--text-accent);
-  }
-
-  span {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-}
-
-.todoist-bases-root-no-results {
-  padding: var(--size-4-4) var(--size-4-2);
-  color: var(--text-muted);
-  text-align: center;
-}
-
 .todoist-bases-list-notice {
   display: flex;
   align-items: center;
@@ -623,9 +516,6 @@
     min-width: 0;
   }
 
-  .mod-cta {
-    margin-inline-start: auto;
-  }
 }
 
 .todoist-bases-list-groups {
@@ -786,7 +676,7 @@
   display: flex;
   width: var(--size-4-6);
   min-height: var(--size-4-6);
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
 
   > .obsidian-icon {
@@ -795,17 +685,24 @@
   }
 }
 
-.todoist-bases-task-checkbox {
+.todoist-bases-task-action-wrap > input.todoist-bases-task-checkbox {
   appearance: none;
+  box-sizing: border-box;
   display: inline-flex;
-  width: 18px;
-  height: 18px;
-  min-width: 18px;
+  width: var(--checkbox-size);
+  height: var(--checkbox-size);
+  min-width: var(--checkbox-size);
+  min-height: var(--checkbox-size);
+  max-width: var(--checkbox-size);
+  max-height: var(--checkbox-size);
+  align-self: flex-start;
   align-items: center;
   justify-content: center;
+  aspect-ratio: 1;
+  margin: 1px 0 0;
   padding: 0;
   border: 1px solid var(--todoist-bases-checkbox);
-  border-radius: 50%;
+  border-radius: var(--checkbox-radius);
   background: var(--todoist-bases-checkbox-background);
   box-shadow: none;
   color: var(--checkbox-marker-color);
@@ -821,21 +718,9 @@
     background: var(--checkbox-color);
   }
 
-  &:checked::after {
-    color: var(--checkbox-marker-color);
-    content: "✓";
-    font-size: 12px;
-    font-weight: var(--font-bold);
-    line-height: 1;
-  }
-
   [data-loading="true"] & {
     color: transparent;
     opacity: 0;
-
-    &::after {
-      content: "";
-    }
   }
 
   &:disabled {
@@ -971,24 +856,8 @@
 }
 
 @media (max-width: 600px) {
-  .todoist-bases-list-toolbar {
-    flex-wrap: wrap;
-  }
-
-  .todoist-bases-root-picker {
-    flex: 1 1 0;
-  }
-
-  .todoist-bases-root-picker-trigger {
-    width: 100%;
-    max-width: none;
-  }
-
   .todoist-bases-list-toolbar-summary {
-    order: 3;
-    width: 100%;
     flex-wrap: wrap;
-    padding-inline: var(--size-4-2);
     white-space: normal;
   }
 }
@@ -1007,24 +876,8 @@
 }
 
 @container todoist-bases-list (max-width: 760px) {
-  .todoist-bases-list-toolbar {
-    flex-wrap: wrap;
-  }
-
-  .todoist-bases-root-picker {
-    flex: 1 1 0;
-  }
-
-  .todoist-bases-root-picker-trigger {
-    width: 100%;
-    max-width: none;
-  }
-
   .todoist-bases-list-toolbar-summary {
-    order: 3;
-    width: 100%;
     flex-wrap: wrap;
-    padding-inline: var(--size-4-2);
     white-space: normal;
   }
 
@@ -1115,20 +968,6 @@
 @media (pointer: coarse) {
   .todoist-bases-list {
     --todoist-bases-indent: var(--size-4-3);
-  }
-
-  .todoist-bases-list-toolbar {
-    flex-wrap: wrap;
-  }
-
-  .todoist-bases-root-picker {
-    flex: 1 1 100%;
-  }
-
-  .todoist-bases-root-picker-trigger {
-    width: 100%;
-    max-width: none;
-    min-height: 44px;
   }
 
   .todoist-bases-list-toolbar-actions .clickable-icon,

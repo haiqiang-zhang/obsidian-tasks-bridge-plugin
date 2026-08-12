@@ -428,7 +428,14 @@ export const validateProjectSyncMappings = (
     valid:
       projectMetadataReady &&
       mappings.length > 0 &&
-      issues.every((mappingIssues) => mappingIssues.length === 0),
+      issues.every((mappingIssues) => {
+        const paused = mappingIssues.includes("projectUnavailable");
+        return mappingIssues.every(
+          (issue) =>
+            issue === "projectUnavailable" ||
+            (paused && (issue === "folderRequired" || issue === "folderMissing")),
+        );
+      }),
   };
 };
 

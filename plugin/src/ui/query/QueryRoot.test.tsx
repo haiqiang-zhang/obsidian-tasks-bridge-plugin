@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MarkdownRenderChild } from "obsidian";
 import type React from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { type CompletedTasksProgress, QueryErrorKind, type SubscriptionResult } from "@/data";
 import { makeTask } from "@/factories/data";
@@ -139,6 +139,183 @@ const renderQuery = (plugin: TodoistPlugin, query = makeQuery({ filter: "today" 
 
   return render(<QueryRoot query={query} warnings={[]} />, { wrapper: Wrapper });
 };
+
+const deferred = () => {
+  let resolve!: () => void;
+  const promise = new Promise<void>((settle) => {
+    resolve = settle;
+  });
+  return { promise, resolve };
+};
+
+describe("QueryRoot auto-refresh cadence", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    useSettingsStore.setState(
+      makeSettings({ autoRefreshToggle: true, autoRefreshInterval: 30 }),
+      true,
+    );
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("waits a full interval after each refresh settles", async () => {
+    const opening = deferred();
+    const automatic = deferred();
+    const mock = makePlugin();
+    mock.refresh
+      .mockImplementationOnce(() => opening.promise)
+      .mockImplementationOnce(() => automatic.promise);
+
+    renderQuery(mock.plugin);
+    await act(async () => Promise.resolve());
+    expect(mock.refresh).toHaveBeenCalledOnce();
+
+    await act(async () => vi.advanceTimersByTimeAsync(60_000));
+    expect(mock.refresh).toHaveBeenCalledOnce();
+
+    await act(async () => opening.resolve());
+    await act(async () => vi.advanceTimersByTimeAsync(29_999));
+    expect(mock.refresh).toHaveBeenCalledOnce();
+
+    await act(async () => vi.advanceTimersByTimeAsync(1));
+    expect(mock.refresh).toHaveBeenCalledTimes(2);
+
+    await act(async () => vi.advanceTimersByTimeAsync(60_000));
+    expect(mock.refresh).toHaveBeenCalledTimes(2);
+
+    await act(async () => automatic.resolve());
+    await act(async () => vi.advanceTimersByTimeAsync(30_000));
+    expect(mock.refresh).toHaveBeenCalledTimes(3);
+  });
+
+  it("waits a full interval after a failed refresh settles", async () => {
+    const failed = deferred();
+    const mock = makePlugin();
+    mock.refresh
+      .mockImplementationOnce(() => failed.promise.then(() => Promise.reject(new Error("offline"))))
+      .mockResolvedValue(undefined);
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    renderQuery(mock.plugin);
+    await act(async () => Promise.resolve());
+    await act(async () => vi.advanceTimersByTimeAsync(60_000));
+    expect(mock.refresh).toHaveBeenCalledOnce();
+
+    await act(async () => failed.resolve());
+    expect(error).toHaveBeenCalledWith("Failed to refresh Todoist query:", expect.any(Error));
+    await act(async () => vi.advanceTimersByTimeAsync(29_999));
+    expect(mock.refresh).toHaveBeenCalledOnce();
+
+    await act(async () => vi.advanceTimersByTimeAsync(1));
+    expect(mock.refresh).toHaveBeenCalledTimes(2);
+    error.mockRestore();
+  });
+
+  it("manual refresh resets the single automatic cadence", async () => {
+    const manual = deferred();
+    const mock = makePlugin();
+    mock.refresh.mockResolvedValueOnce(undefined).mockImplementationOnce(() => manual.promise);
+
+    renderQuery(mock.plugin);
+    await act(async () => Promise.resolve());
+    expect(mock.refresh).toHaveBeenCalledOnce();
+
+    await act(async () => vi.advanceTimersByTimeAsync(20_000));
+    fireEvent.click(screen.getByRole("button", { name: "Refresh tasks" }));
+    await act(async () => Promise.resolve());
+    expect(mock.refresh).toHaveBeenCalledTimes(2);
+
+    await act(async () => vi.advanceTimersByTimeAsync(30_000));
+    expect(mock.refresh).toHaveBeenCalledTimes(2);
+
+    await act(async () => manual.resolve());
+    await act(async () => vi.advanceTimersByTimeAsync(29_999));
+    expect(mock.refresh).toHaveBeenCalledTimes(2);
+
+    await act(async () => vi.advanceTimersByTimeAsync(1));
+    expect(mock.refresh).toHaveBeenCalledTimes(3);
+  });
+
+  it("applies an interval change only after the active refresh settles", async () => {
+    const opening = deferred();
+    const mock = makePlugin();
+    mock.refresh.mockImplementationOnce(() => opening.promise);
+
+    renderQuery(mock.plugin);
+    await act(async () => Promise.resolve());
+    expect(mock.refresh).toHaveBeenCalledOnce();
+
+    act(() => {
+      useSettingsStore.setState({ autoRefreshInterval: 5 });
+    });
+    await act(async () => vi.advanceTimersByTimeAsync(60_000));
+    expect(mock.refresh).toHaveBeenCalledOnce();
+
+    await act(async () => opening.resolve());
+    await act(async () => vi.advanceTimersByTimeAsync(4999));
+    expect(mock.refresh).toHaveBeenCalledOnce();
+    await act(async () => vi.advanceTimersByTimeAsync(1));
+    expect(mock.refresh).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not let a stale refresh revive the previous query cadence", async () => {
+    const previousQueryRefresh = deferred();
+    const mock = makePlugin();
+    mock.refresh
+      .mockImplementationOnce(() => previousQueryRefresh.promise)
+      .mockResolvedValue(undefined);
+
+    const view = renderQuery(mock.plugin, makeQuery({ filter: "today" }));
+    await act(async () => Promise.resolve());
+    expect(mock.refresh).toHaveBeenCalledOnce();
+
+    view.rerender(<QueryRoot query={makeQuery({ filter: "tomorrow" })} warnings={[]} />);
+    await act(async () => Promise.resolve());
+    expect(mock.refresh).toHaveBeenCalledTimes(2);
+
+    await act(async () => vi.advanceTimersByTimeAsync(20_000));
+    await act(async () => previousQueryRefresh.resolve());
+    await act(async () => vi.advanceTimersByTimeAsync(9999));
+    expect(mock.refresh).toHaveBeenCalledTimes(2);
+
+    await act(async () => vi.advanceTimersByTimeAsync(1));
+    expect(mock.refresh).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not revive auto-refresh after it is disabled or unmounted", async () => {
+    const disabledOpening = deferred();
+    const disabledMock = makePlugin();
+    disabledMock.refresh.mockImplementationOnce(() => disabledOpening.promise);
+    const disabledView = renderQuery(disabledMock.plugin);
+    await act(async () => Promise.resolve());
+
+    act(() => {
+      useSettingsStore.setState({ autoRefreshToggle: false });
+    });
+    await act(async () => disabledOpening.resolve());
+    await act(async () => vi.advanceTimersByTimeAsync(60_000));
+    expect(disabledMock.refresh).toHaveBeenCalledOnce();
+    disabledView.unmount();
+
+    useSettingsStore.setState(
+      makeSettings({ autoRefreshToggle: true, autoRefreshInterval: 30 }),
+      true,
+    );
+    const unmountedOpening = deferred();
+    const unmountedMock = makePlugin();
+    unmountedMock.refresh.mockImplementationOnce(() => unmountedOpening.promise);
+    const unmountedView = renderQuery(unmountedMock.plugin);
+    await act(async () => Promise.resolve());
+
+    unmountedView.unmount();
+    await act(async () => unmountedOpening.resolve());
+    await act(async () => vi.advanceTimersByTimeAsync(60_000));
+    expect(unmountedMock.refresh).toHaveBeenCalledOnce();
+  });
+});
 
 describe("QueryRoot cache-first rendering", () => {
   beforeEach(() => {

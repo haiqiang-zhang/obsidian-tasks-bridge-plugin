@@ -46,6 +46,12 @@ export const MANAGED_FRONTMATTER_KEYS = [
 
 export type ManagedFrontmatter = Record<string, unknown>;
 
+/** The parts of a projected task note that belong to the user, not Tasks Bridge. */
+export type UserOwnedTaskDocument = {
+  frontmatter: ManagedFrontmatter;
+  body: string;
+};
+
 export type ManagedNoteIdentity = {
   taskId: string;
   mappingId?: string;
@@ -211,6 +217,96 @@ const findAll = (value: string, needle: string): number[] => {
   return offsets;
 };
 
+const managedFrontmatterKeys = new Set<string>(MANAGED_FRONTMATTER_KEYS);
+
+const normalizeUserBody = (value: string): string =>
+  value
+    .replace(/\r\n?/gu, "\n")
+    .replace(/^(?:[\t ]*\n)+/gu, "")
+    .replace(/(?:\n[\t ]*)+$/gu, "");
+
+export const isRecoverableManagedFrontmatterResidue = (value: string): boolean => {
+  const normalized = value.replace(/\r\n?/gu, "\n").trim();
+  const match = normalized.match(/^'?([a-z0-9_]+):[^\n]*\n---$/u);
+  return match !== null && managedFrontmatterKeys.has(match[1]);
+};
+
+/**
+ * Read the user-owned frontmatter and body around a valid managed task region.
+ *
+ * Older concurrent Obsidian Sync writes could leave one duplicated managed YAML scalar and a
+ * second YAML boundary immediately before the managed marker. That exact, generated-only residue
+ * is ignored so a clean same-ID projection can safely repair it; arbitrary surrounding text is
+ * always treated as user content.
+ */
+export const readUserOwnedTaskDocument = (
+  content: string,
+  frontmatter: ManagedFrontmatter,
+  contentStart: number,
+): UserOwnedTaskDocument => {
+  const starts = findAll(content, MANAGED_BODY_START);
+  const ends = findAll(content, MANAGED_BODY_END);
+  if (
+    starts.length !== 1 ||
+    ends.length !== 1 ||
+    starts[0] < contentStart ||
+    starts[0] >= ends[0]
+  ) {
+    throw new ManagedBodyConflictError("The managed Todoist body markers are malformed");
+  }
+
+  const managedEnd = ends[0] + MANAGED_BODY_END.length;
+  const rawPrefix = content.slice(contentStart, starts[0]);
+  const prefix = isRecoverableManagedFrontmatterResidue(rawPrefix) ? "" : rawPrefix;
+  const suffix = content.slice(managedEnd);
+  const userSegments = [normalizeUserBody(prefix), normalizeUserBody(suffix)].filter(
+    (segment) => segment !== "",
+  );
+  const userFrontmatter = Object.fromEntries(
+    Object.entries(frontmatter).filter(([key]) => !managedFrontmatterKeys.has(key)),
+  );
+
+  return {
+    frontmatter: userFrontmatter,
+    body: userSegments.join("\n\n"),
+  };
+};
+
+const stableValue = (value: unknown): unknown => {
+  if (Array.isArray(value)) {
+    return value.map(stableValue);
+  }
+  if (typeof value !== "object" || value === null) {
+    return value;
+  }
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left.localeCompare(right, "en"))
+      .map(([key, entry]) => [key, stableValue(entry)]),
+  );
+};
+
+export const isSameUserOwnedTaskDocument = (
+  left: UserOwnedTaskDocument,
+  right: UserOwnedTaskDocument,
+): boolean => JSON.stringify(stableValue(left)) === JSON.stringify(stableValue(right));
+
+export const isEmptyUserOwnedTaskDocument = (document: UserOwnedTaskDocument): boolean =>
+  Object.keys(document.frontmatter).length === 0 && document.body === "";
+
+/** Build a fresh projection while retaining only the explicitly user-owned portions. */
+export const renderTaskDocumentWithUserContent = (
+  managedFrontmatter: ManagedFrontmatter,
+  managedBody: string,
+  userDocument: UserOwnedTaskDocument,
+): string => {
+  const content = renderNewTaskDocument(
+    { ...userDocument.frontmatter, ...managedFrontmatter },
+    managedBody,
+  );
+  return userDocument.body === "" ? content : `${content}\n${userDocument.body}\n`;
+};
+
 export const renderNewTaskDocument = (
   frontmatter: ManagedFrontmatter,
   managedBody: string,
@@ -243,7 +339,10 @@ export const replaceManagedTaskDocument = (
 
   const yaml = dumpYaml(nextFrontmatter, { lineWidth: -1, noRefs: true });
   return {
-    content: `---\n${yaml}---${bodyUpdate.content.slice(contentStart)}`,
+    // Obsidian's FrontMatterInfo.contentStart points after the line break following the closing
+    // delimiter. Restore that separator explicitly instead of accidentally joining `---` to the
+    // managed marker and making the note invisible to getFrontMatterInfo() on the next scan.
+    content: `---\n${yaml}---\n${bodyUpdate.content.slice(contentStart)}`,
     changed: true,
   };
 };

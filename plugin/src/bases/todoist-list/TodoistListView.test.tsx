@@ -1,7 +1,8 @@
-import type { BasesPropertyId, QueryController } from "obsidian";
+import type { BasesPropertyId, BasesViewConfig, QueryController, ViewOption } from "obsidian";
 import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { makeProject } from "@/factories/data";
 import type { ProjectSyncStatisticsSnapshot, ProjectSyncStatus } from "@/project-sync";
 
 import type { TodoistListProps } from "./TodoistList";
@@ -54,7 +55,12 @@ const emptyModel = (): TodoistListModel => ({
   projects: [],
   counts: { active: 0, completed: 0, unavailable: 0 },
   taskCount: 0,
-  diagnostics: { ignoredNonManaged: 0, ignoredInvalid: 0, hierarchyWarnings: 0 },
+  diagnostics: {
+    ignoredNonManaged: 0,
+    ignoredDuplicateTaskNotes: 0,
+    ignoredInvalid: 0,
+    hierarchyWarnings: 0,
+  },
 });
 
 const actions = (): TodoistListActions => ({
@@ -65,6 +71,8 @@ const actions = (): TodoistListActions => ({
 });
 
 const projectStatistics = (): TodoistListProjectStatisticsSource => ({
+  getConfig: vi.fn(() => ({ enabled: true, mappings: [] })),
+  getProjects: vi.fn(() => []),
   getSnapshot: vi.fn(() => null),
   getStatus: vi.fn((): ProjectSyncStatus => ({ state: "idle" })),
   isConfigured: vi.fn(() => true),
@@ -81,6 +89,8 @@ const observableProjectStatistics = (
     listener = undefined;
   });
   const source: TodoistListProjectStatisticsSource = {
+    getConfig: vi.fn(() => ({ enabled: true, mappings: [] })),
+    getProjects: vi.fn(() => []),
     getSnapshot: vi.fn(() => snapshot),
     getStatus: vi.fn(() => status),
     isConfigured: vi.fn(() => true),
@@ -107,6 +117,7 @@ const observableProjectStatistics = (
 const makeController = (
   projectOverviewCollapsed = false,
   completionHeatmapRange: unknown = "last-3-months",
+  rootProjectId?: string,
 ) => {
   const groupedData = [{ entries: [], hasKey: () => false }];
   const config = {
@@ -122,6 +133,9 @@ const makeController = (
       }
       if (key === "tasksCompletionHeatmapRange") {
         return completionHeatmapRange;
+      }
+      if (key === "todoistRootProjectId") {
+        return rootProjectId;
       }
       return undefined;
     }),
@@ -159,13 +173,128 @@ describe("TasksListView", () => {
     expect(TASKS_LIST_VIEW_NAME).toBe("Tasks List");
     expect(registration).toMatchObject({ name: "Tasks List", icon: "lucide-list-tree" });
     expect(registration.options?.()).toEqual([
-      expect.objectContaining({ key: "todoistDensity", displayName: "Density" }),
-      expect.objectContaining({
-        key: "todoistShowDescriptions",
-        displayName: "Show descriptions",
-      }),
-      expect.objectContaining({ key: "todoistShowSections", displayName: "Show sections" }),
+      {
+        type: "group",
+        displayName: "Project scope",
+        items: [
+          expect.objectContaining({
+            type: "dropdown",
+            key: "todoistRootProjectId",
+            displayName: "Root project",
+            options: {
+              __tasks_bridge_all_synchronized_projects__: "All synchronized projects",
+            },
+          }),
+        ],
+      },
+      {
+        type: "group",
+        displayName: "Appearance",
+        items: [
+          expect.objectContaining({ key: "todoistDensity", displayName: "Density" }),
+          expect.objectContaining({
+            key: "todoistShowDescriptions",
+            displayName: "Show descriptions",
+          }),
+          expect.objectContaining({ key: "todoistShowSections", displayName: "Show sections" }),
+        ],
+      },
     ]);
+  });
+
+  it("builds stable root options with full hierarchy labels from the last snapshot", () => {
+    const statistics = projectStatistics();
+    vi.mocked(statistics.getSnapshot).mockReturnValue({
+      syncedAt: "2026-08-12T00:00:00.000Z",
+      scopes: [
+        {
+          mappingId: "mapping",
+          rootProjectId: "root",
+          includeSubprojects: true,
+          projects: [
+            {
+              id: "root",
+              parentId: null,
+              name: "Work",
+              childOrder: 0,
+              directCounts: { active: 1, completed: 0 },
+              directCompletionEvents: [],
+            },
+            {
+              id: "child",
+              parentId: "root",
+              name: "Planning",
+              childOrder: 0,
+              directCounts: { active: 1, completed: 1 },
+              directCompletionEvents: [],
+            },
+          ],
+        },
+      ],
+    });
+
+    const registration = createTasksListViewRegistration(actions(), statistics);
+    const options = registration.options?.() ?? [];
+    const rootDropdown = (options[0] as { items: ViewOption[] }).items[0] as {
+      options: Record<string, string>;
+    };
+
+    expect(rootDropdown.options).toEqual({
+      __tasks_bridge_all_synchronized_projects__: "All synchronized projects",
+      root: "Work",
+      child: "Work / Planning",
+    });
+  });
+
+  it("falls back to configured live hierarchies before the first statistics snapshot", () => {
+    const statistics = projectStatistics();
+    const root = makeProject("root", { name: "Work", childOrder: 0 });
+    const child = makeProject("child", {
+      name: "Planning",
+      parentId: root.id,
+      childOrder: 0,
+    });
+    const unrelated = makeProject("other", { name: "Personal", childOrder: 1 });
+    vi.mocked(statistics.getProjects).mockReturnValue([unrelated, child, root]);
+    vi.mocked(statistics.getConfig).mockReturnValue({
+      enabled: true,
+      mappings: [
+        {
+          id: "mapping",
+          project: { projectId: root.id, projectName: root.name },
+          folder: "Tasks",
+          includeSubprojects: true,
+          previousFolders: [],
+        },
+      ],
+    });
+
+    const registration = createTasksListViewRegistration(actions(), statistics);
+    const options = registration.options?.() ?? [];
+    const rootDropdown = (options[0] as { items: ViewOption[] }).items[0] as {
+      options: Record<string, string>;
+    };
+
+    expect(rootDropdown.options).toEqual({
+      __tasks_bridge_all_synchronized_projects__: "All synchronized projects",
+      root: "Work",
+      child: "Work / Planning",
+    });
+  });
+
+  it("keeps an unavailable saved project visible when Obsidian supplies the latest config", () => {
+    const registration = createTasksListViewRegistration(actions(), projectStatistics());
+    const optionsCallback = registration.options as unknown as (
+      config?: BasesViewConfig,
+    ) => ViewOption[];
+    const options = optionsCallback({
+      get: vi.fn((key: string) => (key === "todoistRootProjectId" ? "missing" : undefined)),
+    } as unknown as BasesViewConfig);
+    const rootDropdown = (options[0] as { items: ViewOption[] }).items[0] as {
+      options: Record<string, string>;
+    };
+
+    expect(rootDropdown.options.missing).toBe("Unavailable project (missing)");
   });
 
   it("consumes grouped Base data and persists its root through the view config", async () => {
@@ -192,8 +321,6 @@ describe("TasksListView", () => {
     expect(element.props.projectSyncConfigured).toBe(true);
     expect(element.props.projectSyncStatus).toEqual({ state: "idle" });
 
-    element.props.onRootProjectChange("child-project");
-    expect(config.set).toHaveBeenCalledWith("todoistRootProjectId", "child-project");
     element.props.onProjectOverviewCollapsedChange(true);
     expect(config.set).toHaveBeenCalledWith("tasksProjectOverviewCollapsed", true);
     element.props.onCompletionHeatmapRangeChange("year:2025");
@@ -218,6 +345,26 @@ describe("TasksListView", () => {
     view.onunload();
     expect(runtime.unmount).toHaveBeenCalledOnce();
     expect(parentEl).toBeEmptyDOMElement();
+  });
+
+  it("maps the native all-projects sentinel back to a null list scope", async () => {
+    const { controller } = makeController(
+      false,
+      "last-year",
+      "__tasks_bridge_all_synchronized_projects__",
+    );
+    const parentEl = document.createElement("div");
+    const view = createTasksListViewRegistration(actions(), projectStatistics()).factory(
+      controller,
+      parentEl,
+    ) as TasksListView;
+
+    view.onDataUpdated();
+    await Promise.resolve();
+
+    const element = runtime.render.mock.calls[0]?.[0] as ReactElement<TodoistListProps>;
+    expect(element.props.rootProjectId).toBeNull();
+    view.onunload();
   });
 
   it("rerenders a data-ready view with the latest statistics and unsubscribes on unload", async () => {
@@ -260,6 +407,7 @@ describe("TasksListView", () => {
         outOfScope: 0,
         deferred: 0,
         conflicts: [],
+        pausedMappingIds: [],
         settledMappingIds: [],
       },
     });

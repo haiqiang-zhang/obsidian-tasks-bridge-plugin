@@ -58,8 +58,10 @@ export default class TodoistPlugin extends Plugin {
   private apiTokenUpdateQueue: Promise<void> = Promise.resolve();
   private apiTokenGeneration = 0;
   private projectSyncConfigGeneration = 0;
-  private autoRefreshIntervalId: number | undefined;
+  private autoRefreshTimeoutId: number | undefined;
+  private autoRefreshScheduleGeneration = 0;
   private scheduledSyncInFlight: Promise<void> | undefined;
+  private manualProjectSyncInFlightCount = 0;
   private readonly projectSyncActivity = new ProjectSyncActivityTracker();
   private readonly obsidianSyncGate: ObsidianSyncActivityGate;
   private disposed = false;
@@ -174,6 +176,8 @@ export default class TodoistPlugin extends Plugin {
 
   private makeTodoistListProjectStatisticsSource(): TodoistListProjectStatisticsSource {
     return {
+      getConfig: () => this.services.projectSync.getConfig(),
+      getProjects: () => this.services.projectSync.listProjects(),
       getSnapshot: () => this.services.projectSync.getStatisticsSnapshot(),
       getStatus: () => this.services.projectSync.getStatus(),
       isConfigured: () => this.services.projectSync.getConfig().mappings.length > 0,
@@ -308,6 +312,20 @@ export default class TodoistPlugin extends Plugin {
   }
 
   async syncProjectFolderNow(): Promise<ProjectSyncResult | null> {
+    // A manual Project sync refreshes the same shared Todoist/Project data as the global
+    // scheduler. Treat it as a cadence boundary so an old timeout cannot fire immediately after
+    // the user-requested refresh completes.
+    this.manualProjectSyncInFlightCount++;
+    this.clearAutoRefreshTimer();
+    try {
+      return await this.performManualProjectSync();
+    } finally {
+      this.manualProjectSyncInFlightCount--;
+      this.scheduleNextAutoRefresh(this.autoRefreshScheduleGeneration);
+    }
+  }
+
+  private async performManualProjectSync(): Promise<ProjectSyncResult | null> {
     const generation = this.captureAsyncGeneration();
     if (!this.isAsyncGenerationCurrent(generation)) {
       return null;
@@ -528,45 +546,35 @@ export default class TodoistPlugin extends Plugin {
         return;
       }
 
-      while (
-        this.isAsyncGenerationCurrent(generation) &&
-        this.isAutoRefreshEnabled() &&
-        useSettingsStore.getState().projectSyncEnabled
-      ) {
-        const permit = await this.obsidianSyncGate.waitForSafePermit(
-          () =>
-            this.isAsyncGenerationCurrent(generation) &&
-            this.isAutoRefreshEnabled() &&
-            useSettingsStore.getState().projectSyncEnabled,
-        );
-        if (permit === null) {
-          return;
-        }
-
-        const result = await this.obsidianSyncGate.monitor(async () => {
-          if (!this.obsidianSyncGate.isPermitCurrent(permit)) {
-            return null;
-          }
-          return await this.services.projectSync.sync();
-        });
-        if (
-          !this.isAsyncGenerationCurrent(generation) ||
-          !this.isAutoRefreshEnabled() ||
-          !useSettingsStore.getState().projectSyncEnabled
-        ) {
-          return;
-        }
-        if (!this.obsidianSyncGate.isPermitCurrent(permit)) {
-          // Incoming Sync invalidated this projection. The same scheduled promise remains pending
-          // and resumes as soon as the complete incoming cycle and settle window finish.
-          continue;
-        }
-        if (result === null) {
-          return;
-        }
-        this.reportBackgroundProjectSyncConflicts(result, "Scheduled");
+      const permit = await this.obsidianSyncGate.waitForSafePermit(
+        () =>
+          this.isAsyncGenerationCurrent(generation) &&
+          this.isAutoRefreshEnabled() &&
+          useSettingsStore.getState().projectSyncEnabled,
+      );
+      if (permit === null) {
         return;
       }
+
+      const result = await this.obsidianSyncGate.monitor(async () => {
+        if (!this.obsidianSyncGate.isPermitCurrent(permit)) {
+          return null;
+        }
+        return await this.services.projectSync.sync();
+      });
+      if (
+        !this.isAsyncGenerationCurrent(generation) ||
+        !this.isAutoRefreshEnabled() ||
+        !useSettingsStore.getState().projectSyncEnabled ||
+        !this.obsidianSyncGate.isPermitCurrent(permit) ||
+        result === null
+      ) {
+        // Deferral or invalidation ends this cycle. The one-shot scheduler starts the complete
+        // interval only after this promise settles, so cancellation never causes an immediate
+        // retry loop.
+        return;
+      }
+      this.reportBackgroundProjectSyncConflicts(result, "Scheduled");
     } catch (error: unknown) {
       if (!this.isAsyncGenerationCurrent(generation)) {
         return;
@@ -581,22 +589,68 @@ export default class TodoistPlugin extends Plugin {
       return;
     }
 
-    const interval = useSettingsStore.getState().autoRefreshInterval;
-    const intervalId = window.setInterval(() => {
-      if (this.isAutoRefreshEnabled()) {
-        void this.runScheduledSync();
-      }
-    }, secondsToMillis(interval));
-    this.autoRefreshIntervalId = intervalId;
-    this.registerInterval(intervalId);
+    this.scheduleNextAutoRefresh(this.autoRefreshScheduleGeneration);
   }
 
   private clearAutoRefreshSchedule(): void {
-    if (this.autoRefreshIntervalId === undefined) {
+    // Invalidating the generation also prevents an older in-flight refresh from resurrecting
+    // its timer after Auto-refresh is disabled, reconfigured, or the plugin is unloaded.
+    this.autoRefreshScheduleGeneration++;
+    this.clearAutoRefreshTimer();
+  }
+
+  private clearAutoRefreshTimer(): void {
+    if (this.autoRefreshTimeoutId === undefined) {
       return;
     }
-    window.clearInterval(this.autoRefreshIntervalId);
-    this.autoRefreshIntervalId = undefined;
+    window.clearTimeout(this.autoRefreshTimeoutId);
+    this.autoRefreshTimeoutId = undefined;
+  }
+
+  private scheduleNextAutoRefresh(generation: number): void {
+    if (!this.isAutoRefreshScheduleCurrent(generation)) {
+      return;
+    }
+
+    // Every overlapping manual Project sync clears the old timeout. The last one to settle starts
+    // one new complete interval, while an automatic cycle that is also active remains the other
+    // boundary below.
+    if (this.manualProjectSyncInFlightCount > 0) {
+      return;
+    }
+
+    const inFlight = this.scheduledSyncInFlight;
+    if (inFlight !== undefined) {
+      const scheduleAfterSettlement = () => this.scheduleNextAutoRefresh(generation);
+      // A settings change can replace the schedule while a refresh is already running. Wait for
+      // that whole refresh (including an Obsidian Sync deferral) before starting the new gap.
+      void inFlight.then(scheduleAfterSettlement, scheduleAfterSettlement);
+      return;
+    }
+
+    if (this.autoRefreshTimeoutId !== undefined) {
+      return;
+    }
+
+    const interval = useSettingsStore.getState().autoRefreshInterval;
+    this.autoRefreshTimeoutId = window.setTimeout(() => {
+      this.autoRefreshTimeoutId = undefined;
+      if (!this.isAutoRefreshScheduleCurrent(generation)) {
+        return;
+      }
+
+      const scheduled = this.runScheduledSync();
+      const scheduleAfterSettlement = () => this.scheduleNextAutoRefresh(generation);
+      void scheduled.then(scheduleAfterSettlement, scheduleAfterSettlement);
+    }, secondsToMillis(interval));
+  }
+
+  private isAutoRefreshScheduleCurrent(generation: number): boolean {
+    return (
+      !this.disposed &&
+      generation === this.autoRefreshScheduleGeneration &&
+      this.isAutoRefreshEnabled()
+    );
   }
 
   private isAutoRefreshEnabled(): boolean {

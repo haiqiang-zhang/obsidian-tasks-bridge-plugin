@@ -43,6 +43,44 @@ describe("validateProjectSyncMappings", () => {
     expect(result.issues[1]).toEqual(["projectUnavailable", "folderMissing"]);
   });
 
+  it("treats an unavailable account-specific project as a paused warning, not invalid config", () => {
+    const result = validateProjectSyncMappings(
+      [mapping("old-account-project", "Todoist/Old")],
+      [makeProject("current-account-project")],
+      ["Todoist/Old"],
+    );
+
+    expect(result).toEqual({ issues: [["projectUnavailable"]], valid: true });
+  });
+
+  it.each([
+    ["a missing folder", "Todoist/Old", ["projectUnavailable", "folderMissing"]],
+    ["an empty folder", "", ["projectUnavailable", "folderRequired"]],
+  ])("does not let a paused mapping with %s disable an active mapping", (_label, folder, issues) => {
+    const current = makeProject("current-account-project");
+    const result = validateProjectSyncMappings(
+      [mapping("old-account-project", folder), mapping(current.id, "Todoist/Current")],
+      [current],
+      ["Todoist/Current"],
+    );
+
+    expect(result.valid).toBe(true);
+    expect(result.issues).toEqual([issues, []]);
+  });
+
+  it("still rejects a paused mapping whose protected root overlaps an active mapping", () => {
+    const current = makeProject("current-account-project");
+    const result = validateProjectSyncMappings(
+      [mapping("old-account-project", "Todoist/Work"), mapping(current.id, "Todoist/Work/New")],
+      [current],
+      ["Todoist/Work", "Todoist/Work/New"],
+    );
+
+    expect(result.valid).toBe(false);
+    expect(result.issues[0]).toEqual(["projectUnavailable", "folderOverlap"]);
+    expect(result.issues[1]).toEqual(["folderOverlap"]);
+  });
+
   it("rejects duplicate Todoist projects and overlapping Vault folders", () => {
     const project = makeProject("work");
     const result = validateProjectSyncMappings(

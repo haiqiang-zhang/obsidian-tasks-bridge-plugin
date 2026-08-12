@@ -113,7 +113,7 @@ describe("project task documents", () => {
 
   it("updates frontmatter and the managed body as one document value", () => {
     const content = `---\ntodoist_task_id: task-1\ntodoist_content: Old\nuser_property: keep me\n---\n${MANAGED_BODY_START}\nold\n${MANAGED_BODY_END}\n\nUser notes`;
-    const contentStart = content.indexOf("\n---", 4) + 4;
+    const contentStart = content.indexOf("\n---\n", 4) + 5;
     const replacement = `${MANAGED_BODY_START}\nnew\n${MANAGED_BODY_END}`;
 
     const result = replaceManagedTaskDocument(
@@ -131,6 +131,7 @@ describe("project task documents", () => {
     expect(result.changed).toBe(true);
     expect(result.content).toContain("todoist_content: New");
     expect(result.content).toContain("user_property: keep me");
+    expect(result.content).toContain(`\n---\n${replacement}`);
     expect(result.content).toContain(replacement);
     expect(result.content).toContain("User notes");
   });

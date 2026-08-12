@@ -10,14 +10,20 @@ import {
 } from "obsidian";
 
 import {
+  isRecoverableManagedFrontmatterResidue,
+  isSameUserOwnedTaskDocument,
+  MANAGED_BODY_START,
   ManagedBodyConflictError,
   type ManagedFrontmatter,
   type ManagedNoteIdentity,
   makeManagedBody,
   makeTaskFrontmatter,
   readManagedNoteIdentity,
+  readUserOwnedTaskDocument,
   renderNewTaskDocument,
+  renderTaskDocumentWithUserContent,
   replaceManagedTaskDocument,
+  type UserOwnedTaskDocument,
 } from "./document";
 import { projectHierarchyPath } from "./hierarchy";
 import {
@@ -53,6 +59,7 @@ type ResolvedMappingRoot = {
   mappingId: string;
   rootProjectId: string;
   path: string;
+  active: boolean;
 };
 
 type ResolvedFilePath = {
@@ -83,6 +90,21 @@ type LiveManagedNote = {
   identity: ManagedNoteIdentity;
 };
 
+type ManagedFrontMatterInfo = {
+  exists: boolean;
+  frontmatter: string;
+  contentStart: number;
+};
+
+type DuplicateCandidate = {
+  managed: ManagedFile;
+  live: LiveManagedNote;
+  userDocument: UserOwnedTaskDocument;
+};
+
+const YAML_DELIMITER_WITH_LEADING_LINE_BREAK = "\n---";
+const YAML_OPENING_LENGTH = 4;
+
 const emptyResult = (): ProjectSyncResult => ({
   created: 0,
   updated: 0,
@@ -92,6 +114,7 @@ const emptyResult = (): ProjectSyncResult => ({
   outOfScope: 0,
   deferred: 0,
   conflicts: [],
+  pausedMappingIds: [],
   settledMappingIds: [],
 });
 
@@ -104,6 +127,7 @@ class HistoricalProjectionConflictError extends Error {}
 class ManagedNoteIdentityConflictError extends Error {}
 class ManagedPathRaceError extends Error {}
 class NoManagedDocumentChangeError extends Error {}
+class DuplicateManagedNoteConflictError extends Error {}
 
 class PortableVaultPathIndex {
   private readonly occupantsByPath = new Map<string, Set<TAbstractFile>>();
@@ -129,6 +153,15 @@ class PortableVaultPathIndex {
       this.occupantsByPath.delete(oldKey);
     }
     this.add(file, newPath);
+  }
+
+  public remove(file: TAbstractFile, path = file.path): void {
+    const key = portablePathKey(path);
+    const occupants = this.occupantsByPath.get(key);
+    occupants?.delete(file);
+    if (occupants?.size === 0) {
+      this.occupantsByPath.delete(key);
+    }
   }
 
   public occupants(path: string, current?: TAbstractFile): TAbstractFile[] {
@@ -249,23 +282,6 @@ export class ObsidianProjectSyncVault {
     const conflictedIds = new Set<string>();
     const desiredIds = new Set(snapshot.tasks.map(({ task }) => task.id));
 
-    for (const [taskId, files] of configuredByTaskId) {
-      if (files.length <= 1) {
-        continue;
-      }
-      const isRelevantToMapping = desiredIds.has(taskId) || managedById.has(taskId);
-      if (!isRelevantToMapping) {
-        continue;
-      }
-      conflictedIds.add(taskId);
-      result.conflicts.push({
-        taskId,
-        message: `Multiple managed notes use Todoist task ID '${taskId}'`,
-        path: files.map(({ file }) => file.path).join(", "),
-        projectionBlocked: true,
-      });
-    }
-
     const orderedSnapshotTasks = [...snapshot.tasks].sort((left, right) =>
       compareStableIds(left.task.id, right.task.id),
     );
@@ -295,6 +311,72 @@ export class ObsidianProjectSyncVault {
         mapping.id,
       );
       const desiredBody = makeManagedBody(snapshotTask.task);
+      // A duplicate is scoped to this selected mapping/root plus Todoist's immutable task ID.
+      // Same-ID notes owned by another configured mapping are migration candidates, not copies
+      // that this mapping may discard.
+      const duplicateFiles = managedById.get(taskId) ?? [];
+      if (duplicateFiles.length > 1) {
+        try {
+          const reconciled = await this.reconcileDuplicateManagedFiles(
+            duplicateFiles,
+            desiredFrontmatter,
+            desiredBody,
+            projectFolder,
+            snapshotTask.task.content,
+            rootPath,
+            pathIndex,
+            managedFiles,
+            mapping.id,
+            runContext,
+          );
+          configuredByTaskId.set(taskId, [reconciled.managed]);
+          managedById.set(taskId, [reconciled.managed]);
+          result.updated += reconciled.updated ? 1 : 0;
+          result.moved += reconciled.moved ? 1 : 0;
+          if (!reconciled.updated && !reconciled.moved) {
+            result.unchanged++;
+          }
+          continue;
+        } catch (error: unknown) {
+          if (error instanceof ActiveManagedNoteError) {
+            this.recordDeferred(
+              result,
+              taskId,
+              duplicateFiles.map(({ file }) => file.path).join(", "),
+              error.message,
+            );
+            continue;
+          }
+          if (!(error instanceof DuplicateManagedNoteConflictError)) {
+            throw error;
+          }
+          conflictedIds.add(taskId);
+          result.conflicts.push({
+            taskId,
+            message: error.message,
+            path: duplicateFiles
+              .map(({ file }) => file.path)
+              .sort(comparePortablePaths)
+              .join(", "),
+            projectionBlocked: true,
+          });
+          continue;
+        }
+      }
+      const migrationCandidates = configuredByTaskId.get(taskId) ?? [];
+      if (migrationCandidates.length > 1) {
+        conflictedIds.add(taskId);
+        result.conflicts.push({
+          taskId,
+          path: migrationCandidates
+            .map(({ file }) => file.path)
+            .sort(comparePortablePaths)
+            .join(", "),
+          message: `Multiple managed notes use Todoist task ID '${taskId}' outside the current mapping identity; all copies were preserved`,
+          projectionBlocked: true,
+        });
+        continue;
+      }
       // A task can move from one mapped Todoist project to another. Reuse the one managed note
       // found anywhere inside the configured mapping roots so its user-authored content moves
       // with it instead of creating a duplicate in the destination mapping.
@@ -388,6 +470,20 @@ export class ObsidianProjectSyncVault {
     for (const [taskId, files] of orderedManagedEntries) {
       runContext.assertValid();
       if (desiredIds.has(taskId) || conflictedIds.has(taskId)) {
+        continue;
+      }
+
+      if (files.length > 1) {
+        conflictedIds.add(taskId);
+        result.conflicts.push({
+          taskId,
+          path: files
+            .map(({ file }) => file.path)
+            .sort(comparePortablePaths)
+            .join(", "),
+          message: `Multiple managed notes use Todoist task ID '${taskId}', but the task is absent from the current Todoist snapshot; all copies were preserved`,
+          projectionBlocked: true,
+        });
         continue;
       }
 
@@ -760,6 +856,238 @@ export class ObsidianProjectSyncVault {
     };
   }
 
+  /**
+   * Collapse files in one validated mapping that claim the same immutable Todoist task identity.
+   *
+   * The desired target is derived only from the live Todoist snapshot. We merge only when every
+   * user-owned region is identical, rebuild one fresh projection, and then use Obsidian's
+   * recoverable trash operation for the remaining copies. Divergent user content is never guessed
+   * at: every copy remains in place and projection for that task is blocked.
+   */
+  private async reconcileDuplicateManagedFiles(
+    files: readonly ManagedFile[],
+    desiredFrontmatter: ManagedFrontmatter,
+    desiredBody: string,
+    projectFolder: string,
+    taskContent: string,
+    rootPath: string,
+    pathIndex: PortableVaultPathIndex,
+    managedFiles: Set<TFile>,
+    mappingId: string,
+    runContext: ProjectSyncRunContext,
+  ): Promise<{ managed: ManagedFile; moved: boolean; updated: boolean }> {
+    runContext.assertValid();
+    const taskId = this.requireLiveManagedIdentity(
+      desiredFrontmatter,
+      normalizePath(`${projectFolder}/${makeTaskFilename(taskContent)}`),
+    ).taskId;
+    const candidates: DuplicateCandidate[] = [];
+    for (const managed of [...files].sort((left, right) =>
+      comparePortablePaths(left.file.path, right.file.path),
+    )) {
+      runContext.assertValid();
+      const live = await this.readLiveManagedNote(managed.file);
+      this.assertDuplicateCandidateIdentity(
+        managed.identity,
+        live.identity,
+        taskId,
+        mappingId,
+        managed.file.path,
+      );
+      candidates.push({
+        managed,
+        live,
+        userDocument: readUserOwnedTaskDocument(live.content, live.frontmatter, live.contentStart),
+      });
+    }
+
+    const mergedUserDocument = candidates[0]?.userDocument ?? { frontmatter: {}, body: "" };
+    if (
+      candidates.some(
+        ({ userDocument }) => !isSameUserOwnedTaskDocument(userDocument, mergedUserDocument),
+      )
+    ) {
+      throw new DuplicateManagedNoteConflictError(
+        `Multiple managed notes use Todoist task ID '${taskId}' and contain different user-authored content; all copies were preserved for manual resolution`,
+      );
+    }
+
+    const preferredPath = normalizePath(`${projectFolder}/${makeTaskFilename(taskContent)}`);
+    this.assertWithinRoot(rootPath, preferredPath);
+    const canonicalCandidate =
+      candidates.find(({ managed }) => normalizePath(managed.file.path) === preferredPath) ??
+      candidates.find(
+        ({ managed }) => portablePathKey(managed.file.path) === portablePathKey(preferredPath),
+      );
+    const canonical = canonicalCandidate ?? candidates[0];
+    if (canonical === undefined) {
+      throw new DuplicateManagedNoteConflictError(
+        `No live managed note remained for Todoist task ID '${taskId}'`,
+      );
+    }
+    const duplicateFiles = candidates.filter((candidate) => candidate !== canonical);
+    const targetPath = this.resolveAvailableTaskFilePath(
+      projectFolder,
+      taskContent,
+      canonical.managed.file,
+      rootPath,
+      pathIndex,
+      managedFiles,
+    ).path;
+    for (const candidate of candidates) {
+      this.assertBackgroundFile(candidate.managed.file);
+    }
+
+    const desiredDocument = renderTaskDocumentWithUserContent(
+      desiredFrontmatter,
+      desiredBody,
+      mergedUserDocument,
+    );
+    // Complete one last read-only preflight over the whole set before the first mutation. This
+    // prevents a concurrently changed copy from causing us to rebuild the canonical note while
+    // leaving every duplicate active.
+    for (const candidate of candidates) {
+      runContext.assertValid();
+      const current = await this.readLiveManagedNote(candidate.managed.file);
+      this.assertDuplicateCandidateIdentity(
+        candidate.managed.identity,
+        current.identity,
+        taskId,
+        mappingId,
+        candidate.managed.file.path,
+      );
+      const currentUser = readUserOwnedTaskDocument(
+        current.content,
+        current.frontmatter,
+        current.contentStart,
+      );
+      if (!isSameUserOwnedTaskDocument(currentUser, mergedUserDocument)) {
+        throw new DuplicateManagedNoteConflictError(
+          `Managed note '${candidate.managed.file.path}' gained different user-authored content while duplicate reconciliation was running; all copies were preserved`,
+        );
+      }
+    }
+    runContext.assertValid();
+    await this.processFileInternally(canonical.managed.file, (content) => {
+      runContext.assertValid();
+      const current = this.parseLiveManagedNote(content, canonical.managed.file.path);
+      this.assertDuplicateCandidateIdentity(
+        canonical.managed.identity,
+        current.identity,
+        taskId,
+        mappingId,
+        canonical.managed.file.path,
+      );
+      const currentUser = readUserOwnedTaskDocument(
+        current.content,
+        current.frontmatter,
+        current.contentStart,
+      );
+      if (!isSameUserOwnedTaskDocument(currentUser, mergedUserDocument)) {
+        throw new DuplicateManagedNoteConflictError(
+          `Managed note '${canonical.managed.file.path}' gained different user-authored content while duplicate reconciliation was running; all copies were preserved`,
+        );
+      }
+      return desiredDocument;
+    });
+    runContext.assertValid();
+
+    let trashedCount = 0;
+    for (const duplicate of duplicateFiles) {
+      runContext.assertValid();
+      let current: LiveManagedNote;
+      try {
+        current = await this.readLiveManagedNote(duplicate.managed.file);
+        this.assertDuplicateCandidateIdentity(
+          duplicate.managed.identity,
+          current.identity,
+          taskId,
+          mappingId,
+          duplicate.managed.file.path,
+        );
+        const currentUser = readUserOwnedTaskDocument(
+          current.content,
+          current.frontmatter,
+          current.contentStart,
+        );
+        if (!isSameUserOwnedTaskDocument(currentUser, mergedUserDocument)) {
+          throw new DuplicateManagedNoteConflictError(
+            `Managed note '${duplicate.managed.file.path}' gained different user-authored content while duplicate reconciliation was running; it was preserved`,
+          );
+        }
+      } catch (error: unknown) {
+        if (error instanceof DuplicateManagedNoteConflictError) {
+          throw error;
+        }
+        const message = error instanceof Error ? error.message : String(error);
+        throw new DuplicateManagedNoteConflictError(
+          `Could not revalidate duplicate note '${duplicate.managed.file.path}'; it and every remaining copy were preserved: ${message}`,
+        );
+      }
+      runContext.assertValid();
+      const path = duplicate.managed.file.path;
+      try {
+        await this.runInternalMutation(
+          [path],
+          async () => await this.fileManager.trashFile(duplicate.managed.file),
+        );
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error);
+        throw new DuplicateManagedNoteConflictError(
+          `Duplicate cleanup for Todoist task ID '${taskId}' stopped after moving ${trashedCount} of ${duplicateFiles.length} redundant notes to the Obsidian trash; the canonical note and every remaining copy were preserved: ${message}`,
+        );
+      }
+      trashedCount++;
+      pathIndex.remove(duplicate.managed.file, path);
+      managedFiles.delete(duplicate.managed.file);
+      runContext.assertValid();
+    }
+
+    const moved = canonical.managed.file.path !== targetPath;
+    if (moved) {
+      runContext.assertValid();
+      this.assertLivePathAvailable(targetPath, canonical.managed.file);
+      const oldPath = canonical.managed.file.path;
+      await this.runInternalMutation(
+        [oldPath, targetPath],
+        async () => await this.fileManager.renameFile(canonical.managed.file, targetPath),
+      );
+      pathIndex.move(canonical.managed.file, oldPath, targetPath);
+    }
+
+    return {
+      managed: {
+        file: canonical.managed.file,
+        frontmatter: desiredFrontmatter,
+        identity: this.requireLiveManagedIdentity(desiredFrontmatter, targetPath),
+        projectionRoot: rootPath,
+      },
+      moved,
+      updated: canonical.live.content !== desiredDocument,
+    };
+  }
+
+  private assertDuplicateCandidateIdentity(
+    expected: ManagedNoteIdentity,
+    current: ManagedNoteIdentity,
+    taskId: string,
+    mappingId: string,
+    path: string,
+  ): void {
+    const mappingMatches =
+      current.mappingId === mappingId ||
+      (current.mappingId === undefined && expected.mappingId === undefined);
+    if (
+      current.taskId !== taskId ||
+      current.rootProjectId !== expected.rootProjectId ||
+      !mappingMatches
+    ) {
+      throw new DuplicateManagedNoteConflictError(
+        `Managed note '${path}' changed Todoist identity while duplicate reconciliation was running; it was preserved`,
+      );
+    }
+  }
+
   private async ensureParentFolders(
     filePath: string,
     rootPath: string,
@@ -978,7 +1306,7 @@ export class ObsidianProjectSyncVault {
         }
 
         const yaml = dumpYaml(nextFrontmatter, { lineWidth: -1, noRefs: true });
-        return `---\n${yaml}---${content.slice(current.contentStart)}`;
+        return `---\n${yaml}---\n${content.slice(current.contentStart)}`;
       });
     } catch (error: unknown) {
       if (!(error instanceof NoManagedDocumentChangeError)) {
@@ -1092,7 +1420,7 @@ export class ObsidianProjectSyncVault {
   }
 
   private parseLiveManagedNote(content: string, path: string): LiveManagedNote {
-    const info = getFrontMatterInfo(content);
+    const info = getManagedFrontMatterInfo(content);
     if (!info.exists) {
       throw new ManagedNoteIdentityConflictError(
         `Managed note '${path}' no longer has frontmatter; synchronization was not applied`,
@@ -1335,7 +1663,10 @@ export class ObsidianProjectSyncVault {
     const creationFencePaths = new Set<string>();
     const configuredRootPaths = Array.from(new Set(configuredRoots.map(({ path }) => path)));
     const ownedRootPaths = configuredRoots
-      .filter((root) => root.mappingId === mappingId && root.rootProjectId === rootProjectId)
+      .filter(
+        (root) =>
+          root.active && root.mappingId === mappingId && root.rootProjectId === rootProjectId,
+      )
       .map(({ path }) => path);
     let unresolvedHistoricalOwnership = false;
 
@@ -1391,21 +1722,29 @@ export class ObsidianProjectSyncVault {
         }
         continue;
       }
-      const managed = { file, identity, frontmatter, projectionRoot: rootPath };
-      const configuredEntries = configuredByTaskId.get(identity.taskId) ?? [];
-      configuredEntries.push(managed);
-      configuredByTaskId.set(identity.taskId, configuredEntries);
+      const activeIdentityRoot = mostSpecificMatchingIdentityRoot(
+        configuredRoots.filter(({ active }) => active),
+        filePath,
+        identity,
+      );
+      if (activeIdentityRoot !== undefined) {
+        const managed = {
+          file,
+          identity,
+          frontmatter,
+          projectionRoot: activeIdentityRoot.path,
+        };
+        const configuredEntries = configuredByTaskId.get(identity.taskId) ?? [];
+        configuredEntries.push(managed);
+        configuredByTaskId.set(identity.taskId, configuredEntries);
 
-      const ownedProjectionRoot = isInCurrentRoot
-        ? rootPath
-        : mostSpecificContainingRoot(ownedRootPaths, filePath);
-      const hasMatchingMappingIdentity =
-        identity.mappingId === mappingId || identity.mappingId === undefined;
-      if (
-        ownedProjectionRoot !== undefined &&
-        identity.rootProjectId === rootProjectId &&
-        hasMatchingMappingIdentity
-      ) {
+        const ownedProjectionRoot = mostSpecificContainingRoot(ownedRootPaths, filePath);
+        const hasMatchingCurrentIdentity =
+          activeIdentityRoot.mappingId === mappingId &&
+          activeIdentityRoot.rootProjectId === rootProjectId;
+        if (ownedProjectionRoot === undefined || !hasMatchingCurrentIdentity) {
+          continue;
+        }
         managed.projectionRoot = ownedProjectionRoot;
         const ownedEntries = ownedByTaskId.get(identity.taskId) ?? [];
         ownedEntries.push(managed);
@@ -1453,7 +1792,7 @@ export class ObsidianProjectSyncVault {
 
       const content = await this.vault.read(file);
       runContext.assertValid();
-      const info = getFrontMatterInfo(content);
+      const info = getManagedFrontMatterInfo(content);
       if (!info.exists) {
         continue;
       }
@@ -1502,12 +1841,15 @@ export class ObsidianProjectSyncVault {
       roots.set(key, { ...root, path: normalized });
     };
 
-    addRoot({ mappingId, rootProjectId, path: currentRootPath }, true);
+    addRoot({ mappingId, rootProjectId, path: currentRootPath, active: true }, true);
     for (const previousFolder of previousFolders) {
-      addRoot({ mappingId, rootProjectId, path: previousFolder }, false);
+      addRoot({ mappingId, rootProjectId, path: previousFolder, active: true }, false);
     }
     for (const mappingRoot of runContext.mappingRoots ?? []) {
-      addRoot({ ...mappingRoot, path: mappingRoot.folder }, false);
+      addRoot(
+        { ...mappingRoot, path: mappingRoot.folder, active: mappingRoot.active !== false },
+        false,
+      );
     }
     return [...roots.values()];
   }
@@ -1549,6 +1891,51 @@ export class ObsidianProjectSyncVault {
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
+/**
+ * Read strict Obsidian frontmatter, with one narrowly scoped recovery path for projection damage
+ * emitted by older Tasks Bridge builds. Those builds could join the closing `---` directly to the
+ * plugin's managed marker (optionally with one duplicated managed scalar between two delimiters).
+ * No other malformed document is treated as managed.
+ */
+const getManagedFrontMatterInfo = (content: string): ManagedFrontMatterInfo => {
+  const strict = getFrontMatterInfo(content);
+  if (strict.exists || !content.startsWith("---\n")) {
+    return strict;
+  }
+
+  const marker = content.indexOf(MANAGED_BODY_START);
+  if (marker < 0 || content.indexOf(MANAGED_BODY_START, marker + MANAGED_BODY_START.length) >= 0) {
+    return strict;
+  }
+  const joinedClosing = marker - YAML_DELIMITER_WITH_LEADING_LINE_BREAK.length;
+  if (
+    joinedClosing < YAML_OPENING_LENGTH ||
+    content.slice(joinedClosing, marker) !== YAML_DELIMITER_WITH_LEADING_LINE_BREAK
+  ) {
+    return strict;
+  }
+
+  let closing = joinedClosing;
+  const earlierClosing = content.lastIndexOf(
+    YAML_DELIMITER_WITH_LEADING_LINE_BREAK,
+    joinedClosing - 1,
+  );
+  if (
+    earlierClosing >= YAML_OPENING_LENGTH &&
+    isRecoverableManagedFrontmatterResidue(
+      content.slice(earlierClosing + YAML_DELIMITER_WITH_LEADING_LINE_BREAK.length, marker),
+    )
+  ) {
+    closing = earlierClosing;
+  }
+
+  return {
+    exists: true,
+    frontmatter: content.slice(YAML_OPENING_LENGTH, closing),
+    contentStart: closing + YAML_DELIMITER_WITH_LEADING_LINE_BREAK.length,
+  };
+};
+
 const sameManagedOwnership = (left: ManagedNoteIdentity, right: ManagedNoteIdentity): boolean =>
   left.taskId === right.taskId &&
   left.mappingId === right.mappingId &&
@@ -1565,6 +1952,13 @@ const readTimestamp = (value: unknown): number | undefined => {
 
 const portablePathKey = (path: string): string =>
   normalizePath(path).normalize("NFC").toLocaleLowerCase("en-US");
+
+const comparePortablePaths = (left: string, right: string): number => {
+  const keyComparison = compareStableIds(portablePathKey(left), portablePathKey(right));
+  return keyComparison === 0
+    ? compareStableIds(normalizePath(left), normalizePath(right))
+    : keyComparison;
+};
 
 const portablePathsOverlap = (left: string, right: string): boolean =>
   left === right || left.startsWith(`${right}/`) || right.startsWith(`${left}/`);
@@ -1586,3 +1980,17 @@ const mostSpecificContainingRoot = (
   roots
     .filter((root) => isPathInside(root, filePath))
     .sort((left, right) => right.length - left.length)[0];
+
+const mostSpecificMatchingIdentityRoot = (
+  roots: readonly ResolvedMappingRoot[],
+  filePath: string,
+  identity: ManagedNoteIdentity,
+): ResolvedMappingRoot | undefined =>
+  roots
+    .filter(
+      (root) =>
+        isPathInside(root.path, filePath) &&
+        root.rootProjectId === identity.rootProjectId &&
+        (identity.mappingId === root.mappingId || identity.mappingId === undefined),
+    )
+    .sort((left, right) => right.path.length - left.path.length)[0];

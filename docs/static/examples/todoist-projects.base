@@ -16,6 +16,8 @@ properties:
 views:
   - type: tasks-list
     name: "Tasks List"
+    # Set this to a Todoist project ID through Configure view > Project scope.
+    # Leave it absent to show all synchronized projects.
     todoistDensity: comfortable
     todoistShowDescriptions: true
     todoistShowSections: true

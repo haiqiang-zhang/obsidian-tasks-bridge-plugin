@@ -245,7 +245,7 @@ describe("buildProjectOverviewModel", () => {
     expect(model?.completionEvents[0]).not.toBe(sharedFirst);
   });
 
-  it("keeps only the first retained occurrence of a duplicated project across roots", () => {
+  it("keeps coincident project IDs separate across mapping scopes", () => {
     const retainedEvent = completionEvent("retained", "shared");
     const duplicateEvent = completionEvent("duplicate", "shared");
     const model = buildProjectOverviewModel(
@@ -261,9 +261,14 @@ describe("buildProjectOverviewModel", () => {
       null,
     );
 
-    expect(model?.roots.map(({ id }) => id)).toEqual(["parent"]);
-    expect(model?.projectCount).toBe(2);
-    expect(model?.completionEvents).toEqual([retainedEvent]);
+    expect(model?.roots.map(({ id }) => id)).toEqual(["parent", "shared"]);
+    expect(model?.projectCount).toBe(3);
+    expect(model?.completionEvents).toEqual([retainedEvent, duplicateEvent]);
+    const nestedShared = model?.roots[0]?.children[0];
+    const rootShared = model?.roots[1];
+    expect(nestedShared?.id).toBe("shared");
+    expect(rootShared?.id).toBe("shared");
+    expect(nestedShared?.scopeKey).not.toBe(rootShared?.scopeKey);
   });
 
   it("returns null when no completed Project Sync snapshot exists", () => {

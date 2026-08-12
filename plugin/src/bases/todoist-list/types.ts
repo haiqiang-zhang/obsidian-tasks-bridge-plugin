@@ -1,6 +1,11 @@
 import type { BasesPropertyId } from "obsidian";
 
-import type { ProjectSyncStatisticsSnapshot, ProjectSyncStatus } from "@/project-sync";
+import type { Project } from "@/api/domain/project";
+import type {
+  ProjectSyncConfig,
+  ProjectSyncStatisticsSnapshot,
+  ProjectSyncStatus,
+} from "@/project-sync";
 
 export type TodoistListTaskStatus = "active" | "completed" | "stale" | "out_of_scope";
 
@@ -27,6 +32,10 @@ export type TodoistListMetadata = {
 
 export type TodoistListTaskRecord = {
   id: string;
+  /** Stable rendering identity: mapping/root scope plus the raw Todoist task ID. */
+  scopeKey: string;
+  mappingId?: string;
+  rootProjectId: string;
   filePath: string;
   fileName: string;
   content: string;
@@ -69,6 +78,8 @@ export type TodoistListSection = {
 
 export type TodoistListProject = {
   id: string;
+  /** Stable rendering identity: mapping/root scope plus the raw Todoist project ID. */
+  scopeKey: string;
   name: string;
   parentId?: string;
   pathIds: string[];
@@ -95,6 +106,7 @@ export type TodoistListGroup = {
 
 export type TodoistListProjectOption = {
   id: string;
+  scopeKey: string;
   name: string;
   pathIds: string[];
   pathNames: string[];
@@ -102,6 +114,7 @@ export type TodoistListProjectOption = {
 
 export type TodoistListDiagnostics = {
   ignoredNonManaged: number;
+  ignoredDuplicateTaskNotes: number;
   ignoredInvalid: number;
   hierarchyWarnings: number;
 };
@@ -131,6 +144,8 @@ export interface TodoistListNavigation {
 }
 
 export interface TodoistListProjectStatisticsSource {
+  getConfig(): ProjectSyncConfig;
+  getProjects(): readonly Project[];
   getSnapshot(): ProjectSyncStatisticsSnapshot | null;
   getStatus(): ProjectSyncStatus;
   isConfigured(): boolean;

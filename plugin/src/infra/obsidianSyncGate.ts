@@ -4,7 +4,7 @@ export const OBSIDIAN_SYNC_POLL_INTERVAL_MS = 250;
 export const OBSIDIAN_SYNC_SETTLE_MS = 750;
 
 export type ObsidianSyncPermit = Readonly<{
-  inboundGeneration: number;
+  generation: number;
 }>;
 
 export type ObsidianSyncPhase =
@@ -60,11 +60,12 @@ type GateOptions = {
 };
 
 /**
- * Defers automatic Vault projection only for Obsidian Sync work that can modify local files.
+ * Allows automatic Vault projection only after this device has observed a fully converged
+ * Obsidian Sync session.
  *
  * Obsidian currently has no public Sync-direction API. All private access is isolated here and
- * feature-detected. If the private surface is missing or changes, the gate fails open while the
- * Project sync layer's atomic-write and live-file checks remain active.
+ * feature-detected. If the private surface is missing or changes, automatic projection fails
+ * closed; manual Project sync remains available through its separate, explicit command path.
  */
 export class ObsidianSyncActivityGate {
   private readonly app: InternalApp;
@@ -76,10 +77,11 @@ export class ObsidianSyncActivityGate {
   private readonly settleMs: number;
 
   private activeMonitors = 0;
+  private baselineConfirmed = false;
   private disposed = false;
-  private inboundGeneration = 0;
   private inboundLatched = false;
   private lastPhase: ObsidianSyncPhase = "unavailable";
+  private permitGeneration = 0;
   private pollTimer: number | undefined;
   private registerEvent: ((eventRef: EventRef) => void) | undefined;
   private settleUntil = Number.NEGATIVE_INFINITY;
@@ -115,6 +117,9 @@ export class ObsidianSyncActivityGate {
     if (this.disposed || !safePredicate(isCurrent)) {
       return null;
     }
+    if (this.shouldSkipAutomaticRun()) {
+      return null;
+    }
     if (!this.isPreflightBlocked()) {
       return this.makePermit();
     }
@@ -128,13 +133,18 @@ export class ObsidianSyncActivityGate {
   }
 
   /**
-   * Rechecks the inbound queue as an automatic operation progresses. Indeterminate or outbound
-   * phases do not invalidate an existing permit, because this plugin's own writes can start a
-   * local upload cycle. Only confirmed incoming work advances the generation.
+   * Rechecks Sync as an automatic operation progresses. A known outbound phase does not
+   * invalidate the permit because this plugin's own writes can start an upload. Every phase that
+   * could hide remote changes invalidates the startup/convergence baseline.
    */
   public isPermitCurrent(permit: ObsidianSyncPermit): boolean {
     this.refresh();
-    return !this.disposed && permit.inboundGeneration === this.inboundGeneration;
+    return (
+      !this.disposed &&
+      permit.generation === this.permitGeneration &&
+      !this.isPreflightBlocked() &&
+      !this.shouldSkipAutomaticRun()
+    );
   }
 
   public async monitor<T>(operation: () => Promise<T>): Promise<T> {
@@ -174,27 +184,65 @@ export class ObsidianSyncActivityGate {
     }
 
     const instance = resolveSyncInstance(this.app);
+    const instanceChanged = instance !== this.subscribedInstance;
     this.ensureSubscribed(instance);
     const phase = observeSyncPhase(instance);
+    const hadConfirmedBaseline = this.baselineConfirmed;
     const wasInboundLatched = this.inboundLatched;
     const now = this.now();
 
+    if (instanceChanged) {
+      // Replacing the private Sync instance breaks continuity even if the replacement happens to
+      // expose the same coarse status. Its own exact idle state below may establish a new baseline.
+      this.baselineConfirmed = false;
+      this.settleUntil = Number.NEGATIVE_INFINITY;
+      if (hadConfirmedBaseline) {
+        this.permitGeneration++;
+      }
+    }
+
     if (phase === "inbound") {
+      this.baselineConfirmed = false;
       this.inboundLatched = true;
       this.settleUntil = Number.NEGATIVE_INFINITY;
-    } else if (this.inboundLatched && phase === "idle") {
-      this.inboundLatched = false;
-      this.settleUntil = now + this.settleMs;
-    } else if (phase === "inactive" || phase === "unavailable") {
-      // A disabled, disconnected, or incompatible private API cannot safely keep every device
-      // waiting forever. Fail open; Project sync's revision checks remain the final safeguard.
-      this.inboundLatched = false;
+    } else if (phase === "idle") {
+      if (!this.baselineConfirmed) {
+        if (this.lastPhase !== "idle" || !Number.isFinite(this.settleUntil)) {
+          this.settleUntil = now + this.settleMs;
+        }
+        if (now >= this.settleUntil) {
+          this.baselineConfirmed = true;
+          this.inboundLatched = false;
+          this.settleUntil = Number.NEGATIVE_INFINITY;
+        }
+      }
+    } else if (phase === "outbound") {
+      if (!this.baselineConfirmed) {
+        // An upload seen before convergence cannot establish that delayed remote files are here.
+        this.settleUntil = Number.NEGATIVE_INFINITY;
+      }
+    } else if (
+      phase === "indeterminate" ||
+      phase === "preparing" ||
+      phase === "inactive" ||
+      phase === "unavailable"
+    ) {
+      // Losing continuous, confirmed convergence resets the per-startup baseline. In particular,
+      // a device that reconnects must not project during a local upload before delayed remote
+      // downloads have arrived.
+      this.baselineConfirmed = false;
       this.settleUntil = Number.NEGATIVE_INFINITY;
+      if (phase === "preparing" || phase === "inactive" || phase === "unavailable") {
+        this.inboundLatched = false;
+      }
+    }
+
+    if (hadConfirmedBaseline && !this.baselineConfirmed && !instanceChanged) {
+      this.permitGeneration++;
     }
 
     this.lastPhase = phase;
     if (!wasInboundLatched && this.inboundLatched) {
-      this.inboundGeneration++;
       this.onInbound();
     }
 
@@ -202,15 +250,24 @@ export class ObsidianSyncActivityGate {
   }
 
   private makePermit(): ObsidianSyncPermit {
-    return { inboundGeneration: this.inboundGeneration };
+    return { generation: this.permitGeneration };
   }
 
   private isPreflightBlocked(): boolean {
     return (
+      !this.baselineConfirmed ||
       this.inboundLatched ||
       this.lastPhase === "inbound" ||
       this.lastPhase === "indeterminate" ||
       this.now() < this.settleUntil
+    );
+  }
+
+  private shouldSkipAutomaticRun(): boolean {
+    return (
+      this.lastPhase === "preparing" ||
+      this.lastPhase === "inactive" ||
+      this.lastPhase === "unavailable"
     );
   }
 
@@ -219,14 +276,18 @@ export class ObsidianSyncActivityGate {
       return;
     }
 
-    const canProceed = !this.isPreflightBlocked();
+    const shouldSkip = this.shouldSkipAutomaticRun();
+    const canProceed = !shouldSkip && !this.isPreflightBlocked();
     for (const waiter of [...this.waiters]) {
       if (!safePredicate(waiter.isCurrent)) {
         this.waiters.delete(waiter);
         waiter.resolve(null);
         continue;
       }
-      if (canProceed) {
+      if (shouldSkip) {
+        this.waiters.delete(waiter);
+        waiter.resolve(null);
+      } else if (canProceed) {
         this.waiters.delete(waiter);
         waiter.resolve(this.makePermit());
       }
@@ -322,7 +383,10 @@ export const observeSyncPhase = (instance: InternalSyncInstance | undefined): Ob
     return "inbound";
   }
 
-  if (status === "synced" || normalizedDetail === "fully synced") {
+  // The coarse `synced` value can lag behind detailed incoming work and is not enough to prove
+  // this device has completed a post-startup download pass. Only the exact detailed idle state
+  // establishes the automatic-projection baseline.
+  if (normalizedDetail === "fully synced") {
     return "idle";
   }
 
@@ -330,9 +394,8 @@ export const observeSyncPhase = (instance: InternalSyncInstance | undefined): Ob
     return "outbound";
   }
 
-  // Connecting can persist while the device is offline. It is not itself a local-file mutation,
-  // so it must not indefinitely disable automatic Project sync. Polling during the operation will
-  // still catch a queue entry or a known inbound phase if remote work actually arrives.
+  // Connecting can persist while the device is offline. Automatic Project sync must skip this
+  // interval rather than project from a potentially stale local Vault snapshot.
   if (isPreparingDetail(normalizedDetail)) {
     return "preparing";
   }
@@ -353,7 +416,7 @@ export const observeSyncPhase = (instance: InternalSyncInstance | undefined): Ob
     return "indeterminate";
   }
 
-  // A missing or changed private surface must never disable automatic sync on this device.
+  // A missing or changed private surface cannot safely authorize automatic Vault writes.
   return "unavailable";
 };
 

@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { TodoistListActions, TodoistListTaskRecord } from "@/bases/todoist-list";
 import { makeSettings } from "@/factories/settings";
+import { OBSIDIAN_SYNC_SETTLE_MS } from "@/infra/obsidianSyncGate";
 import type { ProjectSyncResult } from "@/project-sync";
 import { ProjectTaskProjectionError } from "@/services/projectTaskCommands";
 
@@ -218,6 +219,7 @@ const emptyResult = (): ProjectSyncResult => ({
   deferred: 0,
   moved: 0,
   outOfScope: 0,
+  pausedMappingIds: [],
   stale: 0,
   unchanged: 0,
   updated: 0,
@@ -601,8 +603,8 @@ describe("TodoistPlugin async lifecycle", () => {
     vi.mocked(plugin.queryCache.load).mockClear();
     runtime.saveData.mockClear();
     services.projectSync.setConfig.mockClear();
-    const intervalId = 53 as unknown as ReturnType<typeof window.setInterval>;
-    const setInterval = vi.spyOn(window, "setInterval").mockReturnValue(intervalId);
+    const timeoutId = 53 as unknown as ReturnType<typeof window.setTimeout>;
+    const setTimeout = vi.spyOn(window, "setTimeout").mockReturnValue(timeoutId);
     runtime.loadData.mockResolvedValueOnce({
       ...defaultSettings({
         autoRefreshInterval: 30,
@@ -638,7 +640,7 @@ describe("TodoistPlugin async lifecycle", () => {
         }),
       ],
     });
-    expect(setInterval).toHaveBeenCalledWith(expect.any(Function), 30_000);
+    expect(setTimeout).toHaveBeenCalledWith(expect.any(Function), 30_000);
     expect(plugin.queryCache.load).not.toHaveBeenCalled();
     expect(runtime.saveLocalStorage).not.toHaveBeenCalled();
     const lastSave = runtime.saveData.mock.calls[runtime.saveData.mock.calls.length - 1]?.[0];
@@ -996,17 +998,17 @@ describe("TodoistPlugin async lifecycle", () => {
   it.each([
     ["disabled", false, 60],
     ["a zero interval", true, 0],
-  ])("does not register an Auto-refresh timer when %s", async (_label, enabled, interval) => {
+  ])("does not schedule Auto-refresh when %s", async (_label, enabled, interval) => {
     const services = makeServices();
     runtime.loadData.mockResolvedValueOnce(
       defaultSettings({ autoRefreshInterval: interval, autoRefreshToggle: enabled }),
     );
-    const setInterval = vi.spyOn(window, "setInterval");
+    const setTimeout = vi.spyOn(window, "setTimeout");
     const plugin = makePlugin(services);
 
     await plugin.onload();
 
-    expect(setInterval).not.toHaveBeenCalled();
+    expect(setTimeout).not.toHaveBeenCalled();
     expect(runtime.registerInterval).not.toHaveBeenCalled();
   });
 
@@ -1015,14 +1017,14 @@ describe("TodoistPlugin async lifecycle", () => {
     runtime.loadData.mockResolvedValueOnce(
       defaultSettings({ autoRefreshInterval: 45, autoRefreshToggle: true }),
     );
-    const intervalId = 17 as unknown as ReturnType<typeof window.setInterval>;
-    const setInterval = vi.spyOn(window, "setInterval").mockReturnValue(intervalId);
+    const timeoutId = 17 as unknown as ReturnType<typeof window.setTimeout>;
+    const setTimeout = vi.spyOn(window, "setTimeout").mockReturnValue(timeoutId);
     const plugin = makePlugin(services);
 
     await plugin.onload();
 
-    expect(setInterval).toHaveBeenCalledWith(expect.any(Function), 45_000);
-    expect(runtime.registerInterval).toHaveBeenCalledWith(intervalId);
+    expect(setTimeout).toHaveBeenCalledWith(expect.any(Function), 45_000);
+    expect(runtime.registerInterval).not.toHaveBeenCalled();
   });
 
   it("replaces the timer only when an Auto-refresh setting changes", async () => {
@@ -1030,31 +1032,30 @@ describe("TodoistPlugin async lifecycle", () => {
     runtime.loadData.mockResolvedValueOnce(
       defaultSettings({ autoRefreshInterval: 30, autoRefreshToggle: true }),
     );
-    const setInterval = vi
-      .spyOn(window, "setInterval")
-      .mockReturnValueOnce(31 as unknown as ReturnType<typeof window.setInterval>)
-      .mockReturnValueOnce(32 as unknown as ReturnType<typeof window.setInterval>);
-    const clearInterval = vi.spyOn(window, "clearInterval");
+    const setTimeout = vi
+      .spyOn(window, "setTimeout")
+      .mockReturnValueOnce(31 as unknown as ReturnType<typeof window.setTimeout>)
+      .mockReturnValueOnce(32 as unknown as ReturnType<typeof window.setTimeout>);
+    const clearTimeout = vi.spyOn(window, "clearTimeout");
     const plugin = makePlugin(services);
     await plugin.onload();
 
     await plugin.writeOptions({ projectSyncEnabled: true });
 
-    expect(setInterval).toHaveBeenCalledTimes(1);
-    expect(clearInterval).not.toHaveBeenCalled();
+    expect(setTimeout).toHaveBeenCalledTimes(1);
+    expect(clearTimeout).not.toHaveBeenCalled();
 
     await plugin.writeOptions({ autoRefreshInterval: 90 });
 
-    expect(clearInterval).toHaveBeenCalledOnce();
-    expect(clearInterval).toHaveBeenCalledWith(31);
-    expect(setInterval).toHaveBeenCalledTimes(2);
-    expect(setInterval).toHaveBeenLastCalledWith(expect.any(Function), 90_000);
-    expect(runtime.registerInterval).toHaveBeenLastCalledWith(32);
+    expect(clearTimeout).toHaveBeenCalledOnce();
+    expect(clearTimeout).toHaveBeenCalledWith(31);
+    expect(setTimeout).toHaveBeenCalledTimes(2);
+    expect(setTimeout).toHaveBeenLastCalledWith(expect.any(Function), 90_000);
 
     await plugin.writeOptions({ debugLogging: true });
 
-    expect(setInterval).toHaveBeenCalledTimes(2);
-    expect(clearInterval).toHaveBeenCalledOnce();
+    expect(setTimeout).toHaveBeenCalledTimes(2);
+    expect(clearTimeout).toHaveBeenCalledOnce();
   });
 
   it("clears the active timer when Auto-refresh is toggled off", async () => {
@@ -1062,17 +1063,229 @@ describe("TodoistPlugin async lifecycle", () => {
     runtime.loadData.mockResolvedValueOnce(
       defaultSettings({ autoRefreshInterval: 60, autoRefreshToggle: true }),
     );
-    const intervalId = 41 as unknown as ReturnType<typeof window.setInterval>;
-    const setInterval = vi.spyOn(window, "setInterval").mockReturnValue(intervalId);
-    const clearInterval = vi.spyOn(window, "clearInterval");
+    const timeoutId = 41 as unknown as ReturnType<typeof window.setTimeout>;
+    const setTimeout = vi.spyOn(window, "setTimeout").mockReturnValue(timeoutId);
+    const clearTimeout = vi.spyOn(window, "clearTimeout");
     const plugin = makePlugin(services);
     await plugin.onload();
 
     await plugin.writeOptions({ autoRefreshToggle: false });
 
-    expect(clearInterval).toHaveBeenCalledOnce();
-    expect(clearInterval).toHaveBeenCalledWith(intervalId);
-    expect(setInterval).toHaveBeenCalledOnce();
+    expect(clearTimeout).toHaveBeenCalledOnce();
+    expect(clearTimeout).toHaveBeenCalledWith(timeoutId);
+    expect(setTimeout).toHaveBeenCalledOnce();
+  });
+
+  it("clears the active Auto-refresh timer on unload", async () => {
+    const services = makeServices();
+    runtime.loadData.mockResolvedValueOnce(
+      defaultSettings({ autoRefreshInterval: 60, autoRefreshToggle: true }),
+    );
+    const timeoutId = 42 as unknown as ReturnType<typeof window.setTimeout>;
+    vi.spyOn(window, "setTimeout").mockReturnValue(timeoutId);
+    const clearTimeout = vi.spyOn(window, "clearTimeout");
+    const plugin = makePlugin(services);
+    await plugin.onload();
+
+    plugin.onunload();
+
+    expect(clearTimeout).toHaveBeenCalledOnce();
+    expect(clearTimeout).toHaveBeenCalledWith(timeoutId);
+  });
+
+  it("does not overlap cycles and waits a full interval after one settles", async () => {
+    vi.useFakeTimers();
+    const services = makeServices();
+    const firstRefresh = deferred<boolean>();
+    services.todoist.syncMetadata
+      .mockImplementationOnce(async () => await firstRefresh.promise)
+      .mockResolvedValueOnce(true);
+    runtime.loadData.mockResolvedValueOnce(
+      defaultSettings({ autoRefreshInterval: 30, autoRefreshToggle: true }),
+    );
+    const plugin = makePlugin(services);
+    await plugin.onload();
+
+    vi.advanceTimersByTime(30_000);
+    expect(services.todoist.syncMetadata).toHaveBeenCalledOnce();
+
+    vi.advanceTimersByTime(37_000);
+    expect(services.todoist.syncMetadata).toHaveBeenCalledOnce();
+
+    firstRefresh.resolve(true);
+    await vi.advanceTimersByTimeAsync(0);
+
+    vi.advanceTimersByTime(29_999);
+    expect(services.todoist.syncMetadata).toHaveBeenCalledOnce();
+
+    vi.advanceTimersByTime(1);
+    expect(services.todoist.syncMetadata).toHaveBeenCalledTimes(2);
+  });
+
+  it("waits a full interval after a failed scheduled cycle settles", async () => {
+    vi.useFakeTimers();
+    const services = makeServices();
+    const firstRefresh = deferred<boolean>();
+    services.todoist.syncMetadata
+      .mockImplementationOnce(async () => await firstRefresh.promise)
+      .mockResolvedValueOnce(true);
+    runtime.loadData.mockResolvedValueOnce(
+      defaultSettings({ autoRefreshInterval: 45, autoRefreshToggle: true }),
+    );
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const plugin = makePlugin(services);
+    await plugin.onload();
+
+    vi.advanceTimersByTime(45_000);
+    expect(services.todoist.syncMetadata).toHaveBeenCalledOnce();
+
+    vi.advanceTimersByTime(17_000);
+    expect(services.todoist.syncMetadata).toHaveBeenCalledOnce();
+
+    firstRefresh.reject(new Error("refresh failed"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(error).toHaveBeenCalledWith(
+      "Scheduled Todoist auto-refresh failed:",
+      expect.objectContaining({ message: "refresh failed" }),
+    );
+
+    vi.advanceTimersByTime(44_999);
+    expect(services.todoist.syncMetadata).toHaveBeenCalledOnce();
+
+    vi.advanceTimersByTime(1);
+    expect(services.todoist.syncMetadata).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not let an older in-flight cycle revive the previous interval after a setting change", async () => {
+    vi.useFakeTimers();
+    const services = makeServices();
+    const firstRefresh = deferred<boolean>();
+    services.todoist.syncMetadata
+      .mockImplementationOnce(async () => await firstRefresh.promise)
+      .mockResolvedValueOnce(true);
+    runtime.loadData.mockResolvedValueOnce(
+      defaultSettings({ autoRefreshInterval: 30, autoRefreshToggle: true }),
+    );
+    const plugin = makePlugin(services);
+    await plugin.onload();
+
+    vi.advanceTimersByTime(30_000);
+    expect(services.todoist.syncMetadata).toHaveBeenCalledOnce();
+
+    await plugin.writeOptions({ autoRefreshInterval: 90 });
+    vi.advanceTimersByTime(37_000);
+    expect(services.todoist.syncMetadata).toHaveBeenCalledOnce();
+
+    firstRefresh.resolve(true);
+    await vi.advanceTimersByTimeAsync(0);
+
+    vi.advanceTimersByTime(89_999);
+    expect(services.todoist.syncMetadata).toHaveBeenCalledOnce();
+
+    vi.advanceTimersByTime(1);
+    expect(services.todoist.syncMetadata).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    "success",
+    "failure",
+  ] as const)("waits a full interval after a manual Project sync %s settles", async (outcome) => {
+    vi.useFakeTimers();
+    const services = makeServices();
+    const manualRefresh = deferred<boolean>();
+    services.todoist.sync.mockImplementationOnce(async () => await manualRefresh.promise);
+    runtime.loadData.mockResolvedValueOnce(
+      defaultSettings({
+        autoRefreshInterval: 30,
+        autoRefreshToggle: true,
+        projectSyncEnabled: true,
+      }),
+    );
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const plugin = makePlugin(services);
+    await plugin.onload();
+
+    vi.advanceTimersByTime(25_000);
+    const manual = plugin.syncProjectFolderNow();
+    expect(services.todoist.sync).toHaveBeenCalledOnce();
+
+    vi.advanceTimersByTime(30_000);
+    expect(services.todoist.syncMetadata).not.toHaveBeenCalled();
+
+    if (outcome === "success") {
+      manualRefresh.resolve(true);
+    } else {
+      manualRefresh.reject(new Error("manual refresh failed"));
+    }
+    await manual;
+
+    vi.advanceTimersByTime(29_999);
+    expect(services.todoist.syncMetadata).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(1);
+    expect(services.todoist.syncMetadata).toHaveBeenCalledOnce();
+    error.mockRestore();
+  });
+
+  it("uses the last overlapping manual Project sync settlement as the cadence boundary", async () => {
+    vi.useFakeTimers();
+    const services = makeServices();
+    const firstRefresh = deferred<boolean>();
+    const secondRefresh = deferred<boolean>();
+    services.todoist.sync
+      .mockImplementationOnce(async () => await firstRefresh.promise)
+      .mockImplementationOnce(async () => await secondRefresh.promise);
+    runtime.loadData.mockResolvedValueOnce(
+      defaultSettings({ autoRefreshInterval: 30, autoRefreshToggle: true }),
+    );
+    const plugin = makePlugin(services);
+    await plugin.onload();
+
+    vi.advanceTimersByTime(20_000);
+    const firstManual = plugin.syncProjectFolderNow();
+    vi.advanceTimersByTime(5000);
+    const secondManual = plugin.syncProjectFolderNow();
+
+    firstRefresh.resolve(true);
+    await firstManual;
+    vi.advanceTimersByTime(60_000);
+    expect(services.todoist.syncMetadata).not.toHaveBeenCalled();
+
+    secondRefresh.resolve(true);
+    await secondManual;
+    vi.advanceTimersByTime(29_999);
+    expect(services.todoist.syncMetadata).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(services.todoist.syncMetadata).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    "disabled",
+    "unloaded",
+  ] as const)("does not let an in-flight cycle revive Auto-refresh after it is %s", async (endState) => {
+    vi.useFakeTimers();
+    const services = makeServices();
+    const firstRefresh = deferred<boolean>();
+    services.todoist.syncMetadata.mockImplementationOnce(async () => await firstRefresh.promise);
+    runtime.loadData.mockResolvedValueOnce(
+      defaultSettings({ autoRefreshInterval: 30, autoRefreshToggle: true }),
+    );
+    const plugin = makePlugin(services);
+    await plugin.onload();
+
+    vi.advanceTimersByTime(30_000);
+    expect(services.todoist.syncMetadata).toHaveBeenCalledOnce();
+
+    if (endState === "disabled") {
+      await plugin.writeOptions({ autoRefreshToggle: false });
+    } else {
+      plugin.onunload();
+    }
+    firstRefresh.resolve(true);
+    await vi.advanceTimersByTimeAsync(0);
+
+    vi.advanceTimersByTime(300_000);
+    expect(services.todoist.syncMetadata).toHaveBeenCalledOnce();
   });
 
   it("does not run scheduled work before the Todoist client is ready", async () => {
@@ -1131,6 +1344,8 @@ describe("TodoistPlugin async lifecycle", () => {
   });
 
   it("does not defer automatic Project sync during an upload-only cycle", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-12T00:00:00.000Z"));
     const services = makeServices();
     services.projectSync.sync.mockResolvedValueOnce(emptyResult());
     runtime.settings.current = defaultSettings({
@@ -1139,10 +1354,18 @@ describe("TodoistPlugin async lifecycle", () => {
     });
     const sync = makeSyncHarness({
       coreStatus: "syncing",
-      syncStatus: "Uploading Tasks/Work/Local task.md",
+      syncStatus: "Fully synced",
     });
     const plugin = makePlugin(services, vi.fn(), sync.internalPlugins);
 
+    const baseline = internals(plugin).runScheduledSync();
+    await vi.advanceTimersByTimeAsync(OBSIDIAN_SYNC_SETTLE_MS + 250);
+    await baseline;
+    services.projectSync.sync.mockClear();
+    services.todoist.syncMetadata.mockClear();
+
+    sync.instance.syncStatus = "Uploading Tasks/Work/Local task.md";
+    sync.emitStatusChange();
     await internals(plugin).runScheduledSync();
 
     expect(services.todoist.syncMetadata).toHaveBeenCalledOnce();
@@ -1150,7 +1373,7 @@ describe("TodoistPlugin async lifecycle", () => {
     expect(services.projectSync.invalidate).not.toHaveBeenCalled();
   });
 
-  it("fails open when the private Sync plugin is missing, disabled, or malformed", async () => {
+  it("skips automatic Project sync when the private Sync plugin is missing, disabled, or malformed", async () => {
     const privateSurfaces: [string, unknown | null][] = [
       ["missing", null],
       [
@@ -1184,7 +1407,8 @@ describe("TodoistPlugin async lifecycle", () => {
 
       await internals(plugin).runScheduledSync();
 
-      expect(services.projectSync.sync, surfaceName).toHaveBeenCalledOnce();
+      expect(services.todoist.syncMetadata, surfaceName).toHaveBeenCalledOnce();
+      expect(services.projectSync.sync, surfaceName).not.toHaveBeenCalled();
     }
   });
 
@@ -1231,7 +1455,7 @@ describe("TodoistPlugin async lifecycle", () => {
     expect(services.projectSync.sync).toHaveBeenCalledOnce();
   });
 
-  it("invalidates an in-flight Project sync on incoming work and retries after Sync settles", async () => {
+  it("ends an invalidated in-flight Project sync and retries only after the next full interval", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-08-12T00:00:00.000Z"));
     const services = makeServices();
@@ -1239,36 +1463,62 @@ describe("TodoistPlugin async lifecycle", () => {
     services.projectSync.sync
       .mockImplementationOnce(async () => await firstProjection.promise)
       .mockResolvedValueOnce(emptyResult());
-    runtime.settings.current = defaultSettings({
-      autoRefreshToggle: true,
-      projectSyncEnabled: true,
-    });
-    const sync = makeSyncHarness({
-      coreStatus: "syncing",
-      syncStatus: "Uploading Tasks/Work/Local task.md",
-    });
-    const plugin = makePlugin(services, vi.fn(), sync.internalPlugins);
+    runtime.loadData.mockResolvedValueOnce(
+      defaultSettings({
+        autoRefreshInterval: 30,
+        autoRefreshToggle: true,
+        projectSyncEnabled: true,
+        projectSyncMappings: [
+          {
+            folder: "Tasks/Work",
+            id: "mapping-work",
+            includeSubprojects: true,
+            previousFolders: [],
+            project: { projectId: "work", projectName: "Work" },
+          },
+        ],
+      }),
+    );
+    const plugin = makePlugin(services);
+    const gate = (
+      plugin as unknown as {
+        obsidianSyncGate: {
+          isPermitCurrent(permit: { generation: number }): boolean;
+          monitor<T>(operation: () => Promise<T>): Promise<T>;
+          waitForSafePermit(): Promise<{ generation: number } | null>;
+        };
+      }
+    ).obsidianSyncGate;
+    const permit = { generation: 1 };
+    let permitCurrent = true;
+    vi.spyOn(gate, "waitForSafePermit").mockResolvedValue(permit);
+    vi.spyOn(gate, "monitor").mockImplementation(async (operation) => await operation());
+    vi.spyOn(gate, "isPermitCurrent").mockImplementation(() => permitCurrent);
+    await plugin.onload();
 
-    const scheduled = internals(plugin).runScheduledSync();
-    await flushPromises();
-    expect(services.projectSync.sync).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(30_000);
+    await vi.waitFor(() => {
+      expect(services.todoist.syncMetadata).toHaveBeenCalledOnce();
+      expect(services.projectSync.sync).toHaveBeenCalledOnce();
+    });
 
-    sync.instance.newServerFiles = [{ path: "Tasks/Work/Remote task.md" }];
-    sync.instance.syncStatus = "Downloading Tasks/Work/Remote task.md";
-    sync.emitStatusChange();
-    expect(services.projectSync.invalidate).toHaveBeenCalledOnce();
+    permitCurrent = false;
     firstProjection.resolve(emptyResult());
+    await vi.advanceTimersByTimeAsync(0);
     await flushPromises();
-    expect(services.projectSync.sync).toHaveBeenCalledOnce();
-
-    sync.instance.newServerFiles = [];
-    sync.instance.syncStatus = "Fully synced";
-    sync.emitStatusChange();
-    await vi.advanceTimersByTimeAsync(750);
-    await scheduled;
 
     expect(services.todoist.syncMetadata).toHaveBeenCalledOnce();
-    expect(services.projectSync.sync).toHaveBeenCalledTimes(2);
+    expect(services.projectSync.sync).toHaveBeenCalledOnce();
+
+    await vi.advanceTimersByTimeAsync(29_999);
+    expect(services.todoist.syncMetadata).toHaveBeenCalledOnce();
+    expect(services.projectSync.sync).toHaveBeenCalledOnce();
+
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(services.todoist.syncMetadata).toHaveBeenCalledTimes(2);
+    // The new cycle sees the invalid permit and ends without another Project sync.
+    expect(services.projectSync.sync).toHaveBeenCalledOnce();
   });
 
   it("cancels a scheduled incoming-Sync wait when Project sync is disabled", async () => {
@@ -1393,19 +1643,23 @@ describe("TodoistPlugin async lifecycle", () => {
   });
 
   it("invalidates an automatic task projection when incoming Sync starts during it", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-12T00:00:00.000Z"));
     const services = makeServices();
     runtime.settings.current = defaultSettings({ projectSyncEnabled: true });
     const sync = makeSyncHarness({
-      syncStatus: "Uploading Tasks/Work/Local task.md",
+      syncStatus: "Fully synced",
     });
     const plugin = makePlugin(services, vi.fn(), sync.internalPlugins);
 
-    const result = await plugin.runAutomaticProjectProjection(async () => {
+    const projection = plugin.runAutomaticProjectProjection(async () => {
       sync.instance.newServerFiles = [{ path: "Tasks/Work/Remote task.md" }];
       sync.instance.syncStatus = "Downloading Tasks/Work/Remote task.md";
       sync.emitStatusChange();
       return 42;
     });
+    await vi.advanceTimersByTimeAsync(OBSIDIAN_SYNC_SETTLE_MS);
+    const result = await projection;
 
     expect(result).toEqual({ performed: false });
     expect(services.projectSync.invalidate).toHaveBeenCalledOnce();
@@ -1583,9 +1837,6 @@ describe("TodoistPlugin async lifecycle", () => {
     const plugin = makePlugin(services, onLayoutReady);
     runtime.settings.current = { ...defaultSettings(), version: 0 };
     runtime.loadData.mockResolvedValueOnce({ ...defaultSettings(), version: 0 });
-    vi.spyOn(window, "setInterval").mockImplementation(
-      () => 1 as unknown as ReturnType<typeof window.setInterval>,
-    );
 
     await plugin.onload();
     const [layoutReady] = onLayoutReady.mock.calls[0] as [() => Promise<void>];

@@ -14,7 +14,7 @@ vi.mock("obsidian", async () => {
     if (!content.startsWith("---\n")) {
       return { exists: false, frontmatter: "", from: 0, to: 0, contentStart: 0 };
     }
-    const closing = content.indexOf("\n---", 4);
+    const closing = content.indexOf("\n---\n", 4);
     if (closing < 0) {
       return { exists: false, frontmatter: "", from: 0, to: 0, contentStart: 0 };
     }
@@ -23,7 +23,7 @@ vi.mock("obsidian", async () => {
       frontmatter: content.slice(4, closing),
       from: 4,
       to: closing,
-      contentStart: closing + 4,
+      contentStart: closing + 5,
     };
   };
   return {
@@ -123,6 +123,7 @@ class FakeFileManager {
   beforeRename: ((newPath: string) => void) | undefined;
   afterProcessFrontMatter: (() => void) | undefined;
   afterRename: (() => void) | undefined;
+  beforeTrash: ((file: TFile) => void) | undefined;
 
   readonly processFrontMatter = vi.fn(
     async (file: TFile, update: (frontmatter: Record<string, unknown>) => void) => {
@@ -135,7 +136,8 @@ class FakeFileManager {
       const parsed = loadYaml(info.frontmatter);
       const frontmatter = isRecord(parsed) ? parsed : {};
       update(frontmatter);
-      entry.content = `---\n${dumpYaml(frontmatter, { lineWidth: -1, noRefs: true })}---${entry.content.slice(info.contentStart)}`;
+      const tail = entry.content.slice(info.contentStart);
+      entry.content = `---\n${dumpYaml(frontmatter, { lineWidth: -1, noRefs: true })}---\n${tail}`;
       this.afterProcessFrontMatter?.();
     },
   );
@@ -156,6 +158,13 @@ class FakeFileManager {
     this.afterRename?.();
   });
 
+  readonly trashFile = vi.fn(async (file: TFile) => {
+    this.beforeTrash?.(file);
+    if (!this.vault.files.delete(file.path)) {
+      throw new Error("Missing fake file");
+    }
+  });
+
   constructor(vault: FakeVault) {
     this.vault = vault;
   }
@@ -165,7 +174,7 @@ const frontmatterInfo = (content: string) => {
   if (!content.startsWith("---\n")) {
     return { exists: false, frontmatter: "", from: 0, to: 0, contentStart: 0 };
   }
-  const closing = content.indexOf("\n---", 4);
+  const closing = content.indexOf("\n---\n", 4);
   if (closing < 0) {
     return { exists: false, frontmatter: "", from: 0, to: 0, contentStart: 0 };
   }
@@ -174,7 +183,7 @@ const frontmatterInfo = (content: string) => {
     frontmatter: content.slice(4, closing),
     from: 4,
     to: closing,
-    contentStart: closing + 4,
+    contentStart: closing + 5,
   };
 };
 
@@ -337,6 +346,47 @@ describe("ObsidianProjectSyncVault", () => {
     });
   });
 
+  it("keeps updated projections parseable across repeated syncs instead of creating copies", async () => {
+    const project = makeProject("root", { name: "Root" });
+    const originalTask = makeTask("task-1", { content: "Task", project });
+    const path = "Sync/Task.md";
+    vault.addFile(
+      path,
+      renderNewTaskDocument(
+        makeTaskFrontmatter(
+          { task: originalTask, completed: false },
+          project.id,
+          testProjectPath(project),
+          "2026-08-12T00:00:00.000Z",
+          mapping.id,
+        ),
+        makeManagedBody(originalTask),
+      ),
+    );
+    const changedTask = { ...originalTask, description: "Updated" };
+    const snapshot: ProjectSyncSnapshot = {
+      rootProjectId: project.id,
+      projects: [project],
+      tasks: [{ task: changedTask, completed: false }],
+      syncedAt: "2026-08-12T01:00:00.000Z",
+    };
+
+    const first = await adapter.reconcile(snapshot, mapping);
+    const second = await adapter.reconcile(snapshot, mapping);
+
+    expect(first).toMatchObject({ created: 0, updated: 1 });
+    expect(second).toMatchObject({ created: 0, updated: 0, unchanged: 1 });
+    expect(vault.files.size).toBe(1);
+    expect(vault.files.has("Sync/Task (2).md")).toBe(false);
+    expect(vault.files.get(path)?.content).toContain(
+      `\n---\n<!-- todoist-sync-plus:managed:start -->`,
+    );
+    expect(parseFrontmatter(vault.files.get(path)?.content ?? "")).toMatchObject({
+      todoist_task_id: originalTask.id,
+      todoist_description: "Updated",
+    });
+  });
+
   it("renames a legacy ID-suffixed note on the next sync without losing user content", async () => {
     const project = makeProject("root", { name: "Root" });
     const task = makeTask("6grv4CPC4VRF9MVj", {
@@ -424,6 +474,289 @@ describe("ObsidianProjectSyncVault", () => {
     expect(
       parseFrontmatter(vault.files.get("Sync/Same title (2).md")?.content ?? "").todoist_task_id,
     ).toBe(secondTask.id);
+  });
+
+  it("rebuilds a clean canonical projection and trashes equivalent same-ID copies", async () => {
+    const project = makeProject("root", { name: "Root" });
+    const task = {
+      ...makeTask("duplicate-task", { content: "Task", project }),
+      updatedAt: "2026-08-12T00:00:00.000Z",
+    };
+    const oldFrontmatter = makeTaskFrontmatter(
+      { task, completed: false },
+      project.id,
+      testProjectPath(project),
+      "2026-08-12T00:01:00.000Z",
+      mapping.id,
+    );
+    oldFrontmatter.user_property = "preserved";
+    const canonicalPath = "Sync/Task.md";
+    const duplicatePath = "Sync/Task (2).md";
+    const generatedResidue = `'todoist_updated_at: '${task.updatedAt}'\n---`;
+    vault.addFile(
+      canonicalPath,
+      `${renderNewTaskDocument(oldFrontmatter, makeManagedBody(task)).replace(
+        `\n${makeManagedBody(task)}`,
+        `${generatedResidue}${makeManagedBody(task)}`,
+      )}\nUser notes\n`,
+    );
+    vault.addFile(
+      duplicatePath,
+      `${renderNewTaskDocument(oldFrontmatter, makeManagedBody(task))}\nUser notes\n`,
+    );
+
+    const result = await adapter.reconcile(
+      {
+        rootProjectId: project.id,
+        projects: [project],
+        tasks: [{ task, completed: false }],
+        syncedAt: "2026-08-12T01:00:00.000Z",
+      },
+      mapping,
+    );
+
+    expect(result).toMatchObject({ created: 0, updated: 1, moved: 0, unchanged: 0 });
+    expect(result.conflicts).toEqual([]);
+    expect(vault.files.has(canonicalPath)).toBe(true);
+    expect(vault.files.has(duplicatePath)).toBe(false);
+    expect(fileManager.trashFile).toHaveBeenCalledOnce();
+    expect(fileManager.trashFile).toHaveBeenCalledWith(
+      expect.objectContaining({ path: duplicatePath }),
+    );
+    const repaired = vault.files.get(canonicalPath)?.content ?? "";
+    expect(repaired).not.toContain(generatedResidue);
+    expect(repaired).toContain("user_property: preserved");
+    expect(repaired).toContain("\nUser notes\n");
+  });
+
+  it("recovers the exact legacy joined frontmatter boundary before consolidating a copy", async () => {
+    const project = makeProject("root", { name: "Root" });
+    const task = makeTask("joined-boundary", { content: "Task", project });
+    const document = renderNewTaskDocument(
+      makeTaskFrontmatter(
+        { task, completed: false },
+        project.id,
+        testProjectPath(project),
+        "2026-08-12T00:00:00.000Z",
+        mapping.id,
+      ),
+      makeManagedBody(task),
+    );
+    const malformed = document.replace(
+      `\n---\n<!-- todoist-sync-plus:managed:start -->`,
+      `\n---<!-- todoist-sync-plus:managed:start -->`,
+    );
+    expect(frontmatterInfo(malformed).exists).toBe(false);
+    vault.addFile("Sync/Task.md", malformed);
+    vault.addFile("Sync/Task (2).md", document);
+
+    const result = await adapter.reconcile(
+      {
+        rootProjectId: project.id,
+        projects: [project],
+        tasks: [{ task, completed: false }],
+        syncedAt: "2026-08-12T01:00:00.000Z",
+      },
+      mapping,
+    );
+
+    expect(result).toMatchObject({ created: 0, updated: 1 });
+    expect(result.conflicts).toEqual([]);
+    expect(vault.files.size).toBe(1);
+    expect(vault.files.has("Sync/Task (2).md")).toBe(false);
+    const repaired = vault.files.get("Sync/Task.md")?.content ?? "";
+    expect(repaired).toContain(`\n---\n<!-- todoist-sync-plus:managed:start -->`);
+    expect(parseFrontmatter(repaired).todoist_task_id).toBe(task.id);
+  });
+
+  it("preserves every same-ID copy when user-owned regions differ, including empty versus nonempty", async () => {
+    const project = makeProject("root", { name: "Root" });
+    const task = makeTask("duplicate-task", { content: "Task", project });
+    const frontmatter = makeTaskFrontmatter(
+      { task, completed: false },
+      project.id,
+      testProjectPath(project),
+      "2026-08-12T00:01:00.000Z",
+      mapping.id,
+    );
+    const canonicalPath = "Sync/Task.md";
+    const duplicatePath = "Sync/Task (2).md";
+    const canonical = renderNewTaskDocument(frontmatter, makeManagedBody(task));
+    const duplicate = `${canonical}\nUnique user notes\n`;
+    vault.addFile(canonicalPath, canonical);
+    vault.addFile(duplicatePath, duplicate);
+
+    const result = await adapter.reconcile(
+      {
+        rootProjectId: project.id,
+        projects: [project],
+        tasks: [{ task, completed: false }],
+        syncedAt: "2026-08-12T01:00:00.000Z",
+      },
+      mapping,
+    );
+
+    expect(result).toMatchObject({ created: 0, updated: 0, moved: 0, unchanged: 0 });
+    expect(result.conflicts).toEqual([
+      expect.objectContaining({
+        taskId: task.id,
+        projectionBlocked: true,
+        message: expect.stringContaining("different user-authored content"),
+      }),
+    ]);
+    expect(vault.files.get(canonicalPath)?.content).toBe(canonical);
+    expect(vault.files.get(duplicatePath)?.content).toBe(duplicate);
+    expect(fileManager.trashFile).not.toHaveBeenCalled();
+    expect(vault.process).not.toHaveBeenCalled();
+  });
+
+  it("preflights every duplicate before writing the canonical projection", async () => {
+    const project = makeProject("root", { name: "Root" });
+    const task = makeTask("duplicate-task", { content: "Task", project });
+    const frontmatter = makeTaskFrontmatter(
+      { task, completed: false },
+      project.id,
+      testProjectPath(project),
+      "2026-08-12T00:01:00.000Z",
+      mapping.id,
+    );
+    const canonicalPath = "Sync/Task.md";
+    const duplicatePath = "Sync/Task (2).md";
+    const document = renderNewTaskDocument(frontmatter, makeManagedBody(task));
+    vault.addFile(canonicalPath, document);
+    vault.addFile(duplicatePath, document);
+    let duplicateReads = 0;
+    const originalRead = vault.read.bind(vault);
+    vi.spyOn(vault, "read").mockImplementation(async (file) => {
+      const content = await originalRead(file);
+      if (file.path === duplicatePath) {
+        duplicateReads++;
+        if (duplicateReads === 2) {
+          const duplicate = vault.files.get(duplicatePath);
+          if (duplicate !== undefined) {
+            duplicate.content = duplicate.content.replace(
+              "todoist_task_id: duplicate-task",
+              "todoist_task_id: remotely-changed",
+            );
+            return duplicate.content;
+          }
+        }
+      }
+      return content;
+    });
+
+    const before = new Map([...vault.files].map(([path, entry]) => [path, entry.content]));
+
+    const result = await adapter.reconcile(
+      {
+        rootProjectId: project.id,
+        projects: [project],
+        tasks: [{ task, completed: false }],
+        syncedAt: "2026-08-12T01:00:00.000Z",
+      },
+      mapping,
+    );
+
+    expect(result.conflicts).toEqual([
+      expect.objectContaining({ taskId: task.id, projectionBlocked: true }),
+    ]);
+    expect(vault.files.get(canonicalPath)?.content).toBe(before.get(canonicalPath));
+    expect(vault.files.has(duplicatePath)).toBe(true);
+    expect(fileManager.trashFile).not.toHaveBeenCalled();
+    expect(vault.process).not.toHaveBeenCalled();
+  });
+
+  it("keeps two legitimate same-title task identities while collapsing each identity's copies", async () => {
+    const project = makeProject("root", { name: "Root" });
+    const first = makeTask("task-a", { content: "Pre-Review", project });
+    const second = makeTask("task-b", { content: "Pre-Review", project });
+    for (const [task, paths] of [
+      [first, ["Sync/Pre-Review.md", "Sync/Pre-Review (3).md"]],
+      [second, ["Sync/Pre-Review (2).md", "Sync/Pre-Review (4).md"]],
+    ] as const) {
+      const document = renderNewTaskDocument(
+        makeTaskFrontmatter(
+          { task, completed: false },
+          project.id,
+          testProjectPath(project),
+          "2026-08-12T00:01:00.000Z",
+          mapping.id,
+        ),
+        makeManagedBody(task),
+      );
+      for (const path of paths) {
+        vault.addFile(path, document);
+      }
+    }
+
+    const result = await adapter.reconcile(
+      {
+        rootProjectId: project.id,
+        projects: [project],
+        tasks: [
+          { task: first, completed: false },
+          { task: second, completed: false },
+        ],
+        syncedAt: "2026-08-12T01:00:00.000Z",
+      },
+      mapping,
+    );
+
+    expect(result).toMatchObject({ created: 0, updated: 2, moved: 0 });
+    expect(result.conflicts).toEqual([]);
+    expect(vault.files.size).toBe(2);
+    expect(
+      new Set(
+        [...vault.files.values()].map(({ content }) => parseFrontmatter(content).todoist_task_id),
+      ),
+    ).toEqual(new Set([first.id, second.id]));
+    expect(fileManager.trashFile).toHaveBeenCalledTimes(2);
+  });
+
+  it("stops safely and reports partial cleanup when a later trash operation fails", async () => {
+    const project = makeProject("root", { name: "Root" });
+    const task = makeTask("duplicate-task", { content: "Task", project });
+    const document = renderNewTaskDocument(
+      makeTaskFrontmatter(
+        { task, completed: false },
+        project.id,
+        testProjectPath(project),
+        "2026-08-12T00:01:00.000Z",
+        mapping.id,
+      ),
+      makeManagedBody(task),
+    );
+    for (const path of ["Sync/Task.md", "Sync/Task (2).md", "Sync/Task (3).md"]) {
+      vault.addFile(path, document);
+    }
+    let trashAttempt = 0;
+    fileManager.beforeTrash = () => {
+      trashAttempt++;
+      if (trashAttempt === 2) {
+        throw new Error("simulated trash failure");
+      }
+    };
+
+    const result = await adapter.reconcile(
+      {
+        rootProjectId: project.id,
+        projects: [project],
+        tasks: [{ task, completed: false }],
+        syncedAt: "2026-08-12T01:00:00.000Z",
+      },
+      mapping,
+    );
+
+    expect(result.conflicts).toEqual([
+      expect.objectContaining({
+        taskId: task.id,
+        projectionBlocked: true,
+        message: expect.stringContaining("stopped after moving 1 of 2"),
+      }),
+    ]);
+    expect(vault.files.size).toBe(2);
+    expect(vault.files.has("Sync/Task (2).md")).toBe(false);
+    expect(vault.files.has("Sync/Task (3).md")).toBe(true);
   });
 
   it("renames the same managed note when its Todoist task title changes", async () => {
@@ -910,6 +1243,75 @@ describe("ObsidianProjectSyncVault", () => {
       todoist_sync_missing_count: 0,
       todoist_status: "active",
     });
+  });
+
+  it("never adopts a same-ID note owned by an inactive mapping root", async () => {
+    const oldProject = makeProject("old-root", { name: "Old" });
+    const activeProject = makeProject("new-root", { name: "New" });
+    const oldTask = makeTask("same-remote-id", { content: "Task", project: oldProject });
+    const activeTask = makeTask("same-remote-id", { content: "Task", project: activeProject });
+    const oldMapping = {
+      id: "mapping-old",
+      folder: "Sync",
+      project: { projectId: oldProject.id, projectName: oldProject.name },
+      includeSubprojects: false,
+      previousFolders: [],
+    };
+    const activeMapping = {
+      id: "mapping-new",
+      folder: "Sync",
+      project: { projectId: activeProject.id, projectName: activeProject.name },
+      includeSubprojects: false,
+      previousFolders: [],
+    };
+    const oldPath = "Sync/Task.md";
+    const oldContent = renderNewTaskDocument(
+      makeTaskFrontmatter(
+        { task: oldTask, completed: false },
+        oldProject.id,
+        testProjectPath(oldProject),
+        "2026-08-12T00:00:00.000Z",
+        oldMapping.id,
+      ),
+      makeManagedBody(oldTask),
+    );
+    vault.addFile(oldPath, oldContent);
+
+    const result = await adapter.reconcile(
+      {
+        rootProjectId: activeProject.id,
+        projects: [activeProject],
+        tasks: [{ task: activeTask, completed: false }],
+        syncedAt: "2026-08-12T01:00:00.000Z",
+      },
+      activeMapping,
+      {
+        assertValid: () => undefined,
+        mappingRoots: [
+          {
+            mappingId: oldMapping.id,
+            rootProjectId: oldProject.id,
+            folder: oldMapping.folder,
+            active: false,
+          },
+          {
+            mappingId: activeMapping.id,
+            rootProjectId: activeProject.id,
+            folder: activeMapping.folder,
+            active: true,
+          },
+        ],
+      },
+    );
+
+    expect(result).toMatchObject({ created: 1, moved: 0, updated: 0 });
+    expect(vault.files.get(oldPath)?.content).toBe(oldContent);
+    expect(parseFrontmatter(vault.files.get("Sync/Task (2).md")?.content ?? "")).toMatchObject({
+      todoist_task_id: activeTask.id,
+      todoist_sync_root_id: activeProject.id,
+      todoist_sync_mapping_id: activeMapping.id,
+    });
+    expect(fileManager.trashFile).not.toHaveBeenCalled();
   });
 
   it("preflights every configured folder synchronously", () => {

@@ -78,6 +78,8 @@ export type ProjectSyncResult = {
   outOfScope: number;
   deferred: number;
   conflicts: ProjectSyncConflict[];
+  /** Configured mappings skipped because their project is unavailable in this account. */
+  pausedMappingIds: string[];
   settledMappingIds: string[];
 };
 
@@ -85,6 +87,8 @@ export type ProjectSyncMappingRoot = {
   mappingId: string;
   rootProjectId: string;
   folder: string;
+  /** False for a configured mapping whose project is unavailable in the current account. */
+  active?: boolean;
 };
 
 export type ProjectSyncRunContext = {

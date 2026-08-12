@@ -22,6 +22,7 @@ const successResult = (overrides: Partial<ProjectSyncResult> = {}): ProjectSyncR
   outOfScope: 0,
   deferred: 0,
   conflicts: [],
+  pausedMappingIds: [],
   settledMappingIds: [],
   ...overrides,
 });
@@ -522,6 +523,100 @@ describe("ProjectFolderSyncService", () => {
 
     await expect(service.sync()).rejects.toThrow("folder does not exist");
     expect(fetchProjectTasks).not.toHaveBeenCalled();
+    expect(vault.reconcile).not.toHaveBeenCalled();
+  });
+
+  it("skips only mappings whose selected project is unavailable in the current account", async () => {
+    const available = makeProject("available", { name: "Available" });
+    const unavailable = mapping("old-account", {
+      folder: "Todoist/Old account",
+      project: { projectId: "old-account", projectName: "Old account" },
+    });
+    const active = mapping(available.id);
+    const fetchProjectTasks = vi.fn(async () => projectTaskPage());
+    const vault = makeVault();
+    const service = new ProjectFolderSyncService(
+      { listProjects: () => [available], fetchProjectTasks },
+      vault,
+      config(unavailable, active),
+    );
+
+    const result = await service.sync();
+
+    expect(fetchProjectTasks).toHaveBeenCalledOnce();
+    expect(fetchProjectTasks).toHaveBeenCalledWith(available.id);
+    expect(vault.validateConfig).toHaveBeenCalledWith({ enabled: true, mappings: [active] });
+    expect(vault.reconcile).toHaveBeenCalledOnce();
+    expect(result?.pausedMappingIds).toEqual([unavailable.id]);
+    expect(result?.conflicts).toEqual([]);
+  });
+
+  it("keeps all unavailable mappings configured while performing no Vault access", async () => {
+    const unavailable = mapping("old-account", {
+      folder: "Todoist/Old account",
+      project: { projectId: "old-account", projectName: "Old account" },
+    });
+    const fetchProjectTasks = vi.fn(async () => projectTaskPage());
+    const vault = makeVault();
+    const service = new ProjectFolderSyncService(
+      { listProjects: () => [], fetchProjectTasks },
+      vault,
+      config(unavailable),
+    );
+
+    const result = await service.sync();
+
+    expect(fetchProjectTasks).not.toHaveBeenCalled();
+    expect(vault.validateConfig).not.toHaveBeenCalled();
+    expect(vault.reconcile).not.toHaveBeenCalled();
+    expect(result?.pausedMappingIds).toEqual([unavailable.id]);
+    expect(result?.conflicts).toEqual([]);
+    expect(service.getConfig().mappings).toEqual([unavailable]);
+  });
+
+  it.each([
+    ["empty", ""],
+    ["unsafe", "../Old account"],
+  ])("ignores an %s root on a paused mapping while synchronizing an active mapping", async (_label, folder) => {
+    const available = makeProject("available", { name: "Available" });
+    const unavailable = mapping("old-account", {
+      folder,
+      project: { projectId: "old-account", projectName: "Old account" },
+    });
+    const active = mapping(available.id);
+    const fetchProjectTasks = vi.fn(async () => projectTaskPage());
+    const vault = makeVault();
+    const service = new ProjectFolderSyncService(
+      { listProjects: () => [available], fetchProjectTasks },
+      vault,
+      config(unavailable, active),
+    );
+
+    await expect(service.sync()).resolves.toMatchObject({ pausedMappingIds: [unavailable.id] });
+    expect(fetchProjectTasks).toHaveBeenCalledOnce();
+    expect(vault.validateConfig).toHaveBeenCalledWith({ enabled: true, mappings: [active] });
+    expect(vault.reconcile).toHaveBeenCalledOnce();
+  });
+
+  it("rejects an active root nested inside a paused mapping root before fetching or mutating", async () => {
+    const available = makeProject("available", { name: "Available" });
+    const paused = mapping("old-account", {
+      folder: "Todoist/Work",
+      project: { projectId: "old-account", projectName: "Old account" },
+    });
+    const active = mapping(available.id, { folder: "Todoist/Work/New" });
+    const fetchProjectTasks = vi.fn(async () => projectTaskPage());
+    const vault = makeVault();
+    const service = new ProjectFolderSyncService(
+      { listProjects: () => [available], fetchProjectTasks },
+      vault,
+      config(paused, active),
+    );
+
+    await expect(service.sync()).rejects.toThrow("overlap");
+
+    expect(fetchProjectTasks).not.toHaveBeenCalled();
+    expect(vault.validateConfig).not.toHaveBeenCalled();
     expect(vault.reconcile).not.toHaveBeenCalled();
   });
 

@@ -87,7 +87,8 @@ export const en: Translations = {
       validation: {
         projectRequired: "Select a Todoist project.",
         folderRequired: "Choose a Vault folder.",
-        projectUnavailable: "The selected Todoist project is no longer available.",
+        projectUnavailable:
+          "This project is unavailable in the current Todoist account. This mapping is paused; reselect a project to use this account.",
         folderMissing: "This Vault folder does not exist.",
         duplicateProject: "This Todoist project is already mapped.",
         folderOverlap: "This Vault folder overlaps another project mapping.",

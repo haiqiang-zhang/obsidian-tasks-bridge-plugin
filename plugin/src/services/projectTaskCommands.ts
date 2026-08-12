@@ -93,7 +93,19 @@ export class ProjectTaskCommandService {
   }
 
   public isReady(): boolean {
-    return this.todoist.isReady() && this.projectSync.getConfig().enabled;
+    if (!this.todoist.isReady()) {
+      return false;
+    }
+    const config = this.projectSync.getConfig();
+    const availableProjectIds = new Set(
+      this.projectSync.listProjects().map((project) => project.id),
+    );
+    return (
+      config.enabled &&
+      config.mappings.some(
+        (mapping) => mapping.project !== null && availableProjectIds.has(mapping.project.projectId),
+      )
+    );
   }
 
   public async loadEditableTask(reference: ManagedProjectTaskReference): Promise<ApiTask> {
@@ -172,8 +184,14 @@ export class ProjectTaskCommandService {
       throw new ProjectTaskCommandError("This note is not the selected managed Todoist task");
     }
 
+    const availableProjectIds = new Set(
+      this.projectSync.listProjects().map((project) => project.id),
+    );
     const candidates = config.mappings.filter((mapping) => {
       if (mapping.project?.projectId !== identity.rootProjectId) {
+        return false;
+      }
+      if (!availableProjectIds.has(mapping.project.projectId)) {
         return false;
       }
       if (identity.mappingId !== undefined && mapping.id !== identity.mappingId) {

@@ -18,6 +18,8 @@ import type {
 
 const properties = {
   managed: "note.todoist_sync_managed",
+  mappingId: "note.todoist_sync_mapping_id",
+  rootProjectId: "note.todoist_sync_root_id",
   taskId: "note.todoist_task_id",
   content: "note.todoist_content",
   description: "note.todoist_description",
@@ -57,8 +59,8 @@ const hiddenMetadataProperties = new Set<BasesPropertyId>([
   properties.projectPath,
   properties.projectIdPath,
   properties.parentTaskId,
-  "note.todoist_sync_mapping_id",
-  "note.todoist_sync_root_id",
+  properties.mappingId,
+  properties.rootProjectId,
   "note.todoist_sync_missing_count",
 ]);
 
@@ -90,6 +92,12 @@ type GroupBuildResult = {
   diagnostics: TodoistListDiagnostics;
 };
 
+type TaskIdentityState = {
+  acceptedTaskKeys: Set<string>;
+  occurrencesByTaskKey: Map<string, number>;
+  seenFilePaths: Set<string>;
+};
+
 const emptyCounts = (): TodoistListCounts => ({ active: 0, completed: 0, unavailable: 0 });
 
 const addCounts = (target: TodoistListCounts, source: TodoistListCounts): TodoistListCounts => {
@@ -105,8 +113,14 @@ export const buildTodoistListModel = (
 ): TodoistListModel => {
   const diagnostics: TodoistListDiagnostics = {
     ignoredNonManaged: 0,
+    ignoredDuplicateTaskNotes: 0,
     ignoredInvalid: 0,
     hierarchyWarnings: 0,
+  };
+  const taskIdentities: TaskIdentityState = {
+    acceptedTaskKeys: new Set(),
+    occurrencesByTaskKey: new Map(),
+    seenFilePaths: new Set(),
   };
   const projectOptions: TodoistListProjectOption[] = [];
   const seenProjectOptions = new Set<string>();
@@ -115,7 +129,7 @@ export const buildTodoistListModel = (
   let taskCount = 0;
 
   for (const [index, sourceGroup] of groups.entries()) {
-    const result = buildGroup(sourceGroup, index, options);
+    const result = buildGroup(sourceGroup, index, options, taskIdentities);
     modelGroups.push(result.group);
     addCounts(counts, result.group.counts);
     taskCount += result.taskCount;
@@ -124,12 +138,16 @@ export const buildTodoistListModel = (
     diagnostics.hierarchyWarnings += result.diagnostics.hierarchyWarnings;
 
     for (const project of result.projectOptions) {
-      if (seenProjectOptions.has(project.id)) {
+      if (seenProjectOptions.has(project.scopeKey)) {
         continue;
       }
-      seenProjectOptions.add(project.id);
+      seenProjectOptions.add(project.scopeKey);
       projectOptions.push(project);
     }
+  }
+
+  for (const occurrences of taskIdentities.occurrencesByTaskKey.values()) {
+    diagnostics.ignoredDuplicateTaskNotes += Math.max(0, occurrences - 1);
   }
 
   return {
@@ -145,26 +163,54 @@ const buildGroup = (
   sourceGroup: BasesEntryGroup,
   groupIndex: number,
   options: BuildOptions,
+  taskIdentities: TaskIdentityState,
 ): GroupBuildResult => {
   const diagnostics: TodoistListDiagnostics = {
     ignoredNonManaged: 0,
+    ignoredDuplicateTaskNotes: 0,
     ignoredInvalid: 0,
     hierarchyWarnings: 0,
   };
   const projectsById = new Map<string, MutableProject>();
   const projectOrder: MutableProject[] = [];
-  const tasksById = new Set<string>();
   let acceptedTaskCount = 0;
 
   for (const [sourceOrder, entry] of sourceGroup.entries.entries()) {
+    // A broad Base folder filter may include its own .base configuration file or other assets.
+    // They are not notes and should not be reported as non-managed Markdown notes.
+    if (!isMarkdownEntry(entry)) {
+      continue;
+    }
+    if (taskIdentities.seenFilePaths.has(entry.file.path)) {
+      continue;
+    }
+    taskIdentities.seenFilePaths.add(entry.file.path);
     if (!readBoolean(entry, properties.managed)) {
       diagnostics.ignoredNonManaged++;
       continue;
     }
 
-    const task = readTask(entry, options);
-    if (task === null || tasksById.has(task.id)) {
+    const taskId = readString(entry, properties.taskId);
+    const rootProjectId = readString(entry, properties.rootProjectId);
+    if (taskId === undefined || rootProjectId === undefined) {
       diagnostics.ignoredInvalid++;
+      continue;
+    }
+    const mappingId = readString(entry, properties.mappingId);
+    const taskKey = todoistListTaskScopeKey(mappingId, rootProjectId, taskId);
+    taskIdentities.occurrencesByTaskKey.set(
+      taskKey,
+      (taskIdentities.occurrencesByTaskKey.get(taskKey) ?? 0) + 1,
+    );
+    const task = readTask(entry, options);
+    if (task === null) {
+      diagnostics.ignoredInvalid++;
+      continue;
+    }
+    if (taskIdentities.acceptedTaskKeys.has(taskKey)) {
+      if (!hasValidProjectPath(task)) {
+        diagnostics.ignoredInvalid++;
+      }
       continue;
     }
     const project = ensureProjectPath(task, sourceOrder, projectsById, projectOrder, diagnostics);
@@ -172,7 +218,7 @@ const buildGroup = (
       diagnostics.ignoredInvalid++;
       continue;
     }
-    tasksById.add(task.id);
+    taskIdentities.acceptedTaskKeys.add(task.scopeKey);
     project.directTasks.push({ sourceOrder, task });
     acceptedTaskCount++;
   }
@@ -190,8 +236,9 @@ const buildGroup = (
     (result, project) => addCounts(result, project.counts),
     emptyCounts(),
   );
-  const projectOptions = projectOrder.map(({ id, name, pathIds, pathNames }) => ({
+  const projectOptions = projectOrder.map(({ id, scopeKey, name, pathIds, pathNames }) => ({
     id,
+    scopeKey,
     name,
     pathIds: [...pathIds],
     pathNames: [...pathNames],
@@ -210,6 +257,30 @@ const buildGroup = (
   };
 };
 
+const isMarkdownEntry = (entry: BasesEntry): boolean =>
+  entry.file.extension?.toLocaleLowerCase("en-US") === "md" ||
+  entry.file.path.toLocaleLowerCase("en-US").endsWith(".md");
+
+const hasValidProjectPath = (task: TodoistListTaskRecord): boolean => {
+  if (
+    task.projectIdPath.length === 0 ||
+    task.projectIdPath.length !== task.projectPath.length ||
+    task.projectIdPath[task.projectIdPath.length - 1] !== task.projectId
+  ) {
+    return false;
+  }
+  const pathIds = new Set<string>();
+  return task.projectIdPath.every((id, index) => {
+    const normalizedId = id.trim();
+    const name = task.projectPath[index]?.trim();
+    if (normalizedId === "" || name === undefined || name === "" || pathIds.has(normalizedId)) {
+      return false;
+    }
+    pathIds.add(normalizedId);
+    return true;
+  });
+};
+
 const ensureProjectPath = (
   task: TodoistListTaskRecord,
   sourceOrder: number,
@@ -217,11 +288,7 @@ const ensureProjectPath = (
   projectOrder: MutableProject[],
   diagnostics: TodoistListDiagnostics,
 ): MutableProject | null => {
-  if (
-    task.projectIdPath.length === 0 ||
-    task.projectIdPath.length !== task.projectPath.length ||
-    task.projectIdPath[task.projectIdPath.length - 1] !== task.projectId
-  ) {
+  if (!hasValidProjectPath(task)) {
     return null;
   }
 
@@ -236,7 +303,12 @@ const ensureProjectPath = (
     pathIds.add(normalizedId);
     segments.push({ id: normalizedId, name });
 
-    const existing = projectsById.get(normalizedId);
+    const projectScopeKey = todoistListProjectScopeKey(
+      task.mappingId,
+      task.rootProjectId,
+      normalizedId,
+    );
+    const existing = projectsById.get(projectScopeKey);
     const expectedParentId = segments[index - 1]?.id;
     if (
       existing !== undefined &&
@@ -251,10 +323,16 @@ const ensureProjectPath = (
   // later segment conflicts with an existing project could leave empty "ghost" projects behind.
   let parent: MutableProject | undefined;
   for (const [index, segment] of segments.entries()) {
-    let project = projectsById.get(segment.id);
+    const projectScopeKey = todoistListProjectScopeKey(
+      task.mappingId,
+      task.rootProjectId,
+      segment.id,
+    );
+    let project = projectsById.get(projectScopeKey);
     if (project === undefined) {
       project = {
         id: segment.id,
+        scopeKey: projectScopeKey,
         name: segment.name,
         parentId: parent?.id,
         pathIds: segments.slice(0, index + 1).map(({ id }) => id),
@@ -268,7 +346,7 @@ const ensureProjectPath = (
         directTasks: [],
         firstSourceOrder: sourceOrder,
       };
-      projectsById.set(segment.id, project);
+      projectsById.set(projectScopeKey, project);
       projectOrder.push(project);
       parent?.projects.push(project);
     }
@@ -443,6 +521,8 @@ const countTasks = (tasks: TodoistListTaskNode[]): TodoistListCounts => {
 
 const readTask = (entry: BasesEntry, options: BuildOptions): TodoistListTaskRecord | null => {
   const id = readString(entry, properties.taskId);
+  const mappingId = readString(entry, properties.mappingId);
+  const rootProjectId = readString(entry, properties.rootProjectId);
   const content = readString(entry, properties.content);
   const status = readStatus(entry);
   const projectId = readString(entry, properties.projectId);
@@ -451,6 +531,7 @@ const readTask = (entry: BasesEntry, options: BuildOptions): TodoistListTaskReco
   const projectPath = readStringList(entry, properties.projectPath);
   if (
     id === undefined ||
+    rootProjectId === undefined ||
     content === undefined ||
     status === undefined ||
     projectId === undefined ||
@@ -463,6 +544,9 @@ const readTask = (entry: BasesEntry, options: BuildOptions): TodoistListTaskReco
 
   return {
     id,
+    scopeKey: todoistListTaskScopeKey(mappingId, rootProjectId, id),
+    mappingId,
+    rootProjectId,
     filePath: entry.file.path,
     fileName: entry.file.name,
     content,
@@ -490,6 +574,21 @@ const readTask = (entry: BasesEntry, options: BuildOptions): TodoistListTaskReco
     metadata: readMetadata(entry, options),
   };
 };
+
+const makeScopeKey = (mappingId: string | undefined, rootProjectId: string): string =>
+  JSON.stringify([mappingId ?? null, rootProjectId]);
+
+export const todoistListTaskScopeKey = (
+  mappingId: string | undefined,
+  rootProjectId: string,
+  taskId: string,
+): string => `task:${makeScopeKey(mappingId, rootProjectId)}:${JSON.stringify(taskId)}`;
+
+export const todoistListProjectScopeKey = (
+  mappingId: string | undefined,
+  rootProjectId: string,
+  projectId: string,
+): string => `project:${makeScopeKey(mappingId, rootProjectId)}:${JSON.stringify(projectId)}`;
 
 const readMetadata = (entry: BasesEntry, options: BuildOptions): TodoistListMetadata[] => {
   const result: TodoistListMetadata[] = [];
@@ -655,6 +754,20 @@ export const findProjectRoot = (
   return undefined;
 };
 
+const findProjectRoots = (
+  projects: readonly TodoistListProject[],
+  projectId: string,
+): TodoistListProject[] => {
+  const matches: TodoistListProject[] = [];
+  for (const project of projects) {
+    if (project.id === projectId) {
+      matches.push(project);
+    }
+    matches.push(...findProjectRoots(project.projects, projectId));
+  }
+  return matches;
+};
+
 export const scopeTodoistListGroups = (
   groups: readonly TodoistListGroup[],
   rootProjectId: string | null,
@@ -664,11 +777,15 @@ export const scopeTodoistListGroups = (
   }
 
   return groups.map((group) => {
-    const project = findProjectRoot(group.projects, rootProjectId);
+    const projects = findProjectRoots(group.projects, rootProjectId);
+    const counts = projects.reduce(
+      (result, project) => addCounts(result, project.counts),
+      emptyCounts(),
+    );
     return {
       ...group,
-      projects: project === undefined ? [] : [project],
-      counts: project?.counts ?? emptyCounts(),
+      projects,
+      counts,
     };
   });
 };

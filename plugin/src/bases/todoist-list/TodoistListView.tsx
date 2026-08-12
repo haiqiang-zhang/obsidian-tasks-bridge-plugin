@@ -1,5 +1,6 @@
 import {
   BasesView,
+  type BasesViewConfig,
   type BasesViewRegistration,
   type HoverParent,
   type HoverPopover,
@@ -9,6 +10,7 @@ import {
 import { createRoot, type Root } from "react-dom/client";
 
 import type { ProjectSyncStatisticsSnapshot } from "@/project-sync";
+import { selectProjectHierarchy } from "@/project-sync";
 
 import { type CompletionHeatmapRange, isCompletionHeatmapRange } from "./completionHeatmapModel";
 import { buildTodoistListModel } from "./model";
@@ -16,6 +18,7 @@ import { TodoistList } from "./TodoistList";
 import type {
   TodoistListActions,
   TodoistListNavigation,
+  TodoistListProjectOption,
   TodoistListProjectStatisticsSource,
   TodoistListViewOptions,
 } from "./types";
@@ -31,29 +34,52 @@ const showSectionsConfigKey = "todoistShowSections";
 const projectOverviewCollapsedConfigKey = "tasksProjectOverviewCollapsed";
 const completionHeatmapRangeConfigKey = "tasksCompletionHeatmapRange";
 const defaultCompletionHeatmapRange: CompletionHeatmapRange = "last-year";
+const allSynchronizedProjectsValue = "__tasks_bridge_all_synchronized_projects__";
 
-export const tasksListViewOptions = (): ViewOption[] => [
+export const tasksListViewOptions = (
+  projectStatistics: TodoistListProjectStatisticsSource,
+  config?: BasesViewConfig,
+): ViewOption[] => [
   {
-    type: "dropdown",
-    key: densityConfigKey,
-    displayName: "Density",
-    default: "comfortable",
-    options: {
-      comfortable: "Comfortable",
-      compact: "Compact",
-    },
+    type: "group",
+    displayName: "Project scope",
+    items: [
+      {
+        type: "dropdown",
+        key: rootProjectConfigKey,
+        displayName: "Root project",
+        default: allSynchronizedProjectsValue,
+        options: buildRootProjectDropdownOptions(projectStatistics, config),
+      },
+    ],
   },
   {
-    type: "toggle",
-    key: showDescriptionsConfigKey,
-    displayName: "Show descriptions",
-    default: true,
-  },
-  {
-    type: "toggle",
-    key: showSectionsConfigKey,
-    displayName: "Show sections",
-    default: true,
+    type: "group",
+    displayName: "Appearance",
+    items: [
+      {
+        type: "dropdown",
+        key: densityConfigKey,
+        displayName: "Density",
+        default: "comfortable",
+        options: {
+          comfortable: "Comfortable",
+          compact: "Compact",
+        },
+      },
+      {
+        type: "toggle",
+        key: showDescriptionsConfigKey,
+        displayName: "Show descriptions",
+        default: true,
+      },
+      {
+        type: "toggle",
+        key: showSectionsConfigKey,
+        displayName: "Show sections",
+        default: true,
+      },
+    ],
   },
 ];
 
@@ -65,7 +91,10 @@ export const createTasksListViewRegistration = (
   icon: "lucide-list-tree",
   factory: (controller, containerEl) =>
     new TasksListView(controller, containerEl, actions, projectStatistics),
-  options: tasksListViewOptions,
+  // Obsidian 1.11.4 declares this callback without an argument, while newer API declarations pass
+  // the current view config. An optional argument supports both and lets us preserve an unavailable
+  // saved selection in newer Obsidian versions.
+  options: (config?: BasesViewConfig) => tasksListViewOptions(projectStatistics, config),
 });
 
 export class TasksListView extends BasesView implements HoverParent {
@@ -140,7 +169,7 @@ export class TasksListView extends BasesView implements HoverParent {
       order: this.config.getOrder(),
       getDisplayName: (propertyId) => this.config.getDisplayName(propertyId),
     });
-    const rootProjectId = readOptionalString(this.config.get(rootProjectConfigKey));
+    const rootProjectId = readRootProjectId(this.config.get(rootProjectConfigKey));
     const projectOverviewCollapsed = this.config.get(projectOverviewCollapsedConfigKey) === true;
     const completionHeatmapRange = readCompletionHeatmapRange(
       this.config.get(completionHeatmapRangeConfigKey),
@@ -173,7 +202,6 @@ export class TasksListView extends BasesView implements HoverParent {
         onCompletionHeatmapRangeChange={(range) =>
           this.config.set(completionHeatmapRangeConfigKey, range)
         }
-        onRootProjectChange={(projectId) => this.config.set(rootProjectConfigKey, projectId)}
         options={options}
         projectOverviewCollapsed={projectOverviewCollapsed}
         projectSyncConfigured={this.projectStatistics.isConfigured()}
@@ -196,6 +224,117 @@ export class TasksListView extends BasesView implements HoverParent {
 
 const readOptionalString = (value: unknown): string | null =>
   typeof value === "string" && value.trim() !== "" ? value : null;
+
+const readRootProjectId = (value: unknown): string | null => {
+  const projectId = readOptionalString(value);
+  return projectId === allSynchronizedProjectsValue ? null : projectId;
+};
+
+const buildRootProjectDropdownOptions = (
+  projectStatistics: TodoistListProjectStatisticsSource,
+  config?: BasesViewConfig,
+): Record<string, string> => {
+  const options: Record<string, string> = {
+    [allSynchronizedProjectsValue]: "All synchronized projects",
+  };
+  const projects = collectRootProjectOptions(projectStatistics);
+  for (const project of projects) {
+    options[project.id] = project.pathNames.join(" / ");
+  }
+
+  const selectedProjectId =
+    config === undefined ? null : readRootProjectId(config.get(rootProjectConfigKey));
+  if (selectedProjectId !== null && options[selectedProjectId] === undefined) {
+    options[selectedProjectId] = `Unavailable project (${selectedProjectId})`;
+  }
+  return options;
+};
+
+const collectRootProjectOptions = (
+  projectStatistics: TodoistListProjectStatisticsSource,
+): TodoistListProjectOption[] => {
+  const liveProjects = [...projectStatistics.getProjects()];
+  const snapshot = projectStatistics.getSnapshot();
+  if (snapshot !== null) {
+    const liveById = new Map(liveProjects.map((project) => [project.id, project]));
+    const result: TodoistListProjectOption[] = [];
+    const seen = new Set<string>();
+    for (const scope of snapshot.scopes) {
+      const scopeById = new Map(scope.projects.map((project) => [project.id, project]));
+      for (const project of scope.projects) {
+        if (seen.has(project.id)) {
+          continue;
+        }
+        seen.add(project.id);
+        const pathNames = resolveProjectPathNames(project.id, liveById, scopeById);
+        result.push({
+          id: project.id,
+          scopeKey: project.id,
+          name: project.name,
+          pathIds: [],
+          pathNames: pathNames.length > 0 ? pathNames : [project.name],
+        });
+      }
+    }
+    return result;
+  }
+
+  const configured = projectStatistics.getConfig().mappings;
+  const liveById = new Map(liveProjects.map((project) => [project.id, project]));
+  const result: TodoistListProjectOption[] = [];
+  const seen = new Set<string>();
+  for (const mapping of configured) {
+    const configuredProject = mapping.project;
+    if (configuredProject === null) {
+      continue;
+    }
+    const root = liveById.get(configuredProject.projectId);
+    const selected =
+      root === undefined
+        ? []
+        : selectProjectHierarchy(liveProjects, root.id, mapping.includeSubprojects);
+    const candidates =
+      selected.length > 0
+        ? selected
+        : [{ id: configuredProject.projectId, name: configuredProject.projectName }];
+    for (const project of candidates) {
+      if (seen.has(project.id)) {
+        continue;
+      }
+      seen.add(project.id);
+      const pathNames = resolveProjectPathNames(project.id, liveById);
+      result.push({
+        id: project.id,
+        scopeKey: project.id,
+        name: project.name,
+        pathIds: [],
+        pathNames: pathNames.length > 0 ? pathNames : [project.name],
+      });
+    }
+  }
+  return result;
+};
+
+type ProjectPathNode = { id: string; name: string; parentId: string | null };
+
+const resolveProjectPathNames = (
+  projectId: string,
+  primary: ReadonlyMap<string, ProjectPathNode>,
+  fallback: ReadonlyMap<string, ProjectPathNode> = new Map(),
+): string[] => {
+  const path: string[] = [];
+  const seen = new Set<string>();
+  let current = primary.get(projectId) ?? fallback.get(projectId);
+  while (current !== undefined && !seen.has(current.id)) {
+    seen.add(current.id);
+    path.push(current.name);
+    current =
+      current.parentId === null
+        ? undefined
+        : (primary.get(current.parentId) ?? fallback.get(current.parentId));
+  }
+  return path.reverse();
+};
 
 const readCompletionHeatmapRange = (value: unknown): CompletionHeatmapRange =>
   isCompletionHeatmapRange(value) ? value : defaultCompletionHeatmapRange;

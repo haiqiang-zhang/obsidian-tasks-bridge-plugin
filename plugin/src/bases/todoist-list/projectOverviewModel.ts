@@ -1,5 +1,6 @@
 import type { ProjectCompletionEvent, ProjectSyncStatisticsSnapshot } from "@/project-sync";
 
+import { todoistListProjectScopeKey } from "./model";
 import type { TodoistListProjectOption } from "./types";
 
 export type ProjectOverviewCounts = {
@@ -9,6 +10,7 @@ export type ProjectOverviewCounts = {
 
 export type ProjectOverviewNode = {
   id: string;
+  scopeKey: string;
   name: string;
   pathIds: string[];
   pathNames: string[];
@@ -227,6 +229,7 @@ const buildScopeOverview = (scope: StatisticsScope): ScopeOverview | null => {
     });
     const node: ProjectOverviewNode = {
       id: project.id,
+      scopeKey: todoistListProjectScopeKey(scope.mappingId, scope.rootProjectId, project.id),
       name: project.name,
       pathIds: path.map(({ id }) => id),
       pathNames: path.map(({ name }) => name),
@@ -247,6 +250,7 @@ const buildScopeOverview = (scope: StatisticsScope): ScopeOverview | null => {
   const collectOptions = (node: ProjectOverviewNode): void => {
     projectOptions.push({
       id: node.id,
+      scopeKey: node.scopeKey,
       name: node.name,
       pathIds: [...node.pathIds],
       pathNames: [...node.pathNames],
@@ -265,10 +269,10 @@ const collectProjectOptions = (scopes: readonly ScopeOverview[]): TodoistListPro
   const seen = new Set<string>();
   for (const scope of scopes) {
     for (const project of scope.projectOptions) {
-      if (seen.has(project.id)) {
+      if (seen.has(project.scopeKey)) {
         continue;
       }
-      seen.add(project.id);
+      seen.add(project.scopeKey);
       options.push({
         ...project,
         pathIds: [...project.pathIds],
@@ -303,10 +307,10 @@ const selectProjectOccurrence = (
 const deduplicateForest = (roots: readonly ProjectOverviewNode[]): ProjectOverviewNode[] => {
   const seen = new Set<string>();
   const claim = (node: ProjectOverviewNode): ProjectOverviewNode | null => {
-    if (seen.has(node.id)) {
+    if (seen.has(node.scopeKey)) {
       return null;
     }
-    seen.add(node.id);
+    seen.add(node.scopeKey);
     const children = node.children
       .map(claim)
       .filter((child): child is ProjectOverviewNode => child !== null);
@@ -333,6 +337,7 @@ const aggregateNode = (
   });
   return {
     id: source.id,
+    scopeKey: source.scopeKey,
     name: source.name,
     pathIds: [...source.pathIds],
     pathNames: [...source.pathNames],

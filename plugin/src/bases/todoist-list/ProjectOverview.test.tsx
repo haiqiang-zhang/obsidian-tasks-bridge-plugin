@@ -28,6 +28,7 @@ const makeNode = (
   );
   return {
     id,
+    scopeKey: `project:${id}`,
     name,
     pathIds: pathNames.map((_, index) => `${id}-${index}`),
     pathNames,
@@ -60,15 +61,23 @@ const makeModel = (overrides: Partial<ProjectOverviewModel> = {}): ProjectOvervi
     rootProjectId: "root",
     rootAvailable: true,
     projectOptions: [
-      { id: "root", name: "Root", pathIds: ["root"], pathNames: ["Root"] },
+      {
+        id: "root",
+        scopeKey: "project:root",
+        name: "Root",
+        pathIds: ["root"],
+        pathNames: ["Root"],
+      },
       {
         id: "child",
+        scopeKey: "project:child",
         name: "Child",
         pathIds: ["root", "child"],
         pathNames: ["Root", "Child"],
       },
       {
         id: "grandchild",
+        scopeKey: "project:grandchild",
         name: "Grandchild",
         pathIds: ["root", "child", "grandchild"],
         pathNames: ["Root", "Child", "Grandchild"],
@@ -349,6 +358,7 @@ describe("ProjectOverview", () => {
           projectOptions: [
             {
               id: "empty",
+              scopeKey: "project:empty",
               name: "Empty project",
               pathIds: ["empty"],
               pathNames: ["Empty project"],

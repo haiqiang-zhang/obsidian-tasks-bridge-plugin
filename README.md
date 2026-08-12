@@ -14,19 +14,19 @@ Tasks Bridge is based on the original [Todoist Sync](https://github.com/jamiebry
 
 ```mermaid
 flowchart LR
-    OBSIDIAN["`Obsidian
-    Interaction and presentation`"] <--> BRIDGE["Tasks Bridge"]
-    BRIDGE --> TODOIST["`Todoist
-    Implemented`"]
-    BRIDGE -.-> FUTURE_A["`Future task backend A
-    Planned`"]
-    BRIDGE -.-> FUTURE_B["`Future task backend B
-    Planned`"]
-    BRIDGE -.-> MORE["`More task backends
-    Planned`"]
+    OBSIDIAN["<strong>Obsidian</strong><br/><small>Interaction and presentation</small>"] <--> BRIDGE["<strong>Tasks Bridge</strong><br/><small>Integration layer</small>"]
+    BRIDGE --> TODOIST["<strong>Todoist</strong><br/><small>Implemented</small>"]
+    BRIDGE -.-> TICKTICK["<strong>TickTick</strong><br/><small>Planned</small>"]
+    BRIDGE -.-> MICROSOFT_TODO["<strong>Microsoft To Do</strong><br/><small>Planned</small>"]
+    BRIDGE -.-> GOOGLE_TASKS["<strong>Google Tasks</strong><br/><small>Planned</small>"]
+
+    classDef implemented fill:#fff1f0,stroke:#dc4c3e,color:#7a271f,stroke-width:2px
+    classDef planned fill:#f3f0ff,stroke:#8b7bb8,color:#4d4268,stroke-width:1.5px,stroke-dasharray:5 4
+    class TODOIST implemented
+    class TICKTICK,MICROSOFT_TODO,GOOGLE_TASKS planned
 ```
 
-The solid backend connection is available now. Dashed connections are planned integrations. Every task service remains the system of record for its own data.
+The red backend node and solid connection are available now. Purple-gray nodes and dashed connections are planned integrations. Every task service remains the system of record for its own data.
 
 Todoist is the first supported backend. The current Todoist integration provides two independent workflows:
 

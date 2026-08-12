@@ -46,7 +46,6 @@ export type TodoistListProps = {
   completionHeatmapRange: CompletionHeatmapRange;
   onProjectOverviewCollapsedChange: (collapsed: boolean) => void;
   onCompletionHeatmapRangeChange: (range: CompletionHeatmapRange) => void;
-  onRootProjectChange: (projectId: string | null) => void;
 };
 
 export const TodoistList: React.FC<TodoistListProps> = ({
@@ -62,16 +61,13 @@ export const TodoistList: React.FC<TodoistListProps> = ({
   completionHeatmapRange,
   onProjectOverviewCollapsedChange,
   onCompletionHeatmapRangeChange,
-  onRootProjectChange,
 }) => {
   const listRef = useRef<HTMLDivElement>(null);
-  const [selectedRoot, setSelectedRoot] = useState(rootProjectId);
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
   const [overviewCollapsed, setOverviewCollapsed] = useState(projectOverviewCollapsed);
   const [heatmapRange, setHeatmapRange] = useState(completionHeatmapRange);
   const [ready, setReady] = useState(() => readReady(actions));
 
-  useEffect(() => setSelectedRoot(rootProjectId), [rootProjectId]);
   useEffect(() => setOverviewCollapsed(projectOverviewCollapsed), [projectOverviewCollapsed]);
   useEffect(() => setHeatmapRange(completionHeatmapRange), [completionHeatmapRange]);
   useEffect(() => {
@@ -83,23 +79,23 @@ export const TodoistList: React.FC<TodoistListProps> = ({
   }, [actions]);
 
   const projectOverviewModel = useMemo(
-    () => buildProjectOverviewModel(projectStatisticsSnapshot, selectedRoot),
-    [projectStatisticsSnapshot, selectedRoot],
+    () => buildProjectOverviewModel(projectStatisticsSnapshot, rootProjectId),
+    [projectStatisticsSnapshot, rootProjectId],
   );
   const projectOptions = useMemo(
     () => mergeProjectOptions(projectOverviewModel?.projectOptions ?? [], model.projects),
     [projectOverviewModel, model.projects],
   );
   const rootAvailable =
-    selectedRoot === null || projectOptions.some((project) => project.id === selectedRoot);
+    rootProjectId === null || projectOptions.some((project) => project.id === rootProjectId);
   const projectOverviewScopeLabel =
-    selectedRoot === null
+    rootProjectId === null
       ? "All synchronized projects"
-      : (projectOptions.find((project) => project.id === selectedRoot)?.pathNames.join(" / ") ??
+      : (projectOptions.find((project) => project.id === rootProjectId)?.pathNames.join(" / ") ??
         "Selected root project");
   const scopedGroups = useMemo(
-    () => scopeTodoistListGroups(model.groups, selectedRoot),
-    [model.groups, selectedRoot],
+    () => scopeTodoistListGroups(model.groups, rootProjectId),
+    [model.groups, rootProjectId],
   );
   const scopedCounts = useMemo(
     () =>
@@ -113,12 +109,6 @@ export const TodoistList: React.FC<TodoistListProps> = ({
       ),
     [scopedGroups],
   );
-
-  const selectRoot = (projectId: string | null) => {
-    setSelectedRoot(projectId);
-    setCollapsed(new Set());
-    onRootProjectChange(projectId);
-  };
 
   const changeOverviewCollapsed = (nextCollapsed: boolean) => {
     setOverviewCollapsed(nextCollapsed);
@@ -150,7 +140,6 @@ export const TodoistList: React.FC<TodoistListProps> = ({
   return (
     <div className="todoist-bases-list" data-density={options.density} ref={listRef}>
       <div className="todoist-bases-list-toolbar">
-        <RootPicker projects={projectOptions} selected={selectedRoot} onChange={selectRoot} />
         <output
           className="todoist-bases-list-toolbar-summary"
           aria-label={`Visible in Base: ${countsLabel(scopedCounts)}`}
@@ -203,10 +192,10 @@ export const TodoistList: React.FC<TodoistListProps> = ({
       {!rootAvailable && (
         <output className="todoist-bases-list-notice">
           <ObsidianIcon id="lucide-circle-alert" size="s" />
-          <span>The selected root project is no longer available.</span>
-          <button className="mod-cta" onClick={() => selectRoot(null)} type="button">
-            Reset root
-          </button>
+          <span>
+            The selected root project is no longer available. Open Configure view and choose another
+            Root project.
+          </span>
         </output>
       )}
 
@@ -222,7 +211,9 @@ export const TodoistList: React.FC<TodoistListProps> = ({
         <div className="todoist-bases-list-empty">
           <ObsidianIcon id="lucide-list-filter" size="xl" />
           <strong>No tasks under this project match the Base filters.</strong>
-          <span>Choose another root project or adjust the Base filters.</span>
+          <span>
+            Open Configure view to choose another Root project, or adjust the Base filters.
+          </span>
         </div>
       )}
       {model.taskCount > 0 && scopedTaskCount > 0 && (
@@ -236,7 +227,7 @@ export const TodoistList: React.FC<TodoistListProps> = ({
               navigation={navigation}
               options={options}
               ready={ready}
-              rootIsSelected={selectedRoot !== null}
+              rootIsSelected={rootProjectId !== null}
               toggleCollapsed={toggleCollapsed}
             />
           ))}
@@ -245,141 +236,6 @@ export const TodoistList: React.FC<TodoistListProps> = ({
     </div>
   );
 };
-
-const RootPicker: React.FC<{
-  projects: TodoistListProjectOption[];
-  selected: string | null;
-  onChange: (projectId: string | null) => void;
-}> = ({ projects, selected, onChange }) => {
-  const [open, setOpen] = useState(false);
-  const [search, setSearch] = useState("");
-  const containerRef = useRef<HTMLDivElement>(null);
-  const searchRef = useRef<HTMLInputElement>(null);
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const selectedProject = projects.find((project) => project.id === selected);
-  const selectedLabel =
-    selected === null
-      ? "All projects"
-      : (selectedProject?.pathNames.join(" / ") ?? "Unavailable project");
-  const query = search.trim().toLocaleLowerCase("en-US");
-  const filtered = projects.filter((project) =>
-    project.pathNames.join(" / ").toLocaleLowerCase("en-US").includes(query),
-  );
-
-  useEffect(() => {
-    if (!open) {
-      return;
-    }
-    searchRef.current?.focus();
-    const ownerDocument = containerRef.current?.ownerDocument;
-    const ownerNode = ownerDocument?.defaultView?.Node;
-    if (ownerDocument === undefined || ownerNode === undefined) {
-      return;
-    }
-    const closeOnOutsidePointer = (event: PointerEvent) => {
-      if (event.target instanceof ownerNode && !containerRef.current?.contains(event.target)) {
-        setOpen(false);
-      }
-    };
-    ownerDocument.addEventListener("pointerdown", closeOnOutsidePointer);
-    return () => ownerDocument.removeEventListener("pointerdown", closeOnOutsidePointer);
-  }, [open]);
-
-  const choose = (projectId: string | null) => {
-    triggerRef.current?.focus();
-    onChange(projectId);
-    setOpen(false);
-    setSearch("");
-  };
-
-  return (
-    <div className="todoist-bases-root-picker" ref={containerRef}>
-      <button
-        aria-label={`Root: ${selectedLabel}`}
-        aria-expanded={open}
-        aria-haspopup="dialog"
-        className="todoist-bases-root-picker-trigger"
-        onClick={() => setOpen((value) => !value)}
-        ref={triggerRef}
-        type="button"
-      >
-        <ObsidianIcon id="lucide-git-fork" size="s" />
-        <span className="todoist-bases-root-picker-label">Root</span>
-        <span className="todoist-bases-root-picker-value">{selectedLabel}</span>
-        <ObsidianIcon id="lucide-chevron-down" size="s" />
-      </button>
-      {open && (
-        <div
-          aria-label="Choose a root project"
-          className="todoist-bases-root-picker-popover"
-          onKeyDown={(event) => {
-            if (event.key === "Escape") {
-              event.stopPropagation();
-              setOpen(false);
-              setSearch("");
-              triggerRef.current?.focus();
-            }
-          }}
-          role="dialog"
-        >
-          <div className="search-input-container">
-            <input
-              aria-label="Search projects"
-              onChange={(event) => setSearch(event.currentTarget.value)}
-              placeholder="Search projects"
-              ref={searchRef}
-              type="search"
-              value={search}
-            />
-          </div>
-          <div className="todoist-bases-root-options">
-            {query === "" && (
-              <RootOption
-                depth={0}
-                label="All projects"
-                onClick={() => choose(null)}
-                selected={selected === null}
-              />
-            )}
-            {filtered.map((project) => (
-              <RootOption
-                depth={project.pathIds.length - 1}
-                key={project.id}
-                label={project.name}
-                onClick={() => choose(project.id)}
-                path={project.pathNames.join(" / ")}
-                selected={selected === project.id}
-              />
-            ))}
-            {filtered.length === 0 && query !== "" && (
-              <div className="todoist-bases-root-no-results">No projects found</div>
-            )}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-};
-
-const RootOption: React.FC<{
-  depth: number;
-  label: string;
-  path?: string;
-  selected: boolean;
-  onClick: () => void;
-}> = ({ depth, label, path, selected, onClick }) => (
-  <button
-    aria-current={selected ? "true" : undefined}
-    aria-label={path ?? label}
-    className="todoist-bases-root-option"
-    onClick={onClick}
-    style={indentationStyle(depth)}
-    type="button"
-  >
-    <ObsidianIcon id={selected ? "lucide-check" : "lucide-folder"} size="s" />
-    <span>{label}</span>
-  </button>
-);
 
 type BranchProps = {
   actions: TodoistListActions;
@@ -413,7 +269,7 @@ const GroupBranch: React.FC<
             {...props}
             depth={0}
             groupKey={group.key}
-            key={project.id}
+            key={project.scopeKey}
             project={project}
             rootIsSelected={rootIsSelected}
           />
@@ -442,7 +298,7 @@ const ProjectBranch: React.FC<
   rootIsSelected,
   toggleCollapsed,
 }) => {
-  const key = `${groupKey}:project:${project.id}`;
+  const key = `${groupKey}:project:${project.scopeKey}`;
   const isCollapsed = collapsed.has(key);
   const childItems = options.showSections ? project.items : project.flatItems;
   const hasChildren = childItems.length > 0;
@@ -477,7 +333,7 @@ const ProjectBranch: React.FC<
               navigation={navigation}
               options={options}
               projectDepth={childProjectDepth}
-              projectId={project.id}
+              projectScopeKey={project.scopeKey}
               ready={ready}
               rootIsSelected={rootIsSelected}
               taskDepth={taskDepth}
@@ -495,7 +351,7 @@ const ProjectItemBranch: React.FC<
     item: TodoistListProjectItem;
     groupKey: string;
     projectDepth: number;
-    projectId: string;
+    projectScopeKey: string;
     rootIsSelected: boolean;
     taskDepth: number;
   }
@@ -507,7 +363,7 @@ const ProjectItemBranch: React.FC<
   navigation,
   options,
   projectDepth,
-  projectId,
+  projectScopeKey,
   ready,
   rootIsSelected,
   taskDepth,
@@ -538,7 +394,7 @@ const ProjectItemBranch: React.FC<
         groupKey={groupKey}
         navigation={navigation}
         options={options}
-        projectId={projectId}
+        projectScopeKey={projectScopeKey}
         ready={ready}
         section={item.section}
         toggleCollapsed={toggleCollapsed}
@@ -562,19 +418,19 @@ const ProjectItemBranch: React.FC<
 
 const projectItemKey = (item: TodoistListProjectItem): string => {
   if (item.kind === "project") {
-    return `project:${item.project.id}`;
+    return `project:${item.project.scopeKey}`;
   }
   if (item.kind === "section") {
     return `section:${item.section.key}`;
   }
-  return `task:${item.task.id}`;
+  return `task:${item.task.scopeKey}`;
 };
 
 const SectionBranch: React.FC<
   BranchProps & {
     depth: number;
     groupKey: string;
-    projectId: string;
+    projectScopeKey: string;
     section: TodoistListSection;
   }
 > = ({
@@ -584,12 +440,12 @@ const SectionBranch: React.FC<
   groupKey,
   navigation,
   options,
-  projectId,
+  projectScopeKey,
   ready,
   section,
   toggleCollapsed,
 }) => {
-  const key = `${groupKey}:section:${projectId}:${section.key}`;
+  const key = `${groupKey}:section:${projectScopeKey}:${section.key}`;
   const isCollapsed = collapsed.has(key);
   return (
     <div className="todoist-bases-section">
@@ -611,7 +467,7 @@ const SectionBranch: React.FC<
               collapsed={collapsed}
               depth={depth + 1}
               groupKey={groupKey}
-              key={task.id}
+              key={task.scopeKey}
               navigation={navigation}
               options={options}
               ready={ready}
@@ -654,7 +510,7 @@ const TaskBranch: React.FC<
     status: TodoistListTaskRecord["status"];
     token: number;
   } | null>(null);
-  const key = `${groupKey}:task:${task.id}`;
+  const key = `${groupKey}:task:${task.scopeKey}`;
   const isCollapsed = collapsed.has(key);
   const hasChildren = task.children.length > 0;
   const awaitingProjection =
@@ -866,7 +722,7 @@ const TaskBranch: React.FC<
               collapsed={collapsed}
               depth={depth + 1}
               groupKey={groupKey}
-              key={child.id}
+              key={child.scopeKey}
               navigation={navigation}
               options={options}
               ready={ready}
@@ -1002,6 +858,11 @@ const makeDiagnosticsMessage = (model: TodoistListModel): string | null => {
       `${model.diagnostics.ignoredNonManaged} non-managed ${pluralize("note", model.diagnostics.ignoredNonManaged)} ignored`,
     );
   }
+  if (model.diagnostics.ignoredDuplicateTaskNotes > 0) {
+    messages.push(
+      `${model.diagnostics.ignoredDuplicateTaskNotes} duplicate Todoist task ${pluralize("note", model.diagnostics.ignoredDuplicateTaskNotes)} ignored`,
+    );
+  }
   if (model.diagnostics.ignoredInvalid > 0) {
     messages.push(
       `${model.diagnostics.ignoredInvalid} invalid Todoist ${pluralize("note", model.diagnostics.ignoredInvalid)} ignored`,
@@ -1024,10 +885,10 @@ const mergeProjectOptions = (
   const merged: TodoistListProjectOption[] = [];
   const seen = new Set<string>();
   for (const project of [...snapshotProjects, ...baseProjects]) {
-    if (seen.has(project.id)) {
+    if (seen.has(project.scopeKey)) {
       continue;
     }
-    seen.add(project.id);
+    seen.add(project.scopeKey);
     merged.push(project);
   }
   return merged;
@@ -1044,18 +905,18 @@ const collectBranchKeys = (
   const collectTasks = (groupKey: string, tasks: readonly TodoistListTaskNode[]) => {
     for (const task of tasks) {
       if (task.children.length > 0) {
-        keys.add(`${groupKey}:task:${task.id}`);
+        keys.add(`${groupKey}:task:${task.scopeKey}`);
         collectTasks(groupKey, task.children);
       }
     }
   };
   const collectProjects = (groupKey: string, projects: readonly TodoistListProject[]) => {
     for (const project of projects) {
-      keys.add(`${groupKey}:project:${project.id}`);
+      keys.add(`${groupKey}:project:${project.scopeKey}`);
       collectTasks(groupKey, project.tasks);
       for (const section of project.sections) {
         if (showSections) {
-          keys.add(`${groupKey}:section:${project.id}:${section.key}`);
+          keys.add(`${groupKey}:section:${project.scopeKey}:${section.key}`);
         }
         collectTasks(groupKey, section.tasks);
       }

@@ -130,7 +130,12 @@ Project and section headers, nested task indentation, descriptions, status count
 
 You can also start with the [Tasks List Base template](/examples/todoist-projects.base). Download it into the Vault, then adjust its filters and properties in Obsidian.
 
-The view menu also provides **Density** with **Comfortable** and **Compact** layouts, **Show descriptions**, and **Show sections**. These choices are stored separately for each Base view.
+Open **Configure view** in the Bases toolbar to customize Tasks List. Native Obsidian controls keep these settings in two clear groups:
+
+- **Project scope** contains **Root project**.
+- **Appearance** contains **Density**, **Show descriptions**, and **Show sections**.
+
+Obsidian stores every choice in that individual view's entry in the `.base` file, so different views of the same Base can keep different scopes and layouts.
 
 :::note Managed Project sync notes only
 
@@ -140,15 +145,17 @@ Tasks List renders only valid notes created and owned by Project sync. A normal 
 
 ### Choose any project as the root
 
-Use **Root** in the Tasks List toolbar to focus the view on one project and all of its descendants. The selected project can be a top-level Todoist project or a child at any depth, so each Base can become a workspace for exactly the part of the hierarchy you want to manage. Choose **All projects** to return to every project available to the view.
+Open **Configure view** in the Bases toolbar, expand **Project scope**, and set **Root project** to focus the view on one project and all of its descendants. The selected project can be a top-level Todoist project or a child at any depth, so each view can become a workspace for exactly the part of the hierarchy you want to manage. Choose **All synchronized projects** to return to every project available to the view.
 
-Projects with the same name are distinguished by their complete parent path. The selected root is saved in that view's Base configuration.
+Projects with the same name are distinguished by their complete parent path. Tasks Bridge stores the stable Todoist project ID rather than its editable name, and Obsidian persists that value in the view's `.base` configuration.
+
+If a saved root becomes unavailable after a project is removed, a mapping is paused, or the Todoist account changes, Tasks List keeps the saved scope and reports it explicitly. Open **Configure view** and choose another **Root project**; it never silently expands the view to unrelated projects.
 
 The selected root controls both the complete Project overview and the filtered task rows. It cannot add a filtered task row back to the Base result.
 
 ### Review the complete Project overview
 
-Expand **Project overview** above the task list to see statistics for the selected root project and every synchronized descendant below it. Choose **All projects** to combine every synchronized mapping. The overview includes:
+Expand **Project overview** above the task list to see statistics for the selected root project and every synchronized descendant below it. Choose **All synchronized projects** in **Configure view** to combine every synchronized mapping. The overview includes:
 
 - total, active, and completed task counts;
 - completion percentage and a status breakdown;
@@ -163,7 +170,7 @@ Select the **Project overview** header to collapse or expand the panel. That cho
 
 The completion heatmap initially shows the last year. Use its native range menu to switch among the last 4 weeks, 3 months, 6 months, the last year, or any calendar year from the earliest synchronized completion through the current year. The chosen range is saved for the individual Base view. Month and weekday labels, Obsidian tooltips, a Less-to-More intensity legend, horizontal scrolling on narrow screens, and keyboard navigation follow the familiar GitHub contribution-calendar interaction. Select one day to inspect its count, or select a second day while holding **Shift** to summarize the complete date range between them.
 
-The heatmap counts completion occurrences for the selected root and all of its synchronized descendants. A recurring task completed several times therefore contributes once for each completion event, and a reopened task keeps its earlier completion activity. The completion ring is intentionally different: it summarizes the tasks that are currently completed in the latest snapshot. Choosing **All projects** combines completion events from every synchronized mapping and deduplicates them by Todoist event ID.
+The heatmap counts completion occurrences for the selected root and all of its synchronized descendants. A recurring task completed several times therefore contributes once for each completion event, and a reopened task keeps its earlier completion activity. The completion ring is intentionally different: it summarizes the tasks that are currently completed in the latest snapshot. Choosing **All synchronized projects** combines completion events from every synchronized mapping and deduplicates them by Todoist event ID.
 
 :::info Project statistics and Base results use different scopes
 

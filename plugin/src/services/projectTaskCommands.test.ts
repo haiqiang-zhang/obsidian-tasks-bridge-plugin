@@ -54,6 +54,7 @@ const successResult = (): ProjectSyncResult => ({
   outOfScope: 0,
   deferred: 0,
   conflicts: [],
+  pausedMappingIds: [],
   settledMappingIds: [MAPPING_ID],
 });
 
@@ -79,6 +80,7 @@ const managedFrontmatter = (overrides: ManagedFrontmatter = {}): ManagedFrontmat
 
 type HarnessOptions = {
   automaticProjectionAllowed?: boolean;
+  availableRootProjectIds?: string[];
   enabled?: boolean;
   filePath?: string;
   frontmatter?: ManagedFrontmatter | undefined;
@@ -121,7 +123,15 @@ const makeHarness = (options: HarnessOptions = {}) => {
     enabled: options.enabled ?? true,
     mappings: options.mappings ?? [mapping()],
   }));
-  const projectSync = { getConfig, invalidate, sync } as unknown as ProjectFolderSyncService;
+  const listProjects = vi.fn(() =>
+    (options.availableRootProjectIds ?? [ROOT_PROJECT_ID]).map((id) => ({ id })),
+  );
+  const projectSync = {
+    getConfig,
+    invalidate,
+    listProjects,
+    sync,
+  } as unknown as ProjectFolderSyncService;
   const runAutomaticProjection = vi.fn(
     async <T>(operation: (assertValid: () => void) => Promise<T>) => {
       if (options.automaticProjectionAllowed === false) {
@@ -153,6 +163,7 @@ const makeHarness = (options: HarnessOptions = {}) => {
     getFileByPath,
     getFileCache,
     invalidate,
+    listProjects,
     frontmatter,
     processFrontMatter,
     runAutomaticProjection,
@@ -174,6 +185,7 @@ describe("ProjectTaskCommandService", () => {
     expect(makeHarness().service.isReady()).toBe(true);
     expect(makeHarness({ ready: false }).service.isReady()).toBe(false);
     expect(makeHarness({ enabled: false }).service.isReady()).toBe(false);
+    expect(makeHarness({ availableRootProjectIds: [] }).service.isReady()).toBe(false);
   });
 
   it.each([
@@ -205,6 +217,11 @@ describe("ProjectTaskCommandService", () => {
     {
       name: "the root project differs from the mapping",
       options: { frontmatter: managedFrontmatter({ todoist_sync_root_id: "other-root" }) },
+      message: "This managed task note does not belong to one configured Project sync mapping",
+    },
+    {
+      name: "the mapping belongs to a project unavailable in the current account",
+      options: { availableRootProjectIds: [] },
       message: "This managed task note does not belong to one configured Project sync mapping",
     },
     {

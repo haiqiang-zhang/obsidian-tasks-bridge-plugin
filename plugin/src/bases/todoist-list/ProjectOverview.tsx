@@ -234,7 +234,7 @@ const ProjectOverviewBody: React.FC<{
       ) : (
         <ul aria-label="Project statistics" className="todoist-bases-project-overview-projects">
           {model.roots.map((project) => (
-            <ProjectStatistics key={project.id} project={project} />
+            <ProjectStatistics key={project.scopeKey} project={project} />
           ))}
         </ul>
       )}
@@ -366,7 +366,7 @@ const ProjectStatistics: React.FC<{ project: ProjectOverviewNode }> = ({ project
       {project.children.length > 0 && (
         <ul className="todoist-bases-project-overview-project-children">
           {project.children.map((child) => (
-            <ProjectStatistics key={child.id} project={child} />
+            <ProjectStatistics key={child.scopeKey} project={child} />
           ))}
         </ul>
       )}

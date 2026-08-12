@@ -5,6 +5,8 @@ import { buildTodoistListModel, scopeTodoistListGroups } from "./model";
 
 type EntryOptions = {
   managed?: boolean;
+  mappingId?: string;
+  rootProjectId?: string;
   content?: string;
   status?: string;
   completed?: boolean;
@@ -46,8 +48,10 @@ const list = (values: string[]): Value =>
 const makeEntry = (id: string, options: EntryOptions = {}): BasesEntry => {
   const projectId = options.projectId ?? "root";
   const projectName = options.projectName ?? "Root";
+  const rootProjectId = options.rootProjectId ?? options.projectIdPath?.[0] ?? "root";
   const values = new Map<BasesPropertyId, Value>([
     ["note.todoist_sync_managed", primitive(options.managed ?? true)],
+    ["note.todoist_sync_root_id", primitive(rootProjectId)],
     ["note.todoist_task_id", primitive(id)],
     ["note.todoist_content", primitive(options.content ?? id)],
     ["note.todoist_description", primitive(options.description ?? "")],
@@ -59,6 +63,10 @@ const makeEntry = (id: string, options: EntryOptions = {}): BasesEntry => {
     ["note.todoist_project_path", list(options.projectPath ?? [projectName])],
     ["note.todoist_labels", list(options.labels ?? [])],
   ]);
+
+  if (options.mappingId !== undefined) {
+    values.set("note.todoist_sync_mapping_id", primitive(options.mappingId));
+  }
 
   const optionalValues: [BasesPropertyId, string | undefined][] = [
     ["note.todoist_parent_task_id", options.parentTaskId],
@@ -75,11 +83,21 @@ const makeEntry = (id: string, options: EntryOptions = {}): BasesEntry => {
 
   return {
     file: {
+      extension: "md",
       name: `${id}.md`,
       path: `Todoist/${id}.md`,
     },
     getValue: (propertyId: BasesPropertyId) => values.get(propertyId) ?? nullValue(),
   } as unknown as BasesEntry;
+};
+
+const moveEntry = (entry: BasesEntry, suffix: string): BasesEntry => {
+  Object.assign(entry.file, {
+    basename: `${entry.file.basename ?? entry.file.name.replace(/\.md$/u, "")} ${suffix}`,
+    name: `${entry.file.name.replace(/\.md$/u, "")} ${suffix}.md`,
+    path: entry.file.path.replace(/\.md$/u, ` ${suffix}.md`),
+  });
+  return entry;
 };
 
 const makeGroup = (entries: BasesEntry[], label?: string): BasesEntryGroup =>
@@ -211,7 +229,7 @@ describe("buildTodoistListModel", () => {
     expect(flatLabels).toEqual(["project:child", "task:section-task", "task:direct-task"]);
   });
 
-  it("ignores non-managed and malformed entries and reports diagnostics", () => {
+  it("reports duplicate task notes separately from non-managed and malformed entries", () => {
     const malformed = makeEntry("malformed", {
       projectIdPath: ["root", "child"],
       projectPath: ["Root"],
@@ -221,14 +239,136 @@ describe("buildTodoistListModel", () => {
         makeEntry("plain", { managed: false }),
         malformed,
         makeEntry("valid"),
-        makeEntry("valid"),
+        moveEntry(makeEntry("valid"), "(2)"),
       ]),
     ]);
 
     expect(model.taskCount).toBe(1);
     expect(model.diagnostics).toMatchObject({
       ignoredNonManaged: 1,
-      ignoredInvalid: 2,
+      ignoredDuplicateTaskNotes: 1,
+      ignoredInvalid: 1,
+    });
+  });
+
+  it("deduplicates task identities across separate Base groups", () => {
+    const model = build([
+      makeGroup([makeEntry("same-task")], "First"),
+      makeGroup([moveEntry(makeEntry("same-task"), "(2)")], "Second"),
+    ]);
+
+    expect(model.taskCount).toBe(1);
+    expect(model.groups[0]?.projects[0]?.tasks.map(({ id }) => id)).toEqual(["same-task"]);
+    expect(model.groups[1]?.projects).toEqual([]);
+    expect(model.diagnostics).toMatchObject({
+      ignoredDuplicateTaskNotes: 1,
+      ignoredInvalid: 0,
+    });
+  });
+
+  it("deduplicates only matching mapping, root, and task identities", () => {
+    const model = build([
+      makeGroup([
+        makeEntry("same-task", { mappingId: "mapping-a", rootProjectId: "root-a" }),
+        moveEntry(
+          makeEntry("same-task", { mappingId: "mapping-a", rootProjectId: "root-a" }),
+          "duplicate",
+        ),
+        moveEntry(
+          makeEntry("same-task", {
+            mappingId: "mapping-b",
+            rootProjectId: "root-b",
+            projectName: "Other mapping",
+            projectPath: ["Other mapping"],
+          }),
+          "other mapping",
+        ),
+        moveEntry(
+          makeEntry("same-task", {
+            mappingId: "mapping-a",
+            rootProjectId: "root-c",
+            projectName: "Other root",
+            projectPath: ["Other root"],
+          }),
+          "other root",
+        ),
+      ]),
+    ]);
+
+    expect(model.taskCount).toBe(3);
+    expect(model.diagnostics.ignoredDuplicateTaskNotes).toBe(1);
+    expect(model.groups[0]?.projects).toHaveLength(3);
+    expect(new Set(model.groups[0]?.projects.map(({ scopeKey }) => scopeKey)).size).toBe(3);
+    const tasks = model.groups[0]?.projects.flatMap(({ tasks }) => tasks) ?? [];
+    expect(tasks.map(({ id }) => id)).toEqual(["same-task", "same-task", "same-task"]);
+    expect(new Set(tasks.map(({ scopeKey }) => scopeKey)).size).toBe(3);
+  });
+
+  it("scopes legacy mappingless task identities by root", () => {
+    const model = build([
+      makeGroup([
+        makeEntry("legacy", { rootProjectId: "root-a" }),
+        moveEntry(makeEntry("legacy", { rootProjectId: "root-a" }), "duplicate"),
+        moveEntry(
+          makeEntry("legacy", {
+            rootProjectId: "root-b",
+            projectName: "Other root",
+            projectPath: ["Other root"],
+          }),
+          "other root",
+        ),
+      ]),
+    ]);
+
+    expect(model.taskCount).toBe(2);
+    expect(model.diagnostics.ignoredDuplicateTaskNotes).toBe(1);
+    expect(new Set(model.groups[0]?.projects.map(({ scopeKey }) => scopeKey)).size).toBe(2);
+  });
+
+  it("does not diagnose one Base entry repeated across groups as a duplicate note", () => {
+    const entry = makeEntry("one-note");
+    const model = build([makeGroup([entry], "First"), makeGroup([entry], "Second")]);
+
+    expect(model.taskCount).toBe(1);
+    expect(model.diagnostics).toMatchObject({
+      ignoredDuplicateTaskNotes: 0,
+      ignoredInvalid: 0,
+    });
+  });
+
+  it("uses a valid duplicate as the representative when an earlier copy is malformed", () => {
+    const model = build([
+      makeGroup([
+        makeEntry("same-task", {
+          projectIdPath: ["root", "child"],
+          projectPath: ["Root"],
+        }),
+        moveEntry(makeEntry("same-task"), "(2)"),
+      ]),
+    ]);
+
+    expect(model.taskCount).toBe(1);
+    expect(model.diagnostics).toMatchObject({
+      ignoredDuplicateTaskNotes: 1,
+      ignoredInvalid: 1,
+    });
+  });
+
+  it("silently excludes non-Markdown Base entries from note diagnostics", () => {
+    const baseEntry = makeEntry("workspace");
+    Object.assign(baseEntry.file, {
+      extension: "base",
+      name: "workspace.base",
+      path: "Todoist/workspace.base",
+    });
+
+    const model = build([makeGroup([baseEntry, makeEntry("valid")])]);
+
+    expect(model.taskCount).toBe(1);
+    expect(model.diagnostics).toMatchObject({
+      ignoredNonManaged: 0,
+      ignoredDuplicateTaskNotes: 0,
+      ignoredInvalid: 0,
     });
   });
 
@@ -253,6 +393,7 @@ describe("buildTodoistListModel", () => {
         makeEntry("conflicting-path", {
           projectId: "root",
           projectName: "Root",
+          rootProjectId: "root",
           projectIdPath: ["ghost", "root"],
           projectPath: ["Ghost", "Root"],
         }),
@@ -263,6 +404,38 @@ describe("buildTodoistListModel", () => {
     expect(model.projects.map(({ id }) => id)).toEqual(["root"]);
     expect(model.groups[0]?.projects.map(({ id }) => id)).toEqual(["root"]);
     expect(model.diagnostics).toMatchObject({ ignoredInvalid: 1, hierarchyWarnings: 1 });
+  });
+
+  it("isolates project hierarchy conflicts to their mapping and root scope", () => {
+    const model = build([
+      makeGroup([
+        makeEntry("scope-a", {
+          mappingId: "mapping-a",
+          rootProjectId: "root-a",
+          projectId: "shared",
+          projectName: "Shared A",
+          projectIdPath: ["root", "shared"],
+          projectPath: ["Root A", "Shared A"],
+        }),
+        moveEntry(
+          makeEntry("scope-b", {
+            mappingId: "mapping-b",
+            rootProjectId: "root-b",
+            projectId: "shared",
+            projectName: "Shared B",
+            projectIdPath: ["root", "shared"],
+            projectPath: ["Root B", "Shared B"],
+          }),
+          "other scope",
+        ),
+      ]),
+    ]);
+
+    expect(model.taskCount).toBe(2);
+    expect(model.diagnostics.hierarchyWarnings).toBe(0);
+    const sharedProjects = model.projects.filter(({ id }) => id === "shared");
+    expect(sharedProjects).toHaveLength(2);
+    expect(sharedProjects[0]?.scopeKey).not.toBe(sharedProjects[1]?.scopeKey);
   });
 
   it("keeps missing-parent and cyclic tasks reachable with warnings", () => {

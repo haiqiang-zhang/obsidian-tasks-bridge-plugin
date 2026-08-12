@@ -33,8 +33,11 @@ const useSubscription = (
   callback: OnSubscriptionChange,
   initialTasks: Task[],
   initialCompletedTasksProgress: CompletedTasksProgress | undefined,
+  runRefresh: (refresh: Refresh) => Promise<void>,
 ): [Refresh, boolean, LoadMoreCompleted, boolean, boolean] => {
-  const [refresher, setRefresher] = useState<Refresh | undefined>(undefined);
+  const [refresher, setRefresher] = useState<{ query: TaskQuery; refresh: Refresh } | undefined>(
+    undefined,
+  );
   const [completedTasksLoader, setCompletedTasksLoader] = useState<LoadMoreCompleted | undefined>(
     undefined,
   );
@@ -65,9 +68,7 @@ const useSubscription = (
       query.completedTasks,
       initialCompletedTasksProgress,
     );
-    setRefresher(() => {
-      return refresh;
-    });
+    setRefresher({ query, refresh });
     setCompletedTasksLoader(() => loadMoreCompleted);
     setLoadMoreError(false);
     return () => {
@@ -77,7 +78,7 @@ const useSubscription = (
   }, [query, plugin, callback, initialTasks, initialCompletedTasksProgress]);
 
   const forceRefresh = useCallback(async () => {
-    if (refresher === undefined) {
+    if (refresher === undefined || refresher.query !== query) {
       return;
     }
 
@@ -86,13 +87,15 @@ const useSubscription = (
       setIsFetching(true);
     }
     try {
-      await refresher();
+      await runRefresh(refresher.refresh);
+    } catch (error: unknown) {
+      console.error("Failed to refresh Todoist query:", error);
     } finally {
       if (isMounted.current && generation === refreshGeneration.current) {
         setIsFetching(false);
       }
     }
-  }, [refresher]);
+  }, [refresher, query, runRefresh]);
 
   useEffect(() => {
     forceRefresh();
@@ -125,6 +128,124 @@ const useSubscription = (
   return [forceRefresh, isFetching, loadMoreCompleted, isLoadingMore, loadMoreError];
 };
 
+type RefreshCadenceState = {
+  configurationKey: string;
+  configurationGeneration: number;
+  refreshGeneration: number;
+  activeRefreshGeneration: number | undefined;
+  intervalMs: number | undefined;
+  timerId: number | undefined;
+  hasStarted: boolean;
+  isMounted: boolean;
+};
+
+const useRefreshCadence = (
+  interval: number | undefined,
+  configurationKey: string,
+): [(refresh: Refresh) => Promise<void>, React.MutableRefObject<Refresh | undefined>] => {
+  const state = useRef<RefreshCadenceState>({
+    configurationKey: "",
+    configurationGeneration: 0,
+    refreshGeneration: 0,
+    activeRefreshGeneration: undefined,
+    intervalMs: undefined,
+    timerId: undefined,
+    hasStarted: false,
+    isMounted: true,
+  });
+  const refreshRef = useRef<Refresh | undefined>(undefined);
+
+  const clearTimer = useCallback(() => {
+    if (state.current.timerId !== undefined) {
+      window.clearTimeout(state.current.timerId);
+      state.current.timerId = undefined;
+    }
+  }, []);
+
+  const scheduleNext = useCallback(() => {
+    const current = state.current;
+    if (!current.isMounted || current.intervalMs === undefined) {
+      return;
+    }
+
+    clearTimer();
+    const configurationKey = current.configurationKey;
+    const configurationGeneration = current.configurationGeneration;
+    const refreshGeneration = current.refreshGeneration;
+    const id = window.setTimeout(() => {
+      const latest = state.current;
+      if (
+        !latest.isMounted ||
+        latest.timerId !== id ||
+        latest.configurationKey !== configurationKey ||
+        latest.configurationGeneration !== configurationGeneration ||
+        latest.refreshGeneration !== refreshGeneration
+      ) {
+        return;
+      }
+
+      latest.timerId = undefined;
+      void refreshRef.current?.();
+    }, current.intervalMs);
+    current.timerId = id;
+  }, [clearTimer]);
+
+  const runRefresh = useCallback(
+    async (refresh: Refresh) => {
+      const current = state.current;
+      if (!current.isMounted) {
+        return;
+      }
+
+      clearTimer();
+      const refreshGeneration = ++current.refreshGeneration;
+      current.activeRefreshGeneration = refreshGeneration;
+      current.hasStarted = true;
+
+      try {
+        await refresh();
+      } finally {
+        const latest = state.current;
+        if (latest.isMounted && latest.activeRefreshGeneration === refreshGeneration) {
+          latest.activeRefreshGeneration = undefined;
+          scheduleNext();
+        }
+      }
+    },
+    [clearTimer, scheduleNext],
+  );
+
+  useEffect(() => {
+    const current = state.current;
+    clearTimer();
+    const isNewConfiguration = current.configurationKey !== configurationKey;
+    current.configurationKey = configurationKey;
+    current.configurationGeneration++;
+    current.intervalMs = interval === undefined ? undefined : secondsToMillis(interval);
+    if (isNewConfiguration) {
+      current.refreshGeneration++;
+      current.activeRefreshGeneration = undefined;
+      current.hasStarted = false;
+    } else if (current.hasStarted && current.activeRefreshGeneration === undefined) {
+      scheduleNext();
+    }
+  }, [interval, configurationKey, clearTimer, scheduleNext]);
+
+  useEffect(() => {
+    state.current.isMounted = true;
+    return () => {
+      const current = state.current;
+      current.isMounted = false;
+      current.configurationGeneration++;
+      current.refreshGeneration++;
+      current.activeRefreshGeneration = undefined;
+      clearTimer();
+    };
+  }, [clearTimer]);
+
+  return [runRefresh, refreshRef];
+};
+
 type Props = {
   query: TaskQuery;
   warnings: QueryWarning[];
@@ -133,6 +254,18 @@ type Props = {
 export const QueryRoot: React.FC<Props> = ({ query, warnings }) => {
   const plugin = PluginContext.use();
   const settings = useSettingsStore();
+  const interval = getAutorefreshInterval(query, settings);
+  const queryConfigurationKey = JSON.stringify([
+    query.name,
+    query.filter,
+    query.completedTasks,
+    query.autorefresh,
+    query.sorting,
+    query.show === undefined ? undefined : [...query.show],
+    query.groupBy,
+    query.view,
+  ]);
+  const [runRefresh, scheduledRefresh] = useRefreshCadence(interval, queryConfigurationKey);
   const [cachedQuery] = useState(() => plugin.queryCache.get(query.filter, query.completedTasks));
   const [initialTasks] = useState(() => cachedQuery?.tasks ?? []);
   const [initialCompletedTasksProgress] = useState(() => cachedQuery?.completedTasksProgress);
@@ -201,21 +334,9 @@ export const QueryRoot: React.FC<Props> = ({ query, warnings }) => {
     onSubscriptionChange,
     initialTasks,
     initialCompletedTasksProgress,
+    runRefresh,
   );
-
-  useEffect(() => {
-    const interval = getAutorefreshInterval(query, settings);
-
-    if (interval === undefined) {
-      return;
-    }
-
-    const id = window.setInterval(async () => {
-      await refresh();
-    }, secondsToMillis(interval));
-
-    return () => window.clearInterval(id);
-  }, [query, settings, refresh]);
+  scheduledRefresh.current = refresh;
 
   const title = getTitle(query, result ?? { type: "not-ready" });
   const isLoading = result === undefined;
