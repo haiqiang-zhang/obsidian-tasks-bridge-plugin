@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v2.9.6 (2026-08-12)
+
 ### 🐛 Bug Fixes
 
 - Prevented the Tasks Bridge settings tab from entering an infinite render loop when a configured Project sync folder has been renamed or removed.
