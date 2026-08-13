@@ -621,6 +621,7 @@ const TaskBranch: React.FC<
     projectionLock !== null &&
     projectionLock.completed === task.completed &&
     projectionLock.status === task.status;
+  const completionConverged = task.completed === (task.status === "completed");
   useEffect(() => {
     const operation = completionOperation.current;
     if (
@@ -640,9 +641,13 @@ const TaskBranch: React.FC<
       setProjectionLock(null);
     }
   }, [awaitingProjection, projectionLock, task.completed, task.status]);
-  const readOnlyReason = awaitingProjection
-    ? "Todoist was updated. Waiting for Project sync before another action."
-    : getReadOnlyReason(task, ready);
+  let readOnlyReason = getReadOnlyReason(task, ready);
+  if (!completionConverged) {
+    readOnlyReason = "Waiting for Todoist status to match this note.";
+  }
+  if (awaitingProjection) {
+    readOnlyReason = "Todoist was updated. Waiting for Project sync before another action.";
+  }
   const editReadOnlyReason =
     task.status === "completed" ? "Reopen before editing." : readOnlyReason;
 
@@ -650,7 +655,7 @@ const TaskBranch: React.FC<
     if (readOnlyReason !== null || pending !== null) {
       return;
     }
-    const action = task.status === "completed" ? "reopen" : "complete";
+    const action = task.completed ? "reopen" : "complete";
     const token = ++operationToken.current;
     const startingProjection = { completed: task.completed, status: task.status };
     completionOperation.current = { ...startingProjection, token };
@@ -716,8 +721,9 @@ const TaskBranch: React.FC<
     }
   };
 
-  const completionLabel =
-    task.status === "completed" ? `Reopen task: ${task.content}` : `Complete task: ${task.content}`;
+  const completionLabel = task.completed
+    ? `Reopen task: ${task.content}`
+    : `Complete task: ${task.content}`;
 
   return (
     <div

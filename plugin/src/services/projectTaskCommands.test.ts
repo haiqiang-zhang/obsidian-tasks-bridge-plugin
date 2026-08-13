@@ -260,6 +260,40 @@ describe("ProjectTaskCommandService", () => {
     expect(harness.runInternalMutation).toHaveBeenCalled();
   });
 
+  it("preserves a newer completion-property edit when the rejected request rolls back", async () => {
+    const harness = makeHarness({
+      frontmatter: managedFrontmatter({ todoist_completed: true, todoist_status: "active" }),
+    });
+    const remoteMutation = deferred<Date>();
+    harness.actions.closeProjectTask.mockReturnValueOnce(remoteMutation.promise);
+
+    const mutation = harness.service.applyCompletedProperty(reference, true);
+    if (harness.frontmatter === undefined) {
+      throw new Error("Expected managed frontmatter");
+    }
+    harness.frontmatter.todoist_completed = false;
+    remoteMutation.reject(new Error("Todoist unavailable"));
+
+    await expect(mutation).rejects.toThrow("Todoist unavailable");
+    expect(harness.frontmatter).toMatchObject({
+      todoist_completed: false,
+      todoist_status: "active",
+    });
+  });
+
+  it("uses a confirmed remote status when the metadata cache has not indexed the prior projection", async () => {
+    const harness = makeHarness({
+      frontmatter: managedFrontmatter({ todoist_completed: false, todoist_status: "active" }),
+    });
+
+    const result = await harness.service.applyCompletedProperty(reference, false, "completed");
+
+    expect(result).not.toBeNull();
+    expect(harness.actions.reopenProjectTask).toHaveBeenCalledWith(TASK_ID);
+    expect(harness.actions.closeProjectTask).not.toHaveBeenCalled();
+    await expect(result?.targetedProjection).resolves.toBeUndefined();
+  });
+
   it.each([
     {
       name: "Todoist is unavailable",
@@ -452,6 +486,158 @@ describe("ProjectTaskCommandService", () => {
     expect(completed.actions.closeProjectTask).not.toHaveBeenCalled();
   });
 
+  it("returns after the remote status mutation without awaiting full sync or an open-note delay", async () => {
+    const harness = makeHarness();
+    const remoteMutation = deferred<Date>();
+    const fullSyncOrOpenNoteDelay = deferred<ProjectSyncResult | null>();
+    harness.actions.closeProjectTask.mockReturnValueOnce(remoteMutation.promise);
+    harness.sync.mockReturnValueOnce(fullSyncOrOpenNoteDelay.promise);
+
+    const mutation = harness.service.setCompleted(reference, true);
+    let remoteSettled = false;
+    void mutation.then(() => {
+      remoteSettled = true;
+    });
+    await Promise.resolve();
+
+    expect(remoteSettled).toBe(false);
+    expect(harness.sync).not.toHaveBeenCalled();
+
+    remoteMutation.resolve(COMPLETED_AT);
+    const result = await mutation;
+
+    expect(harness.actions.closeProjectTask).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(harness.sync).toHaveBeenCalledOnce());
+
+    let projectionSettled = false;
+    void result.projection.then(() => {
+      projectionSettled = true;
+    });
+    await Promise.resolve();
+    expect(projectionSettled).toBe(false);
+
+    fullSyncOrOpenNoteDelay.resolve(successResult());
+    await expect(result.projection).resolves.toBeUndefined();
+  });
+
+  it("preserves a newer inverse property intent during targeted projection", async () => {
+    const harness = makeHarness({
+      frontmatter: managedFrontmatter({ todoist_completed: true, todoist_status: "active" }),
+    });
+    const remoteMutation = deferred<Date>();
+    harness.actions.closeProjectTask.mockReturnValueOnce(remoteMutation.promise);
+
+    const mutation = harness.service.applyCompletedProperty(reference, true);
+    if (harness.frontmatter === undefined) {
+      throw new Error("Expected managed frontmatter");
+    }
+    harness.frontmatter.todoist_completed = false;
+    remoteMutation.resolve(COMPLETED_AT);
+    const result = await mutation;
+
+    expect(result).not.toBeNull();
+    await expect(result?.targetedProjection).resolves.toBeUndefined();
+    expect(harness.frontmatter).toMatchObject({
+      todoist_completed: false,
+      todoist_status: "completed",
+    });
+  });
+
+  it.each([
+    {
+      name: "complete",
+      initial: managedFrontmatter({ todoist_completed: false, todoist_status: "active" }),
+      action: "closeProjectTask",
+      followupAction: "closeProjectTask",
+      completed: true,
+      expectedStatus: "completed",
+    },
+    {
+      name: "reopen",
+      initial: managedFrontmatter({
+        todoist_completed: true,
+        todoist_completed_at: COMPLETED_AT.toISOString(),
+        todoist_status: "completed",
+      }),
+      action: "reopenProjectTask",
+      followupAction: "reopenProjectTask",
+      completed: false,
+      expectedStatus: "active",
+    },
+  ] as const)("projects a direct $name after Todoist succeeds but its adapter follow-up fails", async ({
+    initial,
+    action,
+    followupAction,
+    completed,
+    expectedStatus,
+  }) => {
+    const harness = makeHarness({ frontmatter: initial });
+    const followupCause = new Error("Subscription callback failed");
+    const followupError = new TodoistRemoteMutationFollowupError(followupAction, followupCause);
+    harness.actions[action].mockRejectedValueOnce(followupError);
+
+    const result = completed
+      ? await harness.service.completeTask(reference)
+      : await harness.service.reopenTask(reference);
+
+    await expect(result.targetedProjection).resolves.toBeUndefined();
+    await expect(result.projection).rejects.toMatchObject({
+      constructor: ProjectTaskProjectionError,
+      projectionCause: followupError,
+    });
+    expect(harness.actions[action]).toHaveBeenCalledOnce();
+    expect(harness.frontmatter).toMatchObject({
+      todoist_completed: completed,
+      todoist_status: expectedStatus,
+    });
+  });
+
+  it.each([
+    {
+      name: "complete",
+      initial: managedFrontmatter({ todoist_completed: true, todoist_status: "active" }),
+      action: "closeProjectTask",
+      followupAction: "closeProjectTask",
+      completed: true,
+      expectedStatus: "completed",
+    },
+    {
+      name: "reopen",
+      initial: managedFrontmatter({ todoist_completed: false, todoist_status: "completed" }),
+      action: "reopenProjectTask",
+      followupAction: "reopenProjectTask",
+      completed: false,
+      expectedStatus: "active",
+    },
+  ] as const)("returns a projected property $name result without retrying a confirmed remote mutation", async ({
+    initial,
+    action,
+    followupAction,
+    completed,
+    expectedStatus,
+  }) => {
+    const harness = makeHarness({ frontmatter: initial });
+    const followupError = new TodoistRemoteMutationFollowupError(
+      followupAction,
+      new Error("Subscription callback failed"),
+    );
+    harness.actions[action].mockRejectedValueOnce(followupError);
+
+    const result = await harness.service.applyCompletedProperty(reference, completed);
+
+    expect(result).not.toBeNull();
+    await expect(result?.targetedProjection).resolves.toBeUndefined();
+    await expect(result?.projection).rejects.toMatchObject({
+      constructor: ProjectTaskProjectionError,
+      projectionCause: followupError,
+    });
+    expect(harness.actions[action]).toHaveBeenCalledOnce();
+    expect(harness.frontmatter).toMatchObject({
+      todoist_completed: completed,
+      todoist_status: expectedStatus,
+    });
+  });
+
   it("reopens only a completed managed task and atomically projects its status", async () => {
     const harness = makeHarness({
       frontmatter: managedFrontmatter({
@@ -516,14 +702,25 @@ describe("ProjectTaskCommandService", () => {
       action: "reopenProjectTask",
       invoke: (service: ProjectTaskCommandService) => service.reopenTask(reference),
     },
-  ] as const)("changes Todoist for $name but does not project status when automatic projection is cancelled", async (testCase) => {
+  ] as const)("changes Todoist for $name and rejects both projection milestones when automatic projection is cancelled", async (testCase) => {
     const harness = makeHarness({
       automaticProjectionAllowed: false,
       frontmatter: managedFrontmatter({ todoist_status: testCase.status }),
     });
 
     const result = await testCase.invoke(harness.service);
-    await expect(result.projection).resolves.toBeUndefined();
+    await expect(result.targetedProjection).rejects.toMatchObject({
+      constructor: ProjectTaskProjectionError,
+      projectionCause: expect.objectContaining({
+        message: "Automatic Vault projection was deferred",
+      }),
+    });
+    await expect(result.projection).rejects.toMatchObject({
+      constructor: ProjectTaskProjectionError,
+      projectionCause: expect.objectContaining({
+        message: "Automatic Vault projection was deferred",
+      }),
+    });
 
     expect(harness.actions[testCase.action]).toHaveBeenCalledWith(TASK_ID);
     expect(harness.runAutomaticProjection).toHaveBeenCalledOnce();
@@ -547,6 +744,7 @@ describe("ProjectTaskCommandService", () => {
     });
 
     const result = await harness.service.completeTask(reference);
+    await expect(result.targetedProjection).resolves.toBeUndefined();
     await expect(result.projection).resolves.toBeUndefined();
 
     expect(harness.runAutomaticProjection).toHaveBeenCalledWith(expect.any(Function));
@@ -608,7 +806,8 @@ describe("ProjectTaskCommandService", () => {
     });
 
     const result = await harness.service.completeTask(reference);
-    await expect(result.projection).resolves.toBeUndefined();
+    await expect(result.targetedProjection).rejects.toBeInstanceOf(ProjectTaskProjectionError);
+    await expect(result.projection).rejects.toBeInstanceOf(ProjectTaskProjectionError);
 
     expect(validityChecks).toBe(3);
     expect(harness.processFrontMatter).toHaveBeenCalledOnce();
@@ -625,6 +824,10 @@ describe("ProjectTaskCommandService", () => {
 
     const result = await harness.service.completeTask(reference);
 
+    await expect(result.targetedProjection).rejects.toMatchObject({
+      constructor: ProjectTaskProjectionError,
+      projectionCause,
+    });
     await expect(result.projection).rejects.toMatchObject({
       constructor: ProjectTaskProjectionError,
       message: "Todoist was updated, but the Vault projection could not be refreshed",
@@ -653,6 +856,12 @@ describe("ProjectTaskCommandService", () => {
         message: "The managed Todoist task identity changed before its status was projected",
       }),
       remoteMutationSucceeded: true,
+    });
+    await expect(result.targetedProjection).rejects.toMatchObject({
+      constructor: ProjectTaskProjectionError,
+      projectionCause: expect.objectContaining({
+        message: "The managed Todoist task identity changed before its status was projected",
+      }),
     });
     expect(harness.frontmatter).not.toHaveProperty("todoist_completed_at");
   });

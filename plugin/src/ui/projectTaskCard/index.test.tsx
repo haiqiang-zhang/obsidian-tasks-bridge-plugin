@@ -3,6 +3,7 @@ import { MarkdownRenderChild } from "obsidian";
 import type React from "react";
 import { describe, expect, it, vi } from "vitest";
 
+import type { ProjectTaskMutationResult } from "@/services/projectTaskCommands";
 import { RenderChildContext } from "@/ui/context";
 
 import { ProjectTaskCard, type ProjectTaskCardModel } from ".";
@@ -42,15 +43,22 @@ const makeRenderContext = (withEmbedActions: boolean) => {
 const makeActions = () => ({
   edit: vi.fn(async () => undefined),
   open: vi.fn(async () => undefined),
-  setCompleted: vi.fn(async () => undefined),
+  setCompleted: vi.fn(
+    async (): Promise<ProjectTaskMutationResult> => ({
+      projection: Promise.resolve(),
+      targetedProjection: Promise.resolve(),
+    }),
+  ),
 });
 
 const deferred = <T,>() => {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((resolvePromise) => {
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
     resolve = resolvePromise;
+    reject = rejectPromise;
   });
-  return { promise, resolve };
+  return { promise, reject, resolve };
 };
 
 describe("ProjectTaskCard", () => {
@@ -133,16 +141,41 @@ describe("ProjectTaskCard", () => {
     expect(within(embedActions).getByRole("button", { name: "Edit Todoist task" })).toBeDisabled();
   });
 
-  it("replaces the root checkbox with a centered loader while completion is pending", async () => {
-    const completion = deferred<undefined>();
+  it("shows pending de-completion intent and disables completion until status converges", () => {
     const actions = makeActions();
-    actions.setCompleted.mockReturnValue(completion.promise);
     const { Wrapper } = makeRenderContext(false);
-    const { container } = render(<ProjectTaskCard actions={actions} task={task} />, {
-      wrapper: Wrapper,
-    });
+    render(
+      <ProjectTaskCard
+        actions={actions}
+        task={{ ...task, completed: false, status: "completed" }}
+      />,
+      { wrapper: Wrapper },
+    );
 
-    fireEvent.click(screen.getByRole("checkbox", { name: "Complete Todoist task" }));
+    const checkbox = screen.getByRole("checkbox", { name: "Complete Todoist task" });
+    expect(checkbox).not.toBeChecked();
+    expect(checkbox).toBeDisabled();
+    expect(checkbox.closest("span")).toHaveAttribute(
+      "title",
+      "Waiting for Todoist status to match this note.",
+    );
+    fireEvent.click(checkbox);
+    expect(actions.setCompleted).not.toHaveBeenCalled();
+  });
+
+  it("reopens immediately and clears the root spinner while full sync remains pending", async () => {
+    const remoteMutation = deferred<ProjectTaskMutationResult>();
+    const fullSyncOrOpenNoteDelay = deferred<void>();
+    const actions = makeActions();
+    actions.setCompleted.mockReturnValue(remoteMutation.promise);
+    const { Wrapper } = makeRenderContext(false);
+    const completedTask = { ...task, completed: true, status: "completed" as const };
+    const { container, rerender } = render(
+      <ProjectTaskCard actions={actions} task={completedTask} />,
+      { wrapper: Wrapper },
+    );
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "Reopen Todoist task" }));
 
     const completionSlot = container.querySelector(".tasks-bridge-note-card-completion");
     await waitFor(() =>
@@ -154,14 +187,73 @@ describe("ProjectTaskCard", () => {
       "data-icon-size",
       "xs",
     );
+    expect(actions.setCompleted).toHaveBeenCalledWith(
+      { id: completedTask.taskId, filePath: completedTask.filePath },
+      false,
+    );
 
-    await act(async () => completion.resolve(undefined));
+    await act(async () =>
+      remoteMutation.resolve({
+        projection: fullSyncOrOpenNoteDelay.promise,
+        targetedProjection: Promise.resolve(),
+      }),
+    );
     await waitFor(() => {
       expect(
         screen.queryByRole("status", { name: "Updating Todoist task" }),
       ).not.toBeInTheDocument();
-      expect(screen.getByRole("checkbox", { name: "Complete Todoist task" })).toBeInTheDocument();
+      expect(screen.getByRole("checkbox", { name: "Complete Todoist task" })).toBeDisabled();
     });
+    expect(screen.getByRole("checkbox", { name: "Complete Todoist task" })).not.toBeChecked();
+    expect(completionSlot).not.toHaveAttribute("data-loading");
+    expect(completionSlot).toHaveAttribute(
+      "title",
+      "Todoist was updated. Waiting for Project sync.",
+    );
+
+    rerender(
+      <ProjectTaskCard
+        actions={actions}
+        task={{ ...completedTask, completed: false, status: "active" }}
+      />,
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("checkbox", { name: "Complete Todoist task" })).toBeEnabled(),
+    );
+
+    await act(async () => fullSyncOrOpenNoteDelay.resolve(undefined));
+  });
+
+  it("surfaces a root projection failure without retrying the remote mutation", async () => {
+    const projection = deferred<void>();
+    const actions = makeActions();
+    actions.setCompleted.mockResolvedValue({
+      projection: projection.promise,
+      targetedProjection: Promise.resolve(),
+    });
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const { Wrapper } = makeRenderContext(false);
+
+    try {
+      render(<ProjectTaskCard actions={actions} task={task} />, { wrapper: Wrapper });
+      fireEvent.click(screen.getByRole("checkbox", { name: "Complete Todoist task" }));
+
+      const lockedCheckbox = await screen.findByRole("checkbox", { name: "Reopen Todoist task" });
+      expect(lockedCheckbox).toBeDisabled();
+      expect(
+        screen.queryByRole("status", { name: "Updating Todoist task" }),
+      ).not.toBeInTheDocument();
+
+      await act(async () => projection.reject(new Error("Open note delayed projection")));
+
+      expect(
+        await screen.findByText("Todoist was updated, but this note still needs Project sync."),
+      ).toBeInTheDocument();
+      fireEvent.click(lockedCheckbox);
+      expect(actions.setCompleted).toHaveBeenCalledOnce();
+    } finally {
+      consoleError.mockRestore();
+    }
   });
 
   it("renders and collapses a recursive subtask list with aggregate progress", () => {
@@ -230,10 +322,11 @@ describe("ProjectTaskCard", () => {
     });
   });
 
-  it("replaces a subtask checkbox instead of overlapping its pending loader", async () => {
-    const completion = deferred<undefined>();
+  it("clears a subtask spinner after the remote mutation while projection remains pending", async () => {
+    const remoteMutation = deferred<ProjectTaskMutationResult>();
+    const projection = deferred<void>();
     const actions = makeActions();
-    actions.setCompleted.mockReturnValue(completion.promise);
+    actions.setCompleted.mockReturnValue(remoteMutation.promise);
     const child = {
       ...task,
       content: "Chapter one",
@@ -260,13 +353,25 @@ describe("ProjectTaskCard", () => {
       "xs",
     );
 
-    await act(async () => completion.resolve(undefined));
+    await act(async () =>
+      remoteMutation.resolve({
+        projection: projection.promise,
+        targetedProjection: Promise.resolve(),
+      }),
+    );
     await waitFor(() => {
       expect(
         screen.queryByRole("status", { name: "Updating Chapter one" }),
       ).not.toBeInTheDocument();
-      expect(screen.getByRole("checkbox", { name: "Complete Chapter one" })).toBeInTheDocument();
+      expect(screen.getByRole("checkbox", { name: "Reopen Chapter one" })).toBeDisabled();
     });
+    expect(completionSlot).not.toHaveAttribute("data-loading");
+    expect(completionSlot).toHaveAttribute(
+      "title",
+      "Todoist was updated. Waiting for Project sync.",
+    );
+
+    await act(async () => projection.resolve(undefined));
   });
 
   it("renders sibling tasks with checkboxes first and no decorative graph nodes", () => {

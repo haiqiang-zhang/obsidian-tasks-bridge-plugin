@@ -628,6 +628,25 @@ describe("TodoistList", () => {
     expect(completedEdit).toHaveAttribute("title", "Reopen before editing.");
   });
 
+  it("shows pending de-completion intent and disables completion until status converges", () => {
+    const actions = makeActions();
+    const pendingReopen = makeTask("pending-reopen", "completed", { completed: false });
+    renderList(makeModel(makeProject("root", "Root", [pendingReopen])), actions);
+
+    const checkbox = screen.getByRole("checkbox", {
+      name: "Complete task: Task pending-reopen",
+    });
+    expect(checkbox).not.toBeChecked();
+    expect(checkbox).toBeDisabled();
+    expect(checkbox.closest("span")).toHaveAttribute(
+      "title",
+      "Waiting for Todoist status to match this note.",
+    );
+    fireEvent.click(checkbox);
+    expect(actions.completeTask).not.toHaveBeenCalled();
+    expect(actions.reopenTask).not.toHaveBeenCalled();
+  });
+
   it("uses Obsidian's native spinner for pending task actions", async () => {
     const edit = deferred<void>();
     const completion = deferred<TodoistListMutationResult>();

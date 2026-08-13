@@ -1,10 +1,13 @@
 import { Notice } from "obsidian";
 import type React from "react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
-import type { ManagedProjectTaskReference } from "@/services/projectTaskCommands";
-import { ProjectTaskProjectionError } from "@/services/projectTaskCommands";
+import {
+  type ManagedProjectTaskReference,
+  type ProjectTaskMutationResult,
+  ProjectTaskProjectionError,
+} from "@/services/projectTaskCommands";
 import { ObsidianIcon, ObsidianLoadingIcon } from "@/ui/components/obsidian-icon";
 import { useEmbedActions, useObsidianTooltip } from "@/ui/hooks";
 
@@ -26,23 +29,155 @@ export type ProjectTaskCardModel = {
 };
 
 export type ProjectTaskCardActions = {
-  setCompleted(reference: ManagedProjectTaskReference, completed: boolean): Promise<void>;
+  setCompleted(
+    reference: ManagedProjectTaskReference,
+    completed: boolean,
+  ): Promise<ProjectTaskMutationResult>;
   edit(reference: ManagedProjectTaskReference): Promise<void> | void;
   open(filePath: string): Promise<void> | void;
+};
+
+const projectionPendingMessage = "Todoist was updated. Waiting for Project sync.";
+const completionMismatchMessage = "Waiting for Todoist status to match this note.";
+
+const completionControlTitle = (awaitingProjection: boolean, converged: boolean) => {
+  if (awaitingProjection) {
+    return projectionPendingMessage;
+  }
+  return converged ? undefined : completionMismatchMessage;
+};
+
+const useTaskCompletionAction = (
+  actions: ProjectTaskCardActions,
+  task: ProjectTaskCardModel,
+  logTarget: string,
+): {
+  awaitingProjection: boolean;
+  busy: boolean;
+  clearError(): void;
+  completed: boolean;
+  error: string | null;
+  remotePending: boolean;
+  setError(message: string): void;
+  toggle(): Promise<void>;
+} => {
+  const [remotePending, setRemotePending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [projectionLock, setProjectionLock] = useState<{
+    completed: boolean;
+    status: ProjectTaskCardModel["status"];
+  } | null>(null);
+  const operationToken = useRef(0);
+  const operation = useRef<{
+    completed: boolean;
+    status: ProjectTaskCardModel["status"];
+    token: number;
+  } | null>(null);
+  const awaitingProjection =
+    projectionLock !== null &&
+    projectionLock.completed === task.completed &&
+    projectionLock.status === task.status;
+  const completionConverged = task.completed === (task.status === "completed");
+
+  useEffect(() => {
+    const currentOperation = operation.current;
+    if (
+      currentOperation !== null &&
+      (currentOperation.completed !== task.completed || currentOperation.status !== task.status)
+    ) {
+      operationToken.current++;
+      operation.current = null;
+      setRemotePending(false);
+      setError(null);
+      setProjectionLock(null);
+      return;
+    }
+
+    if (projectionLock !== null && !awaitingProjection) {
+      setError(null);
+      setProjectionLock(null);
+    }
+  }, [awaitingProjection, projectionLock, task.completed, task.status]);
+
+  const mutable = task.status === "active" || task.status === "completed";
+  const toggle = async (): Promise<void> => {
+    if (!mutable || !completionConverged || remotePending || awaitingProjection) {
+      return;
+    }
+
+    const token = ++operationToken.current;
+    const startingProjection = { completed: task.completed, status: task.status };
+    operation.current = { ...startingProjection, token };
+    setRemotePending(true);
+    setError(null);
+
+    try {
+      const result = await actions.setCompleted(
+        { id: task.taskId, filePath: task.filePath },
+        !task.completed,
+      );
+      if (operationToken.current !== token) {
+        return;
+      }
+
+      // The Todoist request has settled. Keep the row locked, but do not present the slower
+      // Markdown projection and canonical reconciliation as remote loading.
+      setRemotePending(false);
+      setProjectionLock(startingProjection);
+      void result.projection.catch((caught: unknown) => {
+        if (operationToken.current !== token) {
+          return;
+        }
+        setError("Todoist was updated, but this note still needs Project sync.");
+        console.error(`Failed to update this ${logTarget}`, caught);
+      });
+    } catch (caught: unknown) {
+      if (operationToken.current !== token) {
+        return;
+      }
+      if (caught instanceof ProjectTaskProjectionError) {
+        setProjectionLock(startingProjection);
+        setError("Todoist was updated, but this note still needs Project sync.");
+      } else {
+        setError("Todoist could not be updated. Your previous task state was restored.");
+      }
+      console.error(`Failed to update this ${logTarget}`, caught);
+    } finally {
+      if (operationToken.current === token) {
+        setRemotePending(false);
+      }
+    }
+  };
+
+  return {
+    awaitingProjection,
+    busy: remotePending || awaitingProjection,
+    clearError: () => setError(null),
+    completed: awaitingProjection ? !task.completed : task.completed,
+    error,
+    remotePending,
+    setError,
+    toggle,
+  };
 };
 
 export const ProjectTaskCard: React.FC<{
   actions: ProjectTaskCardActions;
   task: ProjectTaskCardModel;
 }> = ({ actions, task }) => {
-  const [pending, setPending] = useState<"completion" | "edit" | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const completion = useTaskCompletionAction(actions, task, "projected Todoist task");
+  const [editPending, setEditPending] = useState(false);
   const [editButton, setEditButton] = useState<HTMLButtonElement | null>(null);
   const [openLink, setOpenLink] = useState<HTMLAnchorElement | null>(null);
   const [subtasksCollapsed, setSubtasksCollapsed] = useState(false);
   const embedActions = useEmbedActions();
   const reference = { id: task.taskId, filePath: task.filePath };
   const mutable = task.status === "active" || task.status === "completed";
+  const completionConverged = task.completed === (task.status === "completed");
+  const completionTitle = completionControlTitle(
+    completion.awaitingProjection,
+    completionConverged,
+  );
   const location = [...task.projectPath, ...(task.section === undefined ? [] : [task.section])];
   const editTooltip = task.status === "completed" ? "Reopen before editing" : "Edit task";
   const subtaskProgress = countSubtaskProgress(task.subtasks);
@@ -50,40 +185,20 @@ export const ProjectTaskCard: React.FC<{
   useObsidianTooltip(editButton, editTooltip);
   useObsidianTooltip(openLink, "Open in Todoist");
 
-  const toggleCompleted = async (): Promise<void> => {
-    if (!mutable || pending !== null) {
-      return;
-    }
-    setPending("completion");
-    setError(null);
-    try {
-      await actions.setCompleted(reference, !task.completed);
-    } catch (caught: unknown) {
-      if (caught instanceof ProjectTaskProjectionError) {
-        setError("Todoist was updated, but this note still needs Project sync.");
-      } else {
-        setError("Todoist could not be updated. Your previous task state was restored.");
-      }
-      console.error("Failed to update this projected Todoist task", caught);
-    } finally {
-      setPending(null);
-    }
-  };
-
   const edit = async (): Promise<void> => {
-    if (task.status !== "active" || pending !== null) {
+    if (task.status !== "active" || completion.busy || editPending) {
       return;
     }
-    setPending("edit");
-    setError(null);
+    setEditPending(true);
+    completion.clearError();
     try {
       await actions.edit(reference);
     } catch (caught: unknown) {
-      setError("Could not open this task for editing.");
+      completion.setError("Could not open this task for editing.");
       new Notice("Could not open this Todoist task for editing.");
       console.error("Failed to edit this projected Todoist task", caught);
     } finally {
-      setPending(null);
+      setEditPending(false);
     }
   };
 
@@ -96,16 +211,12 @@ export const ProjectTaskCard: React.FC<{
       <button
         aria-label="Edit Todoist task"
         className="embed-action clickable-icon tasks-bridge-note-card-action"
-        disabled={task.status !== "active" || pending !== null}
+        disabled={task.status !== "active" || completion.busy || editPending}
         onClick={() => void edit()}
         ref={setEditButton}
         type="button"
       >
-        {pending === "edit" ? (
-          <ObsidianLoadingIcon size="m" />
-        ) : (
-          <ObsidianIcon id="pencil" size="m" />
-        )}
+        {editPending ? <ObsidianLoadingIcon size="m" /> : <ObsidianIcon id="pencil" size="m" />}
       </button>
       <a
         aria-label="Open task in Todoist"
@@ -125,18 +236,19 @@ export const ProjectTaskCard: React.FC<{
       <section className="tasks-bridge-note-card" data-status={task.status}>
         <div className="tasks-bridge-note-card-main">
           <span
-            aria-busy={pending === "completion"}
+            aria-busy={completion.remotePending}
             className="tasks-bridge-note-card-completion"
-            data-loading={pending === "completion" || undefined}
+            data-loading={completion.remotePending || undefined}
+            title={completionTitle}
           >
-            {pending === "completion" ? (
+            {completion.remotePending ? (
               <ObsidianLoadingIcon aria-label="Updating Todoist task" role="status" size="xs" />
             ) : (
               <input
-                aria-label={task.completed ? "Reopen Todoist task" : "Complete Todoist task"}
-                checked={task.completed}
-                disabled={!mutable}
-                onChange={() => void toggleCompleted()}
+                aria-label={completion.completed ? "Reopen Todoist task" : "Complete Todoist task"}
+                checked={completion.completed}
+                disabled={!mutable || !completionConverged || completion.busy || editPending}
+                onChange={() => void completion.toggle()}
                 type="checkbox"
               />
             )}
@@ -169,9 +281,9 @@ export const ProjectTaskCard: React.FC<{
                 </span>
               ))}
             </div>
-            {error !== null && (
+            {completion.error !== null && (
               <output className="tasks-bridge-note-card-error" aria-live="polite">
-                {error}
+                {completion.error}
               </output>
             )}
           </div>
@@ -229,48 +341,30 @@ const SubtaskRow: React.FC<{
   task: ProjectTaskCardModel;
 }> = ({ actions, depth, task }) => {
   const [collapsed, setCollapsed] = useState(false);
-  const [pending, setPending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const completion = useTaskCompletionAction(actions, task, "projected Todoist subtask");
   const mutable = task.status === "active" || task.status === "completed";
-  const reference = { id: task.taskId, filePath: task.filePath };
+  const completionConverged = task.completed === (task.status === "completed");
   const subtaskProgress = countSubtaskProgress(task.subtasks);
-
-  const toggleCompleted = async (): Promise<void> => {
-    if (!mutable || pending) {
-      return;
-    }
-    setPending(true);
-    setError(null);
-    try {
-      await actions.setCompleted(reference, !task.completed);
-    } catch (caught: unknown) {
-      setError(
-        caught instanceof ProjectTaskProjectionError
-          ? "Todoist was updated, but this note still needs Project sync."
-          : "Todoist could not be updated. Your previous task state was restored.",
-      );
-      console.error("Failed to update this projected Todoist subtask", caught);
-    } finally {
-      setPending(false);
-    }
-  };
 
   return (
     <li className="tasks-bridge-note-card-subtask" data-status={task.status}>
       <div className="tasks-bridge-note-card-subtask-row">
         <span
-          aria-busy={pending}
+          aria-busy={completion.remotePending}
           className="tasks-bridge-note-card-subtask-completion"
-          data-loading={pending || undefined}
+          data-loading={completion.remotePending || undefined}
+          title={completionControlTitle(completion.awaitingProjection, completionConverged)}
         >
-          {pending ? (
+          {completion.remotePending ? (
             <ObsidianLoadingIcon aria-label={`Updating ${task.content}`} role="status" size="xs" />
           ) : (
             <input
-              aria-label={task.completed ? `Reopen ${task.content}` : `Complete ${task.content}`}
-              checked={task.completed}
-              disabled={!mutable}
-              onChange={() => void toggleCompleted()}
+              aria-label={
+                completion.completed ? `Reopen ${task.content}` : `Complete ${task.content}`
+              }
+              checked={completion.completed}
+              disabled={!mutable || !completionConverged || completion.busy}
+              onChange={() => void completion.toggle()}
               type="checkbox"
             />
           )}
@@ -302,9 +396,9 @@ const SubtaskRow: React.FC<{
           </>
         )}
       </div>
-      {error !== null && (
+      {completion.error !== null && (
         <output className="tasks-bridge-note-card-error" aria-live="polite">
-          {error}
+          {completion.error}
         </output>
       )}
       {task.subtasks.length > 0 && !collapsed && (

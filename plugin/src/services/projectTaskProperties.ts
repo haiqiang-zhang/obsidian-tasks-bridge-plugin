@@ -6,6 +6,7 @@ import type { ManagedFrontmatter } from "@/project-sync/document";
 
 import {
   type ManagedProjectTaskReference,
+  type ManagedProjectTaskStatus,
   type ProjectTaskCommandService,
   ProjectTaskProjectionError,
 } from "./projectTaskCommands";
@@ -13,6 +14,12 @@ import {
 type PendingPropertyIntent = {
   completed: boolean;
   reference: ManagedProjectTaskReference;
+  observedStatus: ManagedProjectTaskStatus;
+};
+
+type PendingRemoteTransition = {
+  status: ManagedProjectTaskStatus;
+  taskId: string;
 };
 
 /**
@@ -26,6 +33,7 @@ export class ProjectTaskPropertySyncService {
   private readonly commands: ProjectTaskCommandService;
   private readonly activeIntents = new Map<string, PendingPropertyIntent>();
   private readonly intents = new Map<string, PendingPropertyIntent>();
+  private readonly transitions = new Map<string, PendingRemoteTransition>();
   private readonly running = new Set<string>();
   private disposed = false;
 
@@ -42,15 +50,55 @@ export class ProjectTaskPropertySyncService {
       return;
     }
 
+    const transition = this.transitions.get(file.path);
+    if (transition !== undefined && transition.taskId !== state.reference.id) {
+      this.transitions.delete(file.path);
+    }
+
     const active = this.activeIntents.get(file.path);
     if (active?.completed === state.completed && active.reference.id === state.reference.id) {
+      // The latest observed property returned to the operation already in flight. Cancel an
+      // inverse queued by an older event. Command-side compare-and-set projection prevents an
+      // acknowledgement from overwriting a newer opposite property edit, so the latest metadata
+      // snapshot is authoritative here even when its status already agrees with the active intent.
+      const queued = this.intents.get(file.path);
+      if (queued?.reference.id === state.reference.id) {
+        this.intents.delete(file.path);
+      }
+      const activeStatus: ManagedProjectTaskStatus = active.completed ? "completed" : "active";
+      if (state.status === activeStatus && queued?.reference.id !== state.reference.id) {
+        this.transitions.delete(file.path);
+      }
+      return;
+    }
+    const desiredStatus: ManagedProjectTaskStatus = state.completed ? "completed" : "active";
+    if (transition?.taskId === state.reference.id && transition.status === desiredStatus) {
+      // Todoist already accepted this state. This can be a repeated stale MetadataCache event
+      // after a targeted/deferred projection failure; never resubmit the same remote mutation.
+      if (state.status === desiredStatus) {
+        this.transitions.delete(file.path);
+      }
       return;
     }
     if (state.completed === (state.status === "completed") && active === undefined) {
-      return;
+      const knownStatus = transition?.taskId === state.reference.id ? transition.status : undefined;
+      // Usually an agreeing pair is a Project sync projection, not user intent. The exception is
+      // a rapid inverse edit whose metadata event still carries the pre-projection status: the
+      // queue already knows Todoist accepted the opposite state, so do not let stale metadata
+      // overwrite that confirmed remote status or suppress the inverse mutation.
+      if (knownStatus === undefined || knownStatus === state.status) {
+        if (knownStatus === state.status) {
+          this.transitions.delete(file.path);
+        }
+        return;
+      }
     }
 
-    const intent = { completed: state.completed, reference: state.reference };
+    const intent = {
+      completed: state.completed,
+      observedStatus: state.status,
+      reference: state.reference,
+    };
 
     this.intents.set(file.path, intent);
     if (!this.running.has(file.path)) {
@@ -62,6 +110,7 @@ export class ProjectTaskPropertySyncService {
     this.disposed = true;
     this.intents.clear();
     this.activeIntents.clear();
+    this.transitions.clear();
   }
 
   private async drain(path: string): Promise<void> {
@@ -76,7 +125,36 @@ export class ProjectTaskPropertySyncService {
         this.activeIntents.set(path, intent);
 
         try {
-          await this.commands.applyCompletedProperty(intent.reference, intent.completed);
+          const transition = this.transitions.get(path);
+          const confirmedStatus =
+            transition?.taskId === intent.reference.id ? transition.status : intent.observedStatus;
+          const result = await this.commands.applyCompletedProperty(
+            intent.reference,
+            intent.completed,
+            confirmedStatus,
+          );
+          // Treat `undefined` as the legacy no-op result as well. This keeps integrations using an
+          // older command mock from attempting to await a milestone that does not exist.
+          if (result != null) {
+            const nextTransition: PendingRemoteTransition = {
+              status: intent.completed ? "completed" : "active",
+              taskId: intent.reference.id,
+            };
+            this.transitions.set(path, nextTransition);
+            void result.projection.catch((error: unknown) => {
+              // Targeted projection failures are reported by the awaited milestone above. A later
+              // canonical failure is intentionally background-only, matching command semantics.
+              if (!(error instanceof ProjectTaskProjectionError)) {
+                console.error(
+                  "Background Project sync failed after todoist_completed changed",
+                  error,
+                );
+              }
+              // Keep the transition: Todoist accepted the mutation but no successful canonical
+              // projection has acknowledged it yet.
+            });
+            await result.targetedProjection;
+          }
         } catch (error: unknown) {
           if (error instanceof ProjectTaskProjectionError) {
             new Notice(
@@ -102,7 +180,9 @@ export class ProjectTaskPropertySyncService {
 const readCompletionState = (
   file: TFile,
   frontmatter: ManagedFrontmatter | undefined,
-): (PendingPropertyIntent & { status: "active" | "completed" }) | null => {
+):
+  | (Omit<PendingPropertyIntent, "observedStatus"> & { status: ManagedProjectTaskStatus })
+  | null => {
   if (frontmatter === undefined) {
     return null;
   }

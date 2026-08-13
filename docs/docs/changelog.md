@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### 🐛 Bug Fixes
+
+- Fixed Project task completion controls and the native `todoist_completed` property so completing or reopening a task reaches Todoist immediately without waiting for the next Project sync, including rapid toggles and delayed metadata updates.
+
 ## v2.9.9 (2026-08-13)
 
 ### ✨ Features

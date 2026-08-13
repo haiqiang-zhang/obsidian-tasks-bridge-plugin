@@ -13,7 +13,7 @@ type EntryOptions = {
   rootProjectId?: string;
   content?: string;
   status?: string;
-  completed?: boolean;
+  completed?: boolean | null;
   projectId?: string;
   projectName?: string;
   projectIdPath?: string[];
@@ -60,7 +60,6 @@ const makeEntry = (id: string, options: EntryOptions = {}): BasesEntry => {
     ["note.todoist_content", primitive(options.content ?? id)],
     ["note.todoist_description", primitive(options.description ?? "")],
     ["note.todoist_status", primitive(options.status ?? "active")],
-    ["note.todoist_completed", primitive(options.completed ?? false)],
     ["note.todoist_project_id", primitive(projectId)],
     ["note.todoist_project", primitive(projectName)],
     ["note.todoist_project_id_path", list(options.projectIdPath ?? [projectId])],
@@ -70,6 +69,10 @@ const makeEntry = (id: string, options: EntryOptions = {}): BasesEntry => {
 
   if (options.taskId !== null) {
     values.set("note.todoist_task_id", primitive(options.taskId ?? id));
+  }
+
+  if (options.completed !== null) {
+    values.set("note.todoist_completed", primitive(options.completed ?? false));
   }
 
   if (options.mappingId !== undefined) {
@@ -373,6 +376,18 @@ describe("buildTodoistListModel", () => {
     expect(root?.projects[0]?.name).toBe("Networking");
     expect(root?.projects[0]?.sections[0]?.name).toBe("Lectures");
     expect(root?.projects[0]?.sections[0]?.tasks[0]?.id).toBe("child-project-task");
+  });
+
+  it("preserves explicit false completion while falling back only when the property is absent", () => {
+    const explicitFalse = build([
+      makeGroup([makeEntry("pending-reopen", { completed: false, status: "completed" })]),
+    ]);
+    const missingProperty = build([
+      makeGroup([makeEntry("legacy-completed", { completed: null, status: "completed" })]),
+    ]);
+
+    expect(explicitFalse.groups[0]?.projects[0]?.tasks[0]?.completed).toBe(false);
+    expect(missingProperty.groups[0]?.projects[0]?.tasks[0]?.completed).toBe(true);
   });
 
   it("uses project IDs rather than duplicate names and exposes arbitrary roots", () => {

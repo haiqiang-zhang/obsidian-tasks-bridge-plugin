@@ -830,6 +830,7 @@ const readTask = (
   const projectName = readString(entry, properties.project);
   const projectIdPath = context?.projectIdPath ?? readStringList(entry, properties.projectIdPath);
   const projectPath = readStringList(entry, properties.projectPath);
+  const completedProperty = readOptionalBoolean(entry, properties.completed);
   if (
     id === undefined ||
     rootProjectId === undefined ||
@@ -853,7 +854,7 @@ const readTask = (
     content,
     description: readString(entry, properties.description, true) ?? "",
     status,
-    completed: readBoolean(entry, properties.completed) || status === "completed",
+    completed: completedProperty ?? status === "completed",
     projectId,
     projectName,
     projectIdPath,
@@ -1012,11 +1013,21 @@ const readStringList = (entry: BasesEntry, propertyId: BasesPropertyId): string[
 };
 
 const readBoolean = (entry: BasesEntry, propertyId: BasesPropertyId): boolean => {
+  return readOptionalBoolean(entry, propertyId) ?? false;
+};
+
+const readOptionalBoolean = (
+  entry: BasesEntry,
+  propertyId: BasesPropertyId,
+): boolean | undefined => {
   const value = safeValue(entry, propertyId);
   if (value === null) {
-    return false;
+    return undefined;
   }
   const text = value.toString().trim().toLocaleLowerCase("en-US");
+  if (text === "" || text === "null") {
+    return undefined;
+  }
   return value.isTruthy() && text !== "false" && text !== "0";
 };
 

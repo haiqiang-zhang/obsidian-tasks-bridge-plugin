@@ -67,7 +67,7 @@ class ProjectTaskCardRenderer extends MarkdownRenderChild {
           task={this.model}
           actions={{
             setCompleted: async (reference, completed) =>
-              await this.plugin.services.projectTasks.applyCompletedProperty(reference, completed),
+              await this.plugin.services.projectTasks.setCompleted(reference, completed),
             edit: async (reference) => {
               const task = await this.plugin.services.projectTasks.loadEditableTask(reference);
               this.plugin.services.modals.taskEdit({
@@ -124,7 +124,10 @@ const readTaskCardModel = (
   }
 
   return {
-    completed: frontmatter.todoist_completed === true || status === "completed",
+    completed:
+      typeof frontmatter.todoist_completed === "boolean"
+        ? frontmatter.todoist_completed
+        : status === "completed",
     content,
     description: readString(frontmatter.todoist_description, true) ?? "",
     filePath: file.path,

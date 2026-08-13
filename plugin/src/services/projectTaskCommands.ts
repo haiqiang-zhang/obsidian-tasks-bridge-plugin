@@ -24,6 +24,7 @@ export type ManagedProjectTaskReference = {
 };
 
 export type ProjectTaskMutationResult = {
+  targetedProjection: Promise<void>;
   projection: Promise<void>;
 };
 
@@ -45,7 +46,7 @@ export interface ProjectTaskProjectionCoordinator {
   runInternalMutation<T>(affectedPaths: readonly string[], operation: () => Promise<T>): Promise<T>;
 }
 
-type ManagedProjectTaskStatus = "active" | "completed";
+export type ManagedProjectTaskStatus = "active" | "completed";
 
 type ManagedProjectTaskTarget = {
   file: TFile;
@@ -53,6 +54,7 @@ type ManagedProjectTaskTarget = {
   mappingId: string;
   rootProjectId: string;
   projectId?: string;
+  completedProperty: boolean | undefined;
   status: ManagedProjectTaskStatus;
   taskId: string;
 };
@@ -149,11 +151,14 @@ export class ProjectTaskCommandService {
   ): Promise<ProjectTaskMutationResult> {
     const target = this.resolveTarget(reference);
     this.requireStatus(target, "active", "Only active tasks can be completed");
+    return await this.mutateCompletedStatus(target, true);
+  }
 
-    const completedAt = await this.runRemoteMutation(() =>
-      this.todoist.actions.closeProjectTask(target.taskId),
-    );
-    return this.startStatusProjection(target, "completed", completedAt);
+  public setCompleted(
+    reference: ManagedProjectTaskReference,
+    completed: boolean,
+  ): Promise<ProjectTaskMutationResult> {
+    return completed ? this.completeTask(reference) : this.reopenTask(reference);
   }
 
   public async reopenTask(
@@ -161,9 +166,7 @@ export class ProjectTaskCommandService {
   ): Promise<ProjectTaskMutationResult> {
     const target = this.resolveTarget(reference);
     this.requireStatus(target, "completed", "Only completed tasks can be reopened");
-
-    await this.runRemoteMutation(() => this.todoist.actions.reopenProjectTask(target.taskId));
-    return this.startStatusProjection(target, "active");
+    return await this.mutateCompletedStatus(target, false);
   }
 
   /**
@@ -176,25 +179,33 @@ export class ProjectTaskCommandService {
   public async applyCompletedProperty(
     reference: ManagedProjectTaskReference,
     completed: boolean,
-  ): Promise<void> {
-    const target = this.resolveTarget(reference);
+    confirmedStatus?: ManagedProjectTaskStatus,
+  ): Promise<ProjectTaskMutationResult | null> {
+    const resolvedTarget = this.resolveTarget(reference);
+    const target =
+      confirmedStatus === undefined
+        ? resolvedTarget
+        : { ...resolvedTarget, status: confirmedStatus };
     const desiredStatus: ManagedProjectTaskStatus = completed ? "completed" : "active";
     if (target.status === desiredStatus) {
-      return;
+      return null;
     }
 
     try {
-      const result = completed
-        ? await this.completeTask(reference)
-        : await this.reopenTask(reference);
-      await result.projection;
+      if (completed) {
+        this.requireStatus(target, "active", "Only active tasks can be completed");
+        return await this.mutateCompletedStatus(target, true);
+      }
+
+      this.requireStatus(target, "completed", "Only completed tasks can be reopened");
+      return await this.mutateCompletedStatus(target, false);
     } catch (error: unknown) {
       // A projection error means Todoist already accepted the mutation. Never roll the property
       // back to the old value in that case; doing so would misrepresent server state and could
       // submit the inverse mutation when the metadata observer runs again.
       if (!(error instanceof ProjectTaskProjectionError)) {
         try {
-          await this.restoreCompletedProperty(target);
+          await this.restoreCompletedProperty(target, completed);
         } catch (restoreError: unknown) {
           console.error(
             "Failed to restore todoist_completed after Todoist rejected it",
@@ -282,6 +293,10 @@ export class ProjectTaskCommandService {
       mappingId: owner.id,
       rootProjectId: owner.project.projectId,
       projectId: catalogTask?.projectId,
+      completedProperty:
+        typeof frontmatter.todoist_completed === "boolean"
+          ? frontmatter.todoist_completed
+          : undefined,
       status,
       taskId: identity.taskId,
     };
@@ -308,18 +323,73 @@ export class ProjectTaskCommandService {
     }
   }
 
+  private async mutateCompletedStatus(
+    target: ManagedProjectTaskTarget,
+    completed: boolean,
+  ): Promise<ProjectTaskMutationResult> {
+    let followupError: ProjectTaskProjectionError | undefined;
+    let completedAt: Date | undefined;
+
+    try {
+      if (completed) {
+        completedAt = await this.todoist.actions.closeProjectTask(target.taskId);
+      } else {
+        await this.todoist.actions.reopenProjectTask(target.taskId);
+      }
+    } catch (error: unknown) {
+      if (!(error instanceof TodoistRemoteMutationFollowupError)) {
+        throw error;
+      }
+
+      // The HTTP mutation has already succeeded. Project the confirmed remote transition so the
+      // UI/property queue cannot retry it, then report the adapter follow-up failure through the
+      // slower projection milestone.
+      followupError = new ProjectTaskProjectionError(error);
+      if (completed) {
+        completedAt = new Date();
+      }
+    }
+
+    return this.startStatusProjection(
+      target,
+      completed ? "completed" : "active",
+      completedAt,
+      followupError,
+    );
+  }
+
   private startStatusProjection(
     target: ManagedProjectTaskTarget,
     status: ManagedProjectTaskStatus,
     completedAt?: Date,
+    remoteFollowupError?: ProjectTaskProjectionError,
   ): ProjectTaskMutationResult {
     const syncedAt = new Date().toISOString();
-    const projection = this.projectStatusAndReconcile(target, status, syncedAt, completedAt).catch(
-      (error: unknown) => {
-        throw new ProjectTaskProjectionError(error);
-      },
-    );
-    return { projection };
+    let resolveTargetedProjection: () => void;
+    let rejectTargetedProjection: (error: unknown) => void;
+    const targetedProjection = new Promise<void>((resolve, reject) => {
+      resolveTargetedProjection = resolve;
+      rejectTargetedProjection = reject;
+    });
+    const projection = this.projectStatusAndReconcile(
+      target,
+      status,
+      syncedAt,
+      completedAt,
+      remoteFollowupError,
+      () => resolveTargetedProjection(),
+      (error) => rejectTargetedProjection(asProjectionError(error)),
+    ).catch((error: unknown) => {
+      const projectionError = asProjectionError(error);
+      rejectTargetedProjection(projectionError);
+      throw projectionError;
+    });
+    // Callers may be superseded by a newer render or may only care about one milestone. Mark both
+    // promises handled here while returning the originals so active callers can still observe a
+    // rejection without creating a transient unhandled-rejection window.
+    void targetedProjection.catch(() => undefined);
+    void projection.catch(() => undefined);
+    return { projection, targetedProjection };
   }
 
   private async projectStatusAndReconcile(
@@ -327,35 +397,50 @@ export class ProjectTaskCommandService {
     status: ManagedProjectTaskStatus,
     syncedAt: string,
     completedAt?: Date,
+    remoteFollowupError?: ProjectTaskProjectionError,
+    onTargetedProjected: () => void = () => undefined,
+    onTargetedProjectionFailed: (error: unknown) => void = () => undefined,
   ): Promise<void> {
-    await this.projectionCoordinator.runAutomaticProjection(async (assertValid) => {
-      assertValid();
-      let targetedProjectionError: unknown;
-      let targetedProjectionFailed = false;
-      try {
-        await this.projectionCoordinator.runInternalMutation(
-          this.automaticProjectionPaths(target.file.path),
-          async () => await this.projectStatus(target, status, syncedAt, assertValid, completedAt),
-        );
-      } catch (error: unknown) {
-        targetedProjectionFailed = true;
-        targetedProjectionError = error;
-      }
+    const projectionResult = await this.projectionCoordinator.runAutomaticProjection(
+      async (assertValid) => {
+        assertValid();
+        let targetedProjectionError: ProjectTaskProjectionError | undefined;
+        try {
+          await this.projectionCoordinator.runInternalMutation(
+            this.automaticProjectionPaths(target.file.path),
+            async () =>
+              await this.projectStatus(target, status, syncedAt, assertValid, completedAt),
+          );
+          onTargetedProjected();
+        } catch (error: unknown) {
+          targetedProjectionError = asProjectionError(error);
+          onTargetedProjectionFailed(targetedProjectionError);
+        }
 
-      // A canonical reconciliation is still useful when the targeted write failed after the
-      // Todoist mutation. Keep its failure in the background, as before, while preserving the
-      // more actionable targeted-write error for the caller.
-      assertValid();
-      try {
-        await this.projectSync.sync();
-      } catch (error: unknown) {
-        console.error("Background Project sync failed after a Todoist task status change:", error);
-      }
+        // A canonical reconciliation is still useful when the targeted write failed after the
+        // Todoist mutation. Keep its failure in the background, as before, while preserving the
+        // more actionable targeted-write error for the caller.
+        assertValid();
+        try {
+          await this.projectSync.sync();
+        } catch (error: unknown) {
+          console.error(
+            "Background Project sync failed after a Todoist task status change:",
+            error,
+          );
+        }
 
-      if (targetedProjectionFailed) {
-        throw targetedProjectionError;
-      }
-    });
+        if (targetedProjectionError !== undefined) {
+          throw targetedProjectionError;
+        }
+        if (remoteFollowupError !== undefined) {
+          throw remoteFollowupError;
+        }
+      },
+    );
+    if (!projectionResult.performed) {
+      throw new Error("Automatic Vault projection was deferred");
+    }
   }
 
   private async projectStatus(
@@ -378,7 +463,11 @@ export class ProjectTaskCommandService {
       this.requireSameIdentity(target, frontmatter);
 
       frontmatter.todoist_status = status;
-      frontmatter.todoist_completed = status === "completed";
+      // The editable property can change again while the Todoist request is in flight. Preserve
+      // that newer intent; the property observer will serialize the inverse remote mutation.
+      if (frontmatter.todoist_completed === target.completedProperty) {
+        frontmatter.todoist_completed = status === "completed";
+      }
       frontmatter.todoist_synced_at = syncedAt;
 
       if (completedAtIso !== undefined) {
@@ -434,7 +523,10 @@ export class ProjectTaskCommandService {
     }
   }
 
-  private async restoreCompletedProperty(target: ManagedProjectTaskTarget): Promise<void> {
+  private async restoreCompletedProperty(
+    target: ManagedProjectTaskTarget,
+    failedDesiredValue: boolean,
+  ): Promise<void> {
     await this.projectionCoordinator.runInternalMutation(
       this.automaticProjectionPaths(target.file.path),
       async () => {
@@ -443,9 +535,11 @@ export class ProjectTaskCommandService {
             throw new Error(`Invalid frontmatter in '${target.file.path}'`);
           }
           this.requireSameIdentity(target, frontmatter);
-          // Only repair the editable switch. The canonical Project sync projection remains the
-          // sole owner of status timestamps and completion history.
-          frontmatter.todoist_completed = target.status === "completed";
+          // Only roll back the rejected value. If the user changed the property again while the
+          // request was in flight, that newer intent owns the switch.
+          if (frontmatter.todoist_completed === failedDesiredValue) {
+            frontmatter.todoist_completed = target.status === "completed";
+          }
         });
       },
     );
@@ -483,3 +577,6 @@ export class ProjectTaskCommandService {
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
+
+const asProjectionError = (error: unknown): ProjectTaskProjectionError =>
+  error instanceof ProjectTaskProjectionError ? error : new ProjectTaskProjectionError(error);
