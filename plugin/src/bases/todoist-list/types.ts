@@ -100,6 +100,8 @@ export type TodoistListProjectItem =
 export type TodoistListGroup = {
   key: string;
   label?: string;
+  /** A hierarchy-only bucket for synchronized scopes with no entry in any Base group. */
+  synthetic?: true;
   projects: TodoistListProject[];
   counts: TodoistListCounts;
 };

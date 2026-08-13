@@ -125,17 +125,21 @@ export const ProjectTaskCard: React.FC<{
       <section className="tasks-bridge-note-card" data-status={task.status}>
         <div className="tasks-bridge-note-card-main">
           <span
+            aria-busy={pending === "completion"}
             className="tasks-bridge-note-card-completion"
             data-loading={pending === "completion" || undefined}
           >
-            <input
-              aria-label={task.completed ? "Reopen Todoist task" : "Complete Todoist task"}
-              checked={task.completed}
-              disabled={!mutable || pending !== null}
-              onChange={() => void toggleCompleted()}
-              type="checkbox"
-            />
-            {pending === "completion" && <ObsidianLoadingIcon size="s" />}
+            {pending === "completion" ? (
+              <ObsidianLoadingIcon aria-label="Updating Todoist task" role="status" size="xs" />
+            ) : (
+              <input
+                aria-label={task.completed ? "Reopen Todoist task" : "Complete Todoist task"}
+                checked={task.completed}
+                disabled={!mutable}
+                onChange={() => void toggleCompleted()}
+                type="checkbox"
+              />
+            )}
           </span>
           <div className="tasks-bridge-note-card-content">
             <div className="tasks-bridge-note-card-heading">
@@ -255,17 +259,21 @@ const SubtaskRow: React.FC<{
     <li className="tasks-bridge-note-card-subtask" data-status={task.status}>
       <div className="tasks-bridge-note-card-subtask-row">
         <span
+          aria-busy={pending}
           className="tasks-bridge-note-card-subtask-completion"
           data-loading={pending || undefined}
         >
-          <input
-            aria-label={task.completed ? `Reopen ${task.content}` : `Complete ${task.content}`}
-            checked={task.completed}
-            disabled={!mutable || pending}
-            onChange={() => void toggleCompleted()}
-            type="checkbox"
-          />
-          {pending && <ObsidianLoadingIcon size="s" />}
+          {pending ? (
+            <ObsidianLoadingIcon aria-label={`Updating ${task.content}`} role="status" size="xs" />
+          ) : (
+            <input
+              aria-label={task.completed ? `Reopen ${task.content}` : `Complete ${task.content}`}
+              checked={task.completed}
+              disabled={!mutable}
+              onChange={() => void toggleCompleted()}
+              type="checkbox"
+            />
+          )}
         </span>
         <a
           className="tasks-bridge-note-card-subtask-link"

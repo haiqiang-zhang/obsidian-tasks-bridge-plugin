@@ -94,7 +94,7 @@ const makeModel = (overrides: Partial<ProjectOverviewModel> = {}): ProjectOvervi
 };
 
 describe("ProjectOverview", () => {
-  it("exposes an accessible controlled disclosure and native progress semantics", () => {
+  it("exposes an accessible controlled disclosure with only percentage and activity modules", () => {
     render(
       <ProjectOverview
         collapsed={false}
@@ -134,11 +134,19 @@ describe("ProjectOverview", () => {
         name: "67% complete, 2 completed of 3 tasks",
       }),
     ).toBeInTheDocument();
-    expect(within(region).getByRole("progressbar", { name: "Root completion" })).toHaveAttribute(
-      "aria-valuenow",
-      "2",
-    );
-    expect(within(region).queryByRole("tree")).not.toBeInTheDocument();
+    expect(within(region).getByRole("region", { name: "Completion activity" })).toBeInTheDocument();
+    expect(within(region).queryByText("Project breakdown")).not.toBeInTheDocument();
+    expect(
+      within(region).queryByRole("list", { name: "Project statistics" }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(region).queryByRole("list", { name: "Task status legend" }),
+    ).not.toBeInTheDocument();
+    const metrics = within(region).getByRole("group", { name: "Project completion totals" });
+    expect(within(metrics).getByText("Total").nextElementSibling).toHaveTextContent("3");
+    expect(within(metrics).getByText("Active").nextElementSibling).toHaveTextContent("1");
+    expect(within(metrics).getByText("Completed").nextElementSibling).toHaveTextContent("2");
+    expect(within(metrics).getByText("Projects").nextElementSibling).toHaveTextContent("3");
   });
 
   it("requests a collapsed-state change and follows the controlled prop", () => {
@@ -178,7 +186,7 @@ describe("ProjectOverview", () => {
     expect(screen.getByText("3 projects · 3 tasks · 67% complete")).toBeVisible();
   });
 
-  it("renders the complete selected root and descendant hierarchy", () => {
+  it("does not duplicate project hierarchy details in the overview", () => {
     render(
       <ProjectOverview
         collapsed={false}
@@ -192,32 +200,9 @@ describe("ProjectOverview", () => {
       />,
     );
 
-    expect(
-      screen.getByText("Root", { selector: ".todoist-bases-project-overview-project-name" }),
-    ).toHaveAttribute("title", "Root");
-    expect(
-      screen.getByText("Child", { selector: ".todoist-bases-project-overview-project-name" }),
-    ).toHaveAttribute("title", "Root / Child");
-    expect(
-      screen.getByText("Grandchild", {
-        selector: ".todoist-bases-project-overview-project-name",
-      }),
-    ).toHaveAttribute("title", "Root / Child / Grandchild");
-
-    const rootItem = screen
-      .getByText("Root", { selector: ".todoist-bases-project-overview-project-name" })
-      .closest("li");
-    const childItem = screen
-      .getByText("Child", { selector: ".todoist-bases-project-overview-project-name" })
-      .closest("li");
-    const grandchildItem = screen
-      .getByText("Grandchild", { selector: ".todoist-bases-project-overview-project-name" })
-      .closest("li");
-    expect(rootItem).toContainElement(childItem);
-    expect(childItem).toContainElement(grandchildItem);
-    expect(
-      rootItem?.querySelector(".todoist-bases-project-overview-project-counts"),
-    ).toHaveTextContent("2 / 3 completed · 67%");
+    expect(screen.queryByText("Child")).not.toBeInTheDocument();
+    expect(screen.queryByText("Grandchild")).not.toBeInTheDocument();
+    expect(screen.queryByText("2 / 3 completed · 67%")).not.toBeInTheDocument();
     expect(screen.getByText(/^Last synced /)).toBeInTheDocument();
   });
 
@@ -346,7 +331,7 @@ describe("ProjectOverview", () => {
     expect(screen.queryByRole("img", { name: /complete/ })).not.toBeInTheDocument();
   });
 
-  it("renders zero-task projects without an invalid progressbar", () => {
+  it("renders a zero-task percentage without project statistics", () => {
     const emptyRoot = makeNode("empty", "Empty project", 0, 0, [], ["Empty project"]);
     render(
       <ProjectOverview
@@ -381,8 +366,7 @@ describe("ProjectOverview", () => {
     expect(screen.getByRole("img", { name: "No tasks to calculate completion" })).toHaveTextContent(
       "—Complete",
     );
-    const projectRow = screen.getByLabelText("Empty project: No tasks, including child projects");
-    expect(within(projectRow).getByText("No tasks")).toBeInTheDocument();
-    expect(within(projectRow).queryByRole("progressbar")).not.toBeInTheDocument();
+    expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
+    expect(screen.queryByRole("list", { name: "Project statistics" })).not.toBeInTheDocument();
   });
 });

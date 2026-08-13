@@ -1,14 +1,13 @@
-import classNames from "classnames";
 import type React from "react";
-import { Button, type Key, Label, Menu, MenuItem, MenuTrigger } from "react-aria-components";
+import { Button } from "react-aria-components";
 
 import { t } from "@/i18n";
 import type { Translations } from "@/i18n/translation";
+import { useObsidianMenu } from "@/ui/obsidianMenu";
 import { assertNever } from "@/utils/types";
 
 import { Priorities, type Priority } from "../../api/domain/task";
 import { ObsidianIcon } from "../components/obsidian-icon";
-import { Popover } from "./Popover";
 
 type Props = {
   selected: Priority;
@@ -18,47 +17,31 @@ type Props = {
 const options: Priority[] = [Priorities.P1, Priorities.P2, Priorities.P3, Priorities.P4];
 
 export const PrioritySelector: React.FC<Props> = ({ selected, setSelected }) => {
-  const onSelected = (key: Key) => {
-    if (typeof key === "string") {
-      throw new Error("unexpected key type");
-    }
-
-    // Should be a safe cast since we only use valid priorities
-    // as keys.
-    setSelected(key as Priority);
-  };
-
   const i18n = t().createTaskModal.prioritySelector;
+  const { anchorRef, isOpen, openMenu } = useObsidianMenu((menu) => {
+    for (const priority of options) {
+      menu.addItem((item) =>
+        item
+          .setTitle(getLabel(priority, i18n))
+          .setChecked(priority === selected)
+          .onClick(() => setSelected(priority)),
+      );
+    }
+  });
 
   const label = getLabel(selected, i18n);
   return (
-    <MenuTrigger>
-      <Button className="priority-selector" aria-label={i18n.buttonLabel}>
-        <ObsidianIcon size="m" id="flag" />
-        <span>{label}</span>
-      </Button>
-      <Popover>
-        <Menu
-          className="task-option-dialog task-priority-menu"
-          autoFocus="first"
-          aria-label={i18n.optionsLabel}
-          onAction={onSelected}
-        >
-          {options.map((priority) => {
-            const label = getLabel(priority, i18n);
-            const isSelected = priority === selected;
-            const className = classNames("priority-option", {
-              "is-selected": isSelected,
-            });
-            return (
-              <MenuItem key={priority} className={className} id={priority}>
-                <Label>{label}</Label>
-              </MenuItem>
-            );
-          })}
-        </Menu>
-      </Popover>
-    </MenuTrigger>
+    <Button
+      ref={anchorRef}
+      aria-expanded={isOpen}
+      aria-haspopup="menu"
+      aria-label={i18n.buttonLabel}
+      className="priority-selector"
+      onPress={openMenu}
+    >
+      <ObsidianIcon size="m" id="flag" />
+      <span>{label}</span>
+    </Button>
   );
 };
 

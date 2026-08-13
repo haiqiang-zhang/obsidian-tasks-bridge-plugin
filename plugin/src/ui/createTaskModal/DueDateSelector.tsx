@@ -1,6 +1,5 @@
 import {
   type CalendarDate,
-  DateFormatter,
   endOfWeek,
   Time,
   toCalendarDateTime,
@@ -8,7 +7,7 @@ import {
   toZoned,
 } from "@internationalized/date";
 import type React from "react";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
   Button,
   Calendar,
@@ -16,17 +15,8 @@ import {
   CalendarGrid,
   DateInput,
   DateSegment,
-  Dialog,
-  DialogTrigger,
   Heading,
-  type Key,
   Label,
-  ListBox,
-  ListBoxItem,
-  Menu,
-  MenuItem,
-  Select,
-  SelectValue,
   TimeField,
 } from "react-aria-components";
 
@@ -35,12 +25,10 @@ import type { Duration as ApiDuration } from "@/api/domain/task";
 import { DueDate as DataDueDate } from "@/data/dueDate";
 import { t } from "@/i18n";
 import { now, timezone } from "@/infra/time";
+import { openObsidianReactModal } from "@/ui/components/ObsidianReactModal";
 import { ObsidianIcon } from "@/ui/components/obsidian-icon";
-import { Popover } from "@/ui/createTaskModal/Popover";
-
-const weekdayFormatter = new DateFormatter("en-US", {
-  weekday: "short",
-});
+import { PluginContext } from "@/ui/context";
+import { useObsidianMenu } from "@/ui/obsidianMenu";
 
 export type DueDate = {
   date: CalendarDate;
@@ -63,339 +51,253 @@ export const DueDateSelector: React.FC<Props> = ({
   setSelected,
   allowPastDates = false,
 }) => {
-  const label = getLabel(selected);
+  const plugin = PluginContext.use();
+  const i18n = t().createTaskModal.dateSelector;
   const suggestions = getSuggestions();
 
-  const selectDate = (date: CalendarDate) => {
-    if (selected === undefined) {
-      setSelected({
-        date,
-        timeInfo: undefined,
-      });
-    } else {
-      setSelected({
-        date,
-        timeInfo: selected.timeInfo,
-      });
-    }
+  const openDateEditor = () => {
+    openObsidianReactModal(plugin.app, {
+      className: "tasks-bridge-date-modal",
+      title: i18n.dialogLabel,
+      render: (close) => (
+        <DueDateEditor
+          allowPastDates={allowPastDates}
+          close={close}
+          initial={selected}
+          onSave={(next) => {
+            setSelected(next);
+            close();
+          }}
+        />
+      ),
+    });
   };
 
-  const selectedDateSuggestion = (key: Key) => {
-    const suggestion = suggestions.find((s) => s.id === key);
-    if (suggestion === undefined) {
-      return;
+  const { anchorRef, isOpen, openMenu } = useObsidianMenu((menu) => {
+    for (const suggestion of suggestions) {
+      menu.addItem((item) =>
+        item
+          .setTitle(suggestion.label)
+          .setIcon(suggestion.icon)
+          .setSection("quick-dates")
+          .onClick(() => {
+            setSelected(
+              suggestion.target === undefined
+                ? undefined
+                : { date: suggestion.target, timeInfo: selected?.timeInfo },
+            );
+          }),
+      );
     }
-
-    if (suggestion.target === undefined) {
-      setSelected(undefined);
-    } else {
-      setSelected({
-        date: suggestion.target,
-        timeInfo: selected?.timeInfo,
-      });
-    }
-  };
-
-  const setTimeInfo = (timeInfo: DueDate["timeInfo"]) => {
-    if (selected === undefined) {
-      if (timeInfo !== undefined) {
-        setSelected({
-          date: today(timezone()),
-          timeInfo,
-        });
-      }
-    } else {
-      setSelected({
-        date: selected.date,
-        timeInfo,
-      });
-    }
-  };
-
-  const i18n = t().createTaskModal.dateSelector;
+    menu.addItem((item) =>
+      item
+        .setTitle(i18n.chooseDateTimeLabel)
+        .setIcon("calendar-days")
+        .setSection("custom-date")
+        .onClick(openDateEditor),
+    );
+  });
 
   return (
-    <DialogTrigger>
-      <Button className="due-date-selector" aria-label={i18n.buttonLabel}>
-        <ObsidianIcon size="s" id="calendar" />
-        <span>{label}</span>
-      </Button>
-      <Popover maxHeight={600}>
-        <Dialog className="task-option-dialog task-date-menu" aria-label={i18n.dialogLabel}>
-          {({ close }) => (
-            <>
-              <Menu
-                onAction={(key: Key) => {
-                  selectedDateSuggestion(key);
-                  close();
-                }}
-                aria-label={i18n.suggestionsLabel}
-              >
-                {suggestions.map((props) => (
-                  <DateSuggestion key={props.id} {...props} />
-                ))}
-              </Menu>
-              <hr />
-              <Calendar
-                aria-label={i18n.datePickerLabel}
-                className="date-picker"
-                value={selected?.date ?? null}
-                onChange={(date) => {
-                  selectDate(date);
-                  close();
-                }}
-                minValue={allowPastDates ? undefined : today(timezone())}
-              >
-                <header>
-                  <Heading level={4} />
-                  <div className="date-picker-controls">
-                    <Button slot="previous">◀</Button>
-                    <Button slot="next">▶</Button>
-                  </div>
-                </header>
-                <CalendarGrid>{(date) => <CalendarCell date={date} />}</CalendarGrid>
-              </Calendar>
-              <hr />
-              <div className="time-picker-container">
-                <DialogTrigger>
-                  <Button className="time-picker-button" aria-label="Set time">
-                    <ObsidianIcon size="xs" id="clock" />
-                    Time
-                  </Button>
-                  <Popover defaultPlacement="top">
-                    <TimeDialog selectedTimeInfo={selected?.timeInfo} setTimeInfo={setTimeInfo} />
-                  </Popover>
-                </DialogTrigger>
-                {selected?.timeInfo !== undefined && (
-                  <Button
-                    className="time-picker-clear-button"
-                    onPress={() => setTimeInfo(undefined)}
-                    aria-label="Clear time"
-                  >
-                    <ObsidianIcon size="xs" id="cross" />
-                  </Button>
-                )}
-              </div>
-            </>
-          )}
-        </Dialog>
-      </Popover>
-    </DialogTrigger>
+    <Button
+      ref={anchorRef}
+      aria-expanded={isOpen}
+      aria-haspopup="menu"
+      aria-label={i18n.buttonLabel}
+      className="due-date-selector"
+      onPress={openMenu}
+    >
+      <ObsidianIcon size="s" id="calendar" />
+      <span>{getLabel(selected)}</span>
+    </Button>
   );
 };
 
-const getLabel = (selected: DueDate | undefined) => {
+type DueDateEditorProps = {
+  allowPastDates: boolean;
+  close: () => void;
+  initial: DueDate | undefined;
+  onSave: (value: DueDate | undefined) => void;
+};
+
+const DueDateEditor: React.FC<DueDateEditorProps> = ({
+  allowPastDates,
+  close,
+  initial,
+  onSave,
+}) => {
+  const i18n = t().createTaskModal.dateSelector;
+  const [draft, setDraft] = useState(initial);
+  const durationOptions = useMemo(() => buildDurationOptions(), []);
+  const durationIndex = Math.max(
+    0,
+    durationOptions.findIndex(({ value }) => value?.amount === draft?.timeInfo?.duration?.amount),
+  );
+
+  const setDuration = (duration: ApiDuration | undefined) => {
+    setDraft((current) => {
+      const currentTime = current?.timeInfo?.time;
+      const localNow = now();
+      return {
+        date: current?.date ?? today(timezone()),
+        timeInfo: {
+          duration,
+          time: currentTime ?? new Time(localNow.hour, localNow.minute, 0),
+        },
+      };
+    });
+  };
+
+  const {
+    anchorRef: durationAnchorRef,
+    isOpen: durationMenuOpen,
+    openMenu: openDurationMenu,
+  } = useObsidianMenu((menu) => {
+    for (const [index, option] of durationOptions.entries()) {
+      menu.addItem((item) =>
+        item
+          .setTitle(option.label)
+          .setChecked(index === durationIndex)
+          .onClick(() => setDuration(option.value)),
+      );
+    }
+  });
+
+  return (
+    <div className="task-date-editor">
+      <Calendar
+        aria-label={i18n.datePickerLabel}
+        className="date-picker"
+        minValue={allowPastDates ? undefined : today(timezone())}
+        onChange={(date) => setDraft((current) => ({ date, timeInfo: current?.timeInfo }))}
+        value={draft?.date ?? null}
+      >
+        <header>
+          <Heading level={4} />
+          <div className="date-picker-controls">
+            <Button aria-label="Previous month" slot="previous">
+              <ObsidianIcon id="chevron-left" size="s" />
+            </Button>
+            <Button aria-label="Next month" slot="next">
+              <ObsidianIcon id="chevron-right" size="s" />
+            </Button>
+          </div>
+        </header>
+        <CalendarGrid>{(date) => <CalendarCell date={date} />}</CalendarGrid>
+      </Calendar>
+
+      <div className="task-date-editor-time">
+        <TimeField
+          className="task-time-picker"
+          onChange={(time) => {
+            if (time === null) {
+              return;
+            }
+            setDraft((current) => ({
+              date: current?.date ?? today(timezone()),
+              timeInfo: { duration: current?.timeInfo?.duration, time },
+            }));
+          }}
+          value={draft?.timeInfo?.time ?? null}
+        >
+          <Label className="task-time-picker-label">{i18n.timeDialog.timeLabel}</Label>
+          <DateInput className="task-time-picker-input">
+            {(segment) => (
+              <DateSegment className="task-time-picker-input-segment" segment={segment} />
+            )}
+          </DateInput>
+        </TimeField>
+
+        <div className="task-duration-picker">
+          <span className="task-duration-picker-label">{i18n.timeDialog.durationLabel}</span>
+          <Button
+            ref={durationAnchorRef}
+            aria-expanded={durationMenuOpen}
+            aria-haspopup="menu"
+            className="task-duration-button"
+            onPress={openDurationMenu}
+          >
+            <span>{durationOptions[durationIndex]?.label}</span>
+            <ObsidianIcon id="chevron-down" size="xs" />
+          </Button>
+        </div>
+
+        {draft?.timeInfo !== undefined && (
+          <Button
+            className="task-time-clear-button"
+            onPress={() =>
+              setDraft((current) =>
+                current === undefined ? undefined : { ...current, timeInfo: undefined },
+              )
+            }
+          >
+            {i18n.timeDialog.clearTimeLabel}
+          </Button>
+        )}
+      </div>
+
+      <div className="task-date-editor-controls">
+        <Button className="task-date-clear-button" onPress={() => onSave(undefined)}>
+          {i18n.noDate}
+        </Button>
+        <span className="task-date-editor-controls-spacer" />
+        <Button onPress={close}>{i18n.timeDialog.cancelButtonLabel}</Button>
+        <Button className="mod-cta" onPress={() => onSave(draft)}>
+          {i18n.timeDialog.saveButtonLabel}
+        </Button>
+      </div>
+    </div>
+  );
+};
+
+const getLabel = (selected: DueDate | undefined): string => {
   if (selected === undefined) {
     return t().createTaskModal.dateSelector.emptyDate;
   }
 
-  let dateString: string;
-  if (selected.timeInfo !== undefined) {
-    dateString = toZoned(
-      toCalendarDateTime(selected.date, selected.timeInfo.time),
-      timezone(),
-    ).toAbsoluteString();
-  } else {
-    dateString = selected.date.toString();
-  }
-
-  const apiDueDate: ApiDueDate = {
-    date: dateString,
-    isRecurring: false,
-  };
-
-  const dueDate = DataDueDate.parse(apiDueDate, selected?.timeInfo?.duration);
-
-  return DataDueDate.format(dueDate);
+  const date =
+    selected.timeInfo === undefined
+      ? selected.date.toString()
+      : toZoned(
+          toCalendarDateTime(selected.date, selected.timeInfo.time),
+          timezone(),
+        ).toAbsoluteString();
+  const apiDueDate: ApiDueDate = { date, isRecurring: false };
+  return DataDueDate.format(DataDueDate.parse(apiDueDate, selected.timeInfo?.duration));
 };
 
-type DateSuggestionProps = {
-  id: string;
+type DateSuggestion = {
   icon: string;
   label: string;
   target: CalendarDate | undefined;
 };
 
-const DateSuggestion: React.FC<DateSuggestionProps> = ({ id, icon, label, target }) => {
-  const dayOfWeek = target !== undefined ? weekdayFormatter.format(target.toDate(timezone())) : "";
-
-  return (
-    <MenuItem id={id} aria-label={label}>
-      <div className="date-suggestion-elem">
-        <div className="date-suggestion-label">
-          <ObsidianIcon id={icon} size="s" />
-          {label}
-        </div>
-        <div className="date-suggestion-day">{dayOfWeek}</div>
-      </div>
-    </MenuItem>
-  );
-};
-
-const getSuggestions = (): DateSuggestionProps[] => {
+const getSuggestions = (): DateSuggestion[] => {
   const dateI18n = t().dates;
   const selectorI18n = t().createTaskModal.dateSelector;
+  const startOfNextWeek = endOfWeek(today(timezone()), "en-US").add({ days: 1 });
 
-  const startOfNextWeek = endOfWeek(today(timezone()), "en-US").add({
-    days: 1,
-  });
-  const suggestions = [
-    {
-      id: "today",
-      icon: "calendar",
-      label: dateI18n.today,
-      target: today(timezone()),
-    },
-    {
-      id: "tomorrow",
-      icon: "sun",
-      label: dateI18n.tomorrow,
-      target: today(timezone()).add({ days: 1 }),
-    },
-    {
-      id: "next-week",
-      icon: "calendar-clock",
-      label: dateI18n.nextWeek,
-      target: startOfNextWeek,
-    },
-    {
-      id: "no-date",
-      icon: "ban",
-      label: selectorI18n.noDate,
-      target: undefined,
-    },
+  return [
+    { icon: "calendar", label: dateI18n.today, target: today(timezone()) },
+    { icon: "sun", label: dateI18n.tomorrow, target: today(timezone()).add({ days: 1 }) },
+    { icon: "calendar-clock", label: dateI18n.nextWeek, target: startOfNextWeek },
+    { icon: "ban", label: selectorI18n.noDate, target: undefined },
   ];
-
-  return suggestions;
 };
 
-type TimeDialogProps = {
-  selectedTimeInfo: DueDate["timeInfo"] | undefined;
-  setTimeInfo: (timeInfo: DueDate["timeInfo"] | undefined) => void;
-};
+const durationSegmentMinutes = 15;
+const durationSegmentCount = (24 * 60 - durationSegmentMinutes) / durationSegmentMinutes;
 
-const segmentDurationMins = 15;
-// We want enough options to get to 23h 45m.
-const numDurationSegments = (24 * 60 - segmentDurationMins) / segmentDurationMins;
-
-const TimeDialog: React.FC<TimeDialogProps> = ({ selectedTimeInfo, setTimeInfo }) => {
+const buildDurationOptions = (): Array<{ label: string; value: ApiDuration | undefined }> => {
   const i18n = t().createTaskModal.dateSelector.timeDialog;
-
-  const durationOptions = [
-    undefined,
-    ...Array.from(
-      {
-        length: numDurationSegments,
-      },
-      (_, i) => ({
-        amount: (i + 1) * segmentDurationMins,
-        unit: "minute" as const,
-      }),
-    ),
-  ].map((option) => ({
-    label: option === undefined ? i18n.noDuration : i18n.duration(option.amount),
-    value: option,
-  }));
-
-  const initialDurationIndex = durationOptions.findIndex(
-    (o) => o.value?.amount === selectedTimeInfo?.duration?.amount,
-  );
-
-  const [selectedDurationIndex, setSelectedDurationIndex] = useState<number>(
-    initialDurationIndex === -1 ? 0 : initialDurationIndex,
-  );
-  const [taskTimeInfo, setTaskTimeInfo] = useState(selectedTimeInfo);
-
-  const onDurationChange = (key: Key | null) => {
-    if (key === null) {
-      return;
-    }
-
-    const idx = Number(key);
-    setSelectedDurationIndex(idx);
-
-    const option = durationOptions[idx];
-    if (taskTimeInfo?.time) {
-      setTaskTimeInfo({
-        time: taskTimeInfo.time,
-        duration: option.value,
-      });
-    } else {
-      setTaskTimeInfo({
-        time: new Time(now().hour, now().minute, 0),
-        duration: option.value,
-      });
-    }
-  };
-
-  const onTimeChange = (time: Time | null) => {
-    if (time === null) {
-      return;
-    }
-
-    setTaskTimeInfo((old) => ({
-      time,
-      duration: old?.duration,
-    }));
-  };
-
-  return (
-    <Dialog className="task-option-dialog task-time-menu" aria-label="Time selector">
-      {({ close }) => (
-        <>
-          <TimeField
-            className="task-time-picker"
-            value={taskTimeInfo?.time ?? null}
-            onChange={onTimeChange}
-          >
-            <Label className="task-time-picker-label">{i18n.timeLabel}</Label>
-            <DateInput className="task-time-picker-input">
-              {(segment) => (
-                <DateSegment className="task-time-picker-input-segment" segment={segment} />
-              )}
-            </DateInput>
-          </TimeField>
-          <Select
-            className="task-duration-select"
-            value={selectedDurationIndex}
-            onChange={onDurationChange}
-          >
-            <Label className="task-duration-picker-label">{i18n.durationLabel}</Label>
-            <Button className="task-duration-button">
-              <SelectValue />
-            </Button>
-            <Popover defaultPlacement="top" maxHeight={150}>
-              <ListBox
-                className="task-option-dialog task-duration-menu"
-                aria-label={i18n.durationLabel}
-              >
-                {durationOptions.map((option, index) => (
-                  <ListBoxItem
-                    key={String(index)}
-                    id={index}
-                    className="duration-option"
-                    textValue={option.label}
-                  >
-                    {option.label}
-                  </ListBoxItem>
-                ))}
-              </ListBox>
-            </Popover>
-          </Select>
-          <div className="task-time-controls">
-            <Button onPress={close}>{i18n.cancelButtonLabel}</Button>
-            <Button
-              className="mod-cta"
-              onPress={() => {
-                close();
-                setTimeInfo(taskTimeInfo);
-              }}
-            >
-              {i18n.saveButtonLabel}
-            </Button>
-          </div>
-        </>
-      )}
-    </Dialog>
-  );
+  return [
+    { label: i18n.noDuration, value: undefined },
+    ...Array.from({ length: durationSegmentCount }, (_, index) => {
+      const amount = (index + 1) * durationSegmentMinutes;
+      return {
+        label: i18n.duration(amount),
+        value: { amount, unit: "minute" as const },
+      };
+    }),
+  ];
 };

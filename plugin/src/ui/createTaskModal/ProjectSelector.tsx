@@ -1,25 +1,16 @@
-import { Platform } from "obsidian";
+import { type FuzzyMatch, FuzzySuggestModal, renderResults, setIcon } from "obsidian";
 import type React from "react";
-import { useMemo, useState } from "react";
-import {
-  Button,
-  Dialog,
-  DialogTrigger,
-  Input,
-  type Key,
-  ListBox,
-  ListBoxItem,
-  SearchField,
-} from "react-aria-components";
+import { useMemo } from "react";
+import { Button } from "react-aria-components";
 
 import { t } from "@/i18n";
+import type { Translations } from "@/i18n/translation";
 import { PluginContext } from "@/ui/context";
 
 import type TodoistPlugin from "../..";
 import type { Project, ProjectId } from "../../api/domain/project";
 import type { Section, SectionId } from "../../api/domain/section";
 import { ObsidianIcon } from "../components/obsidian-icon";
-import { Popover } from "./Popover";
 
 export type ProjectIdentifier = {
   projectId: ProjectId;
@@ -31,229 +22,151 @@ type Props = {
   setSelected: (selected: ProjectIdentifier) => void;
 };
 
+type ProjectSelectorTranslations = Translations["createTaskModal"]["projectSelector"];
+
+type ProjectSelectionOption = {
+  identifier: ProjectIdentifier;
+  project: Project;
+  section?: Section;
+  pathNames: string[];
+};
+
 export const ProjectSelector: React.FC<Props> = ({ selected, setSelected }) => {
   const plugin = PluginContext.use();
-  const todoistData = plugin.services.todoist.data();
-
-  const [filter, setFilter] = useState("");
-  const hierarchy = useMemo(() => buildProjectHierarchy(plugin), [plugin]);
-
-  const onSelect = (key: Key) => {
-    if (typeof key === "number") {
-      throw new Error("Unexpected key type: number");
-    }
-
-    const [id, isSection] = ItemKey.parse(key);
-
-    if (isSection) {
-      const section = todoistData.sections.byId(id);
-      if (section === undefined) {
-        throw new Error("Could not find selected section");
-      }
-
-      setSelected({
-        projectId: section.projectId,
-        sectionId: section.id,
-      });
-      return;
-    }
-
-    setSelected({ projectId: id });
-  };
-
+  const options = useMemo(() => buildProjectOptions(plugin), [plugin]);
   const i18n = t().createTaskModal.projectSelector;
 
-  return (
-    <DialogTrigger>
-      <Button className="project-selector" aria-label={i18n.buttonLabel}>
-        <ButtonLabel {...selected} />
-        <ObsidianIcon size="s" id="chevron-down" />
-      </Button>
-      <Popover>
-        <Dialog className="task-option-dialog task-project-menu" aria-label={i18n.selectorLabel}>
-          {({ close }) => (
-            <>
-              {!Platform.isMobile && (
-                <>
-                  <SearchFilter filter={filter} setFilter={setFilter} />
-                  <hr />
-                </>
-              )}
-              <ListBox
-                aria-label={i18n.optionsLabel}
-                selectionMode="single"
-                onAction={(key) => {
-                  onSelect(key);
-                  close();
-                }}
-              >
-                {hierarchy.map((nested) => (
-                  <NestedProjectItem
-                    key={nested.project.id}
-                    nested={nested}
-                    depth={0}
-                    filter={filter}
-                  />
-                ))}
-              </ListBox>
-            </>
-          )}
-        </Dialog>
-      </Popover>
-    </DialogTrigger>
-  );
-};
-
-type SearchFilterProps = {
-  filter: string;
-  setFilter: (filter: string) => void;
-};
-
-const SearchFilter: React.FC<SearchFilterProps> = ({ filter, setFilter }) => {
-  const onChange = (changeEv: React.ChangeEvent<HTMLInputElement>) => {
-    setFilter(changeEv.target.value.toLowerCase());
+  const openSelector = () => {
+    new ProjectSuggestModal(plugin, options, selected, setSelected, i18n).open();
   };
 
-  const i18n = t().createTaskModal.projectSelector.search;
-
   return (
-    <SearchField aria-label={i18n.label} className="search-filter-container">
-      <Input value={filter} onChange={onChange} placeholder={i18n.placeholder} autoFocus={true} />
-    </SearchField>
-  );
-};
-
-type NestedProjectItemProps = {
-  nested: NestedProject;
-  depth: number;
-  filter: string;
-};
-
-const NestedProjectItem: React.FC<NestedProjectItemProps> = ({ nested, depth, filter }) => {
-  return (
-    <>
-      <ProjectOption project={nested.project} depth={depth} filter={filter} />
-      {nested.sections.map((section) => (
-        <SectionOption key={section.id} section={section} depth={depth} filter={filter} />
-      ))}
-      {nested.children.map((nested) => (
-        <NestedProjectItem
-          key={nested.project.id}
-          nested={nested}
-          depth={depth + 1}
-          filter={filter}
-        />
-      ))}
-    </>
-  );
-};
-
-type ProjectOptionProps = {
-  project: Project;
-  depth: number;
-  filter: string;
-};
-
-const ProjectOption: React.FC<ProjectOptionProps> = ({ project, depth, filter }) => {
-  const key = ItemKey.make(project.id);
-
-  // If there is a filter, we don't want to show the hierarchy
-  const actualDepth = filter === "" ? depth : 0;
-  const isFilteredOut = filter !== "" && !project.name.toLowerCase().contains(filter);
-
-  return (
-    <ListBoxItem
-      id={key}
-      key={key}
-      className="project-option"
-      data-depth={actualDepth}
-      data-filtered={isFilteredOut}
-      textValue={project.name}
+    <Button
+      aria-haspopup="dialog"
+      aria-label={i18n.buttonLabel}
+      className="project-selector"
+      onPress={openSelector}
     >
-      <ProjectLabel project={project} />
-    </ListBoxItem>
+      <ButtonLabel {...selected} />
+      <ObsidianIcon id="chevron-down" size="s" />
+    </Button>
   );
 };
 
-type SectionOptionProps = {
-  section: Section;
-  depth: number;
-  filter: string;
-};
+class ProjectSuggestModal extends FuzzySuggestModal<ProjectSelectionOption> {
+  private readonly options: ProjectSelectionOption[];
+  private readonly selected: ProjectIdentifier;
+  private readonly onSelect: (selected: ProjectIdentifier) => void;
 
-const SectionOption: React.FC<SectionOptionProps> = ({ section, depth, filter }) => {
-  const key = ItemKey.make(section.id, true);
+  public constructor(
+    plugin: TodoistPlugin,
+    options: ProjectSelectionOption[],
+    selected: ProjectIdentifier,
+    onSelect: (selected: ProjectIdentifier) => void,
+    i18n: ProjectSelectorTranslations,
+  ) {
+    super(plugin.app);
+    this.options = options;
+    this.selected = selected;
+    this.onSelect = onSelect;
+    this.limit = Math.max(this.limit, options.length);
+    this.emptyStateText = i18n.emptyState;
+    this.setTitle(i18n.selectorLabel);
+    this.setPlaceholder(i18n.search.placeholder);
+    this.inputEl.setAttribute("aria-label", i18n.search.label);
+    this.modalEl.classList.add("tasks-bridge-project-suggest-modal");
+  }
 
-  // If there is a filter, we don't want to show the hierarchy
-  const actualDepth = filter === "" ? depth + 1 : 0;
-  const isFilteredOut = filter !== "" && !section.name.toLowerCase().contains(filter);
+  public getItems(): ProjectSelectionOption[] {
+    return this.options;
+  }
 
-  return (
-    <ListBoxItem
-      id={key}
-      key={key}
-      className="project-option"
-      data-depth={actualDepth}
-      data-filtered={isFilteredOut}
-      textValue={section.name}
-    >
-      <SectionLabel section={section} />
-    </ListBoxItem>
-  );
-};
+  public getItemText(option: ProjectSelectionOption): string {
+    return option.pathNames.join(" / ");
+  }
 
-const ItemKey = {
-  make: (id: string, isSection = false): string => {
-    const prefix = isSection ? "section" : "project";
-    return `${prefix} : ${id}`;
-  },
-  parse: (key: string): [string, boolean] => {
-    const isSection = key.startsWith("section");
-    const id = key.split(" : ")[1];
+  public onChooseItem(option: ProjectSelectionOption): void {
+    this.onSelect(option.identifier);
+  }
 
-    return [id, isSection];
-  },
-};
+  public override renderSuggestion(
+    match: FuzzyMatch<ProjectSelectionOption>,
+    el: HTMLElement,
+  ): void {
+    const { item } = match;
+    const current = identifiersEqual(item.identifier, this.selected);
+    const ownerDocument = el.ownerDocument;
+    el.classList.add("tasks-bridge-project-suggestion");
+    el.dataset.kind = item.section === undefined ? "project" : "section";
+    el.setAttribute(
+      "aria-label",
+      `${this.getItemText(item)}${current ? ", current selection" : ""}`,
+    );
 
-const SectionLabel: React.FC<{ section: Section }> = ({ section }) => {
-  return (
-    <>
-      <ObsidianIcon size="s" id="gallery-vertical" />
-      <div>{section.name}</div>
-    </>
-  );
-};
+    const iconEl = ownerDocument.createElement("span");
+    iconEl.className = "tasks-bridge-project-suggestion-icon";
+    iconEl.setAttribute("aria-hidden", "true");
+    if (item.section === undefined) {
+      iconEl.dataset.projectColor = item.project.color;
+      setIcon(iconEl, item.project.inboxProject ? "inbox" : "hash");
+    } else {
+      setIcon(iconEl, "gallery-vertical");
+    }
 
-const ProjectLabel: React.FC<{ project: Project }> = ({ project }) => {
-  const projectIcon = project.inboxProject ? "inbox" : "hash";
+    const copyEl = ownerDocument.createElement("span");
+    copyEl.className = "tasks-bridge-project-suggestion-copy";
+    const pathEl = ownerDocument.createElement("span");
+    pathEl.className = "tasks-bridge-project-suggestion-path";
+    renderResults(pathEl, this.getItemText(item), match.match);
+    const kindEl = ownerDocument.createElement("span");
+    kindEl.className = "tasks-bridge-project-suggestion-kind";
+    kindEl.textContent = item.section === undefined ? "Project" : "Section";
+    copyEl.append(pathEl, kindEl);
+    el.append(iconEl, copyEl);
 
-  return (
-    <>
-      <ObsidianIcon
-        size="s"
-        id={projectIcon}
-        className="todoist-project-icon"
-        data-project-color={project.color}
-      />
-      <div>{project.name}</div>
-    </>
-  );
-};
+    if (current) {
+      const currentEl = ownerDocument.createElement("span");
+      currentEl.className = "tasks-bridge-project-suggestion-current";
+      currentEl.textContent = "Current";
+      el.append(currentEl);
+    }
+  }
+}
+
+const identifiersEqual = (left: ProjectIdentifier, right: ProjectIdentifier): boolean =>
+  left.projectId === right.projectId && left.sectionId === right.sectionId;
+
+const SectionLabel: React.FC<{ section: Section }> = ({ section }) => (
+  <>
+    <ObsidianIcon id="gallery-vertical" size="s" />
+    <div>{section.name}</div>
+  </>
+);
+
+const ProjectLabel: React.FC<{ project: Project }> = ({ project }) => (
+  <>
+    <ObsidianIcon
+      className="todoist-project-icon"
+      data-project-color={project.color}
+      id={project.inboxProject ? "inbox" : "hash"}
+      size="s"
+    />
+    <div>{project.name}</div>
+  </>
+);
 
 const ButtonLabel: React.FC<ProjectIdentifier> = ({ projectId, sectionId }) => {
   const { projects, sections } = PluginContext.use().services.todoist.data();
-
   const selectedProject = projects.byId(projectId);
   if (selectedProject === undefined) {
     throw new Error("Could not find selected project");
   }
 
-  const selectedSection = sectionId !== undefined ? sections.byId(sectionId) : undefined;
-
+  const selectedSection = sectionId === undefined ? undefined : sections.byId(sectionId);
   return (
     <>
       <ProjectLabel project={selectedProject} />
-      {selectedSection && (
+      {selectedSection !== undefined && (
         <>
           <div>/</div>
           <SectionLabel section={selectedSection} />
@@ -269,84 +182,77 @@ type NestedProject = {
   children: NestedProject[];
 };
 
-type ProjectHeirarchy = NestedProject[];
+type ProjectHierarchy = NestedProject[];
 
-function buildProjectHierarchy(plugin: TodoistPlugin): ProjectHeirarchy {
+const buildProjectOptions = (plugin: TodoistPlugin): ProjectSelectionOption[] => {
+  const options: ProjectSelectionOption[] = [];
+  const visit = (nested: NestedProject, parentNames: readonly string[]) => {
+    const projectPath = [...parentNames, nested.project.name];
+    options.push({
+      identifier: { projectId: nested.project.id },
+      project: nested.project,
+      pathNames: projectPath,
+    });
+    for (const section of nested.sections) {
+      options.push({
+        identifier: { projectId: nested.project.id, sectionId: section.id },
+        project: nested.project,
+        section,
+        pathNames: [...projectPath, section.name],
+      });
+    }
+    for (const child of nested.children) {
+      visit(child, projectPath);
+    }
+  };
+
+  for (const root of buildProjectHierarchy(plugin)) {
+    visit(root, []);
+  }
+  return options;
+};
+
+const buildProjectHierarchy = (plugin: TodoistPlugin): ProjectHierarchy => {
   const data = plugin.services.todoist.data();
   const mapped = new Map<ProjectId, NestedProject>();
-
-  // Go through each project and insert it into the map.
   for (const project of data.projects.iterActive()) {
-    mapped.set(project.id, {
-      project,
-      sections: [],
-      children: [],
-    });
+    mapped.set(project.id, { project, sections: [], children: [] });
   }
 
-  // Now parent them together.
   for (const project of data.projects.iterActive()) {
     if (project.parentId === null) {
       continue;
     }
-
     const child = mapped.get(project.id);
-    const parent = mapped.get(project.parentId);
-
     if (child === undefined) {
       throw new Error("Failed to find project in map");
     }
-
-    // In this scenario, we could be in a weird half-way sync state.
-    if (parent === undefined) {
-      continue;
-    }
-
-    parent.children.push(child);
+    mapped.get(project.parentId)?.children.push(child);
   }
 
-  // Now attach sections
   for (const section of data.sections.iterActive()) {
-    const parent = mapped.get(section.projectId);
-
-    // We could be in a weird half-way sync state, so ignore this.
-    if (parent === undefined) {
-      continue;
-    }
-
-    parent.sections.push(section);
+    mapped.get(section.projectId)?.sections.push(section);
   }
 
-  // Sort each element in the map
-  for (const [_, nested] of mapped) {
-    nested.sections.sort((a, b) => a.sectionOrder - b.sectionOrder);
-    nested.children.sort((a, b) => a.project.childOrder - b.project.childOrder);
+  for (const nested of mapped.values()) {
+    nested.sections.sort((left, right) => left.sectionOrder - right.sectionOrder);
+    nested.children.sort((left, right) => left.project.childOrder - right.project.childOrder);
   }
 
-  // Find top-level projects, i.e. - have no parents
   const roots = Array.from(data.projects.iterActive())
     .filter((project) => project.parentId === null)
     .map((project) => {
-      const nested = mapped.get(project.id);
-      if (nested === undefined) {
+      const root = mapped.get(project.id);
+      if (root === undefined) {
         throw new Error("Failed to find root project in map");
       }
-
-      return nested;
+      return root;
     });
-
-  // Sort roots, forcing the inbox to be first.
-  roots.sort((a, b) => {
-    if (a.project.inboxProject) {
-      return -1;
+  roots.sort((left, right) => {
+    if (left.project.inboxProject !== right.project.inboxProject) {
+      return left.project.inboxProject ? -1 : 1;
     }
-
-    if (b.project.inboxProject) {
-      return 1;
-    }
-
-    return a.project.childOrder - b.project.childOrder;
+    return left.project.childOrder - right.project.childOrder;
   });
-
   return roots;
-}
+};

@@ -6,6 +6,8 @@ import { t } from "@/i18n";
 import type { ProjectDefaultSetting } from "@/settings";
 import { ObsidianIcon } from "@/ui/components/obsidian-icon";
 
+import { ObsidianDropdown } from "./ObsidianDropdown";
+
 const projectIndentWidth = 2;
 
 type Props = {
@@ -46,8 +48,7 @@ export const ProjectSyncProjectControl: React.FC<Props> = ({
       : metadata.projects.find((project) => project.id === value.projectId);
   const isProjectDeleted = metadata.ready && value !== null && selectedProject === undefined;
 
-  const handleChange = async (event: React.ChangeEvent<HTMLSelectElement>) => {
-    const projectId = event.target.value;
+  const handleChange = async (projectId: string) => {
     if (projectId.length === 0) {
       await onChange(null);
       return;
@@ -71,29 +72,32 @@ export const ProjectSyncProjectControl: React.FC<Props> = ({
           <ObsidianIcon size="s" id="lucide-alert-triangle" />
         </div>
       )}
-      <select
-        aria-describedby={ariaDescribedBy}
-        aria-invalid={invalid}
-        aria-label={ariaLabel ?? i18n.label}
-        className="dropdown project-sync-project-dropdown"
+      <ObsidianDropdown
+        ariaDescribedBy={ariaDescribedBy}
+        ariaInvalid={invalid}
+        ariaLabel={ariaLabel ?? i18n.label}
+        className="project-sync-project-dropdown"
         disabled={!metadata.ready && value === null}
         id={id}
-        onChange={(event) => void handleChange(event)}
+        onChange={handleChange}
+        options={[
+          {
+            label: metadata.ready ? i18n.noProject : i18n.loading,
+            value: "",
+          },
+          ...options.map(({ project, label }) => ({ label, value: project.id })),
+          ...(value !== null && selectedProject === undefined
+            ? [
+                {
+                  disabled: isProjectDeleted,
+                  label: `${value.projectName}${isProjectDeleted ? ` (${i18n.deleted})` : ""}`,
+                  value: value.projectId,
+                },
+              ]
+            : []),
+        ]}
         value={value?.projectId ?? ""}
-      >
-        <option value="">{metadata.ready ? i18n.noProject : i18n.loading}</option>
-        {options.map(({ project, label }) => (
-          <option key={project.id} value={project.id}>
-            {label}
-          </option>
-        ))}
-        {value !== null && selectedProject === undefined && (
-          <option value={value.projectId} disabled={isProjectDeleted}>
-            {value.projectName}
-            {isProjectDeleted ? ` (${i18n.deleted})` : ""}
-          </option>
-        )}
-      </select>
+      />
     </div>
   );
 };

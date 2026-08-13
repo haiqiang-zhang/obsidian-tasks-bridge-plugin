@@ -98,11 +98,29 @@ export const nl: DeepPartial<Translations> = {
       datePickerLabel: "Taakdatum",
       emptyDate: "Vervaldatum",
       noDate: "Geen datum",
+      chooseDateTimeLabel: "Datum en tijd kiezen…",
       timeDialog: {
         timeLabel: "Tijd",
         saveButtonLabel: "Opslaan",
         cancelButtonLabel: "Annuleren",
+        durationLabel: "Duur",
+        noDuration: "Geen duur",
+        clearTimeLabel: "Tijd wissen",
+        duration: (minutes: number) => {
+          const hours = Math.floor(minutes / 60);
+          const mins = minutes % 60;
+          return hours === 0 ? `${mins}m` : `${hours}u ${mins}m`;
+        },
       },
+    },
+    deadlineSelector: {
+      buttonLabel: "Deadline instellen",
+      dialogLabel: "Deadlinekiezer",
+      suggestionsLabel: "Deadlinesuggesties",
+      datePickerLabel: "Deadlinedatum",
+      placeholder: "Deadline",
+      noDeadline: "Geen deadline",
+      chooseDateLabel: "Datum kiezen…",
     },
     labelSelector: {
       buttonLabel: "Labels instellen",
@@ -110,6 +128,12 @@ export const nl: DeepPartial<Translations> = {
         return `Labels (${num})`;
       },
       labelOptionsLabel: "Labelopties",
+      doneButtonLabel: "Klaar",
+      emptyState: "Geen labels gevonden",
+      search: {
+        label: "Labels filteren",
+        placeholder: "Typ een labelnaam",
+      },
     },
     prioritySelector: {
       buttonLabel: "Prioriteit instellen",
@@ -123,6 +147,7 @@ export const nl: DeepPartial<Translations> = {
       buttonLabel: "Project instellen",
       selectorLabel: "Projectkiezer",
       optionsLabel: "Projectopties",
+      emptyState: "Geen projecten of secties gevonden",
       search: {
         label: "Projecten filteren",
         placeholder: "Typ een projectnaam",

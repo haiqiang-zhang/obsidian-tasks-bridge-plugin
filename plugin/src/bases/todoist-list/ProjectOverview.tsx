@@ -6,7 +6,7 @@ import { ObsidianIcon, ObsidianLoadingIcon } from "@/ui/components/obsidian-icon
 
 import { CompletionHeatmap } from "./CompletionHeatmap";
 import type { CompletionHeatmapRange } from "./completionHeatmapModel";
-import type { ProjectOverviewModel, ProjectOverviewNode } from "./projectOverviewModel";
+import type { ProjectOverviewModel } from "./projectOverviewModel";
 
 export type ProjectOverviewProps = {
   model: ProjectOverviewModel | null;
@@ -207,38 +207,19 @@ const ProjectOverviewBody: React.FC<{
   onCompletionHeatmapRangeChange: (range: CompletionHeatmapRange) => void;
 }> = ({ model, completionHeatmapRange, onCompletionHeatmapRangeChange }) => (
   <div className="todoist-bases-project-overview-body">
-    <div className="todoist-bases-project-overview-summary-column">
-      <div className="todoist-bases-project-overview-summary-panel">
-        <CompletionRing
-          completed={model.counts.completed}
-          rate={model.completionRate}
-          total={model.taskCount}
-        />
-        <OverviewMetrics model={model} />
-        <TaskLegend active={model.counts.active} completed={model.counts.completed} />
-      </div>
-      <CompletionHeatmap
-        events={model.completionEvents}
-        onRangeChange={onCompletionHeatmapRangeChange}
-        range={completionHeatmapRange}
+    <div className="todoist-bases-project-overview-percentage">
+      <CompletionRing
+        completed={model.counts.completed}
+        rate={model.completionRate}
+        total={model.taskCount}
       />
+      <OverviewMetrics model={model} />
     </div>
-
-    <div className="todoist-bases-project-overview-breakdown">
-      <div className="todoist-bases-project-overview-breakdown-heading">
-        <span>Project breakdown</span>
-        <span>Each project includes its descendants.</span>
-      </div>
-      {model.roots.length === 0 ? (
-        <div className="todoist-bases-project-overview-no-projects">No projects to display.</div>
-      ) : (
-        <ul aria-label="Project statistics" className="todoist-bases-project-overview-projects">
-          {model.roots.map((project) => (
-            <ProjectStatistics key={project.scopeKey} project={project} />
-          ))}
-        </ul>
-      )}
-    </div>
+    <CompletionHeatmap
+      events={model.completionEvents}
+      onRangeChange={onCompletionHeatmapRangeChange}
+      range={completionHeatmapRange}
+    />
   </div>
 );
 
@@ -286,12 +267,14 @@ const CompletionRing: React.FC<{
 };
 
 const OverviewMetrics: React.FC<{ model: ProjectOverviewModel }> = ({ model }) => (
-  <dl className="todoist-bases-project-overview-metrics">
-    <Metric label="Total" value={model.taskCount} />
-    <Metric label="Active" value={model.counts.active} />
-    <Metric label="Completed" value={model.counts.completed} />
-    <Metric label="Projects" value={model.projectCount} />
-  </dl>
+  <fieldset aria-label="Project completion totals">
+    <dl className="todoist-bases-project-overview-metrics">
+      <Metric label="Total" value={model.taskCount} />
+      <Metric label="Active" value={model.counts.active} />
+      <Metric label="Completed" value={model.counts.completed} />
+      <Metric label="Projects" value={model.projectCount} />
+    </dl>
+  </fieldset>
 );
 
 const Metric: React.FC<{ label: string; value: number }> = ({ label, value }) => (
@@ -300,105 +283,6 @@ const Metric: React.FC<{ label: string; value: number }> = ({ label, value }) =>
     <dd>{value}</dd>
   </div>
 );
-
-const TaskLegend: React.FC<{ active: number; completed: number }> = ({ active, completed }) => (
-  <ul aria-label="Task status legend" className="todoist-bases-project-overview-legend">
-    <li>
-      <span
-        aria-hidden="true"
-        className="todoist-bases-project-overview-legend-marker"
-        data-status="completed"
-      />
-      <span>Completed</span>
-      <strong>{completed}</strong>
-    </li>
-    <li>
-      <span
-        aria-hidden="true"
-        className="todoist-bases-project-overview-legend-marker"
-        data-status="active"
-      />
-      <span>Active</span>
-      <strong>{active}</strong>
-    </li>
-  </ul>
-);
-
-const ProjectStatistics: React.FC<{ project: ProjectOverviewNode }> = ({ project }) => {
-  const rateLabel = formatCompletionRate(project.completionRate);
-  const projectLabel =
-    project.taskCount === 0
-      ? `${project.name}: No tasks, including child projects`
-      : `${project.name}: ${project.counts.completed} of ${project.taskCount} tasks completed, ${rateLabel}, including child projects`;
-
-  return (
-    <li
-      aria-label={projectLabel}
-      className="todoist-bases-project-overview-project"
-      data-project-id={project.id}
-    >
-      <div className="todoist-bases-project-overview-project-row">
-        <ObsidianIcon
-          aria-hidden="true"
-          className="todoist-bases-project-overview-project-icon"
-          id="lucide-folder"
-          size="s"
-        />
-        <span className="todoist-bases-project-overview-project-main">
-          <span
-            className="todoist-bases-project-overview-project-name"
-            title={project.pathNames.join(" / ")}
-          >
-            {project.name}
-          </span>
-          {project.taskCount === 0 ? (
-            <span className="todoist-bases-project-overview-project-empty">No tasks</span>
-          ) : (
-            <span className="todoist-bases-project-overview-project-counts">
-              {project.counts.completed} / {project.taskCount} completed
-              <span aria-hidden="true"> · </span>
-              {rateLabel}
-            </span>
-          )}
-        </span>
-        <ProjectProgress project={project} />
-      </div>
-      {project.children.length > 0 && (
-        <ul className="todoist-bases-project-overview-project-children">
-          {project.children.map((child) => (
-            <ProjectStatistics key={child.scopeKey} project={child} />
-          ))}
-        </ul>
-      )}
-    </li>
-  );
-};
-
-const ProjectProgress: React.FC<{ project: ProjectOverviewNode }> = ({ project }) => {
-  if (project.taskCount === 0 || project.completionRate === null) {
-    return (
-      <span
-        aria-hidden="true"
-        className="todoist-bases-project-overview-progress"
-        data-empty="true"
-      />
-    );
-  }
-
-  return (
-    <span
-      aria-label={`${project.name} completion`}
-      aria-valuemax={project.taskCount}
-      aria-valuemin={0}
-      aria-valuenow={project.counts.completed}
-      className="todoist-bases-project-overview-progress"
-      role="progressbar"
-      style={progressStyle(project.completionRate)}
-    >
-      <span aria-hidden="true" className="todoist-bases-project-overview-progress-value" />
-    </span>
-  );
-};
 
 const projectSummaryLabel = (
   model: ProjectOverviewModel | null,

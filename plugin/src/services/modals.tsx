@@ -1,4 +1,3 @@
-import { UNSAFE_PortalProvider } from "@react-aria/overlays";
 import { Modal, Platform } from "obsidian";
 import type React from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -26,13 +25,8 @@ class ReactModal<T extends object> extends Modal {
 
     this.reactRoot = createRoot(this.contentEl);
 
-    const popoverContainerEl = this.containerEl.createDiv({
-      cls: "tasks-bridge-popover-container",
-    });
-
     const modal: ModalInfo = {
       close: () => this.close(),
-      popoverContainerEl,
     };
 
     if (opts.dontCloseOnExternalClick ?? false) {
@@ -51,9 +45,7 @@ class ReactModal<T extends object> extends Modal {
     this.reactRoot.render(
       <PluginContext.Provider value={plugin}>
         <ModalContext.Provider value={modal}>
-          <UNSAFE_PortalProvider getContainer={() => popoverContainerEl}>
-            <Component {...props} />
-          </UNSAFE_PortalProvider>
+          <Component {...props} />
         </ModalContext.Provider>
       </PluginContext.Provider>,
     );

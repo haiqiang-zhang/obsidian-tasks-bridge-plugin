@@ -215,12 +215,14 @@ export const en: Translations = {
       datePickerLabel: "Task date",
       emptyDate: "Due date",
       noDate: "No date",
+      chooseDateTimeLabel: "Choose date and time…",
       timeDialog: {
         timeLabel: "Time",
         saveButtonLabel: "Save",
         cancelButtonLabel: "Cancel",
         durationLabel: "Duration",
         noDuration: "No duration",
+        clearTimeLabel: "Clear time",
         duration: (minutes: number) => {
           const hours = Math.floor(minutes / 60);
           const mins = minutes % 60;
@@ -240,6 +242,7 @@ export const en: Translations = {
       datePickerLabel: "Deadline date",
       placeholder: "Deadline",
       noDeadline: "No deadline",
+      chooseDateLabel: "Choose date…",
     },
     labelSelector: {
       buttonLabel: "Set labels",
@@ -247,6 +250,12 @@ export const en: Translations = {
         return `Labels (${num})`;
       },
       labelOptionsLabel: "Label options",
+      doneButtonLabel: "Done",
+      emptyState: "No labels found",
+      search: {
+        label: "Filter labels",
+        placeholder: "Type a label name",
+      },
     },
     prioritySelector: {
       buttonLabel: "Set priority",
@@ -260,6 +269,7 @@ export const en: Translations = {
       buttonLabel: "Set project",
       selectorLabel: "Project selector",
       optionsLabel: "Project options",
+      emptyState: "No projects or sections found",
       search: {
         label: "Filter projects",
         placeholder: "Type a project name",

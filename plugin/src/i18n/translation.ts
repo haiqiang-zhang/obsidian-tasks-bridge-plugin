@@ -205,12 +205,14 @@ export type Translations = {
       datePickerLabel: string;
       emptyDate: string;
       noDate: string;
+      chooseDateTimeLabel: string;
       timeDialog: {
         timeLabel: string;
         saveButtonLabel: string;
         cancelButtonLabel: string;
         durationLabel: string;
         noDuration: string;
+        clearTimeLabel: string;
         duration: (minutes: number) => string;
       };
     };
@@ -221,11 +223,18 @@ export type Translations = {
       datePickerLabel: string;
       placeholder: string;
       noDeadline: string;
+      chooseDateLabel: string;
     };
     labelSelector: {
       buttonLabel: string;
       buttonText: (num: number) => string;
       labelOptionsLabel: string;
+      doneButtonLabel: string;
+      emptyState: string;
+      search: {
+        label: string;
+        placeholder: string;
+      };
     };
     prioritySelector: {
       buttonLabel: string;
@@ -239,6 +248,7 @@ export type Translations = {
       buttonLabel: string;
       selectorLabel: string;
       optionsLabel: string;
+      emptyState: string;
       search: {
         label: string;
         placeholder: string;

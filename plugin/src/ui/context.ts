@@ -29,7 +29,6 @@ export const PluginContext = makeContext<TodoistPlugin>();
 
 export type ModalInfo = {
   close: () => void;
-  popoverContainerEl: HTMLElement;
 };
 
 export const ModalContext = makeContext<ModalInfo>();

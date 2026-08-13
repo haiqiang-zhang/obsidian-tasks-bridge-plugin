@@ -8,6 +8,8 @@ import type { LabelsDefaultSetting } from "@/settings";
 import { ObsidianIcon } from "@/ui/components/obsidian-icon";
 import { PluginContext } from "@/ui/context";
 
+import { ObsidianDropdown } from "./ObsidianDropdown";
+
 type Props = {
   value: LabelsDefaultSetting;
   onChange: (val: LabelsDefaultSetting) => Promise<void>;
@@ -39,11 +41,7 @@ export const LabelsControl: React.FC<Props> = ({ value, onChange }) => {
     await onChange(newValue);
   };
 
-  const handleAddLabelChange = async (ev: React.ChangeEvent<HTMLSelectElement>) => {
-    ev.stopPropagation();
-    ev.preventDefault();
-
-    const labelId = ev.target.value;
+  const handleAddLabelChange = async (labelId: string) => {
     if (labelId === "") {
       return;
     }
@@ -60,21 +58,20 @@ export const LabelsControl: React.FC<Props> = ({ value, onChange }) => {
 
   return (
     <div className="labels-control-container">
-      <select
-        className="dropdown"
+      <ObsidianDropdown
         value=""
-        onChange={(event) => void handleAddLabelChange(event)}
         disabled={availableLabels.length === 0}
-      >
-        <option value="" disabled>
-          {availableLabels.length === 0 ? i18n.buttonNoAvailableLabels : i18n.buttonAddLabel}
-        </option>
-        {availableLabels.map((label) => (
-          <option key={label.id} value={label.id}>
-            {label.name}
-          </option>
-        ))}
-      </select>
+        onChange={handleAddLabelChange}
+        options={[
+          {
+            disabled: true,
+            label:
+              availableLabels.length === 0 ? i18n.buttonNoAvailableLabels : i18n.buttonAddLabel,
+            value: "",
+          },
+          ...availableLabels.map((label) => ({ label: label.name, value: label.id })),
+        ]}
+      />
 
       <div className="labels-control-list">
         {selected.length === 0 && <div className="labels-control-empty-state">{i18n.noLabels}</div>}

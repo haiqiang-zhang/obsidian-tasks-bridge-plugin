@@ -6,6 +6,8 @@ import type { ProjectDefaultSetting } from "@/settings";
 import { ObsidianIcon } from "@/ui/components/obsidian-icon";
 import { PluginContext } from "@/ui/context";
 
+import { ObsidianDropdown } from "./ObsidianDropdown";
+
 type Props = {
   value: ProjectDefaultSetting;
   onChange: (val: ProjectDefaultSetting) => Promise<void>;
@@ -32,9 +34,7 @@ export const ProjectDropdownControl: React.FC<Props> = ({ value, onChange }) => 
     selected !== null ? projects.find((p) => p.id === selected.projectId) : null;
   const isProjectDeleted = selected !== null && !selectedProject;
 
-  const handleChange = async (ev: React.ChangeEvent<HTMLSelectElement>) => {
-    const selectedValue = ev.target.value;
-
+  const handleChange = async (selectedValue: string) => {
     let newValue: ProjectDefaultSetting;
     if (selectedValue === "") {
       newValue = null;
@@ -61,23 +61,23 @@ export const ProjectDropdownControl: React.FC<Props> = ({ value, onChange }) => 
           <ObsidianIcon size="s" id="lucide-alert-triangle" />
         </div>
       )}
-      <select
-        className="dropdown"
+      <ObsidianDropdown
         value={selected?.projectId ?? ""}
-        onChange={(event) => void handleChange(event)}
-      >
-        <option value="">{i18n.noDefault}</option>
-        {projects.map((project) => (
-          <option key={project.id} value={project.id}>
-            {project.name}
-          </option>
-        ))}
-        {isProjectDeleted && selected && (
-          <option value={selected.projectId} disabled>
-            {selected.projectName} ({i18n.deleted})
-          </option>
-        )}
-      </select>
+        onChange={handleChange}
+        options={[
+          { label: i18n.noDefault, value: "" },
+          ...projects.map((project) => ({ label: project.name, value: project.id })),
+          ...(isProjectDeleted && selected !== null
+            ? [
+                {
+                  disabled: true,
+                  label: `${selected.projectName} (${i18n.deleted})`,
+                  value: selected.projectId,
+                },
+              ]
+            : []),
+        ]}
+      />
     </div>
   );
 };

@@ -17,15 +17,15 @@ Before getting started, you should ensure you read the general [contribution gui
   <tbody>
     <tr>
       <td>English (en)</td>
-      <td>280</td>
+      <td>289</td>
       <td>0</td>
-      <td><span class="translation-progress"><span>100%</span><progress value="280" max="280"></progress></span></td>
+      <td><span class="translation-progress"><span>100%</span><progress value="289" max="289"></progress></span></td>
     </tr>
     <tr>
       <td>Nederlands (nl)</td>
-      <td>147</td>
-      <td>133</td>
-      <td><span class="translation-progress"><span>53%</span><progress value="147" max="280"></progress></span></td>
+      <td>166</td>
+      <td>123</td>
+      <td><span class="translation-progress"><span>57%</span><progress value="166" max="289"></progress></span></td>
     </tr>
   </tbody>
 </table>

@@ -4,15 +4,71 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CompletionHeatmap } from "./CompletionHeatmap";
 import type { CompletionHeatmapEvent } from "./completionHeatmapModel";
 
-const { setTooltipMock } = vi.hoisted(() => ({ setTooltipMock: vi.fn() }));
+const { menuItems, setTooltipMock, showAtPositionMock } = vi.hoisted(() => ({
+  menuItems: [] as Array<{
+    checked: boolean | null;
+    click: (() => void) | null;
+    section: string | null;
+    title: string;
+  }>,
+  setTooltipMock: vi.fn(),
+  showAtPositionMock: vi.fn(),
+}));
 
-vi.mock("obsidian", () => ({ setTooltip: setTooltipMock }));
+vi.mock("obsidian", () => ({
+  Menu: class {
+    setParentElement(): this {
+      return this;
+    }
+    addItem(callback: (item: unknown) => void): this {
+      const record: (typeof menuItems)[number] = {
+        checked: null,
+        click: null,
+        section: null,
+        title: "",
+      };
+      const item = {
+        setChecked: (checked: boolean | null) => {
+          record.checked = checked;
+          return item;
+        },
+        setSection: (section: string) => {
+          record.section = section;
+          return item;
+        },
+        setTitle: (title: string) => {
+          record.title = title;
+          return item;
+        },
+        onClick: (click: () => void) => {
+          record.click = click;
+          return item;
+        },
+      };
+      callback(item);
+      menuItems.push(record);
+      return this;
+    }
+    showAtPosition(...args: unknown[]): this {
+      showAtPositionMock(...args);
+      return this;
+    }
+  },
+  setIcon: (parent: HTMLElement, iconId: string) => {
+    parent.dataset.icon = iconId;
+  },
+  setTooltip: setTooltipMock,
+}));
 
 const NOW = new Date("2026-08-12T12:00:00.000Z");
 
 const event = (id: string, completedAt: string): CompletionHeatmapEvent => ({ id, completedAt });
 
-beforeEach(() => setTooltipMock.mockClear());
+beforeEach(() => {
+  menuItems.length = 0;
+  setTooltipMock.mockClear();
+  showAtPositionMock.mockClear();
+});
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
@@ -21,7 +77,7 @@ afterEach(() => {
 });
 
 describe("CompletionHeatmap", () => {
-  it("renders a labeled GitHub-style grid, native range picker, legend, and exact tooltips", () => {
+  it("renders a labeled GitHub-style grid, Obsidian range menu, legend, and exact tooltips", () => {
     const onRangeChange = vi.fn();
     render(
       <CompletionHeatmap
@@ -71,14 +127,32 @@ describe("CompletionHeatmap", () => {
       placement: "top",
     });
 
-    const picker = within(heatmap).getByRole("combobox", { name: "Activity range" });
-    expect(within(picker).getByRole("option", { name: "Last 3 months" })).toBeInTheDocument();
-    expect(within(picker).getByRole("option", { name: "Last 6 months" })).toBeInTheDocument();
-    expect(within(picker).getByRole("option", { name: "Last year" })).toBeInTheDocument();
-    expect(within(picker).getByRole("option", { name: "2026" })).toBeInTheDocument();
-    expect(within(picker).getByRole("option", { name: "2025" })).toBeInTheDocument();
+    const picker = within(heatmap).getByRole("button", {
+      name: "Activity range: Last 4 weeks",
+    });
+    expect(picker).toHaveClass("tasks-bridge-completion-heatmap-range-button");
+    expect(picker).not.toHaveClass("dropdown");
+    expect(picker.querySelectorAll('[data-icon="chevron-down"]')).toHaveLength(1);
+    fireEvent.click(picker);
+    expect(menuItems.map(({ title }) => title)).toEqual([
+      "Last 4 weeks",
+      "Last 3 months",
+      "Last 6 months",
+      "Last year",
+      "2026",
+      "2025",
+    ]);
+    expect(menuItems.find(({ title }) => title === "Last 4 weeks")).toMatchObject({
+      checked: true,
+      section: "recent-ranges",
+    });
+    expect(menuItems.find(({ title }) => title === "2026")).toMatchObject({
+      checked: false,
+      section: "calendar-years",
+    });
+    expect(showAtPositionMock).toHaveBeenCalledOnce();
 
-    fireEvent.change(picker, { target: { value: "last-3-months" } });
+    menuItems.find(({ title }) => title === "Last 3 months")?.click?.();
     expect(onRangeChange).toHaveBeenCalledWith("last-3-months");
     expect(within(heatmap).getByText("Less")).toBeInTheDocument();
     expect(within(heatmap).getByText("More")).toBeInTheDocument();

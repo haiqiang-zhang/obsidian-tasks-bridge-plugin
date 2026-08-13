@@ -62,6 +62,7 @@ describe("Project task card styles", () => {
     );
     const disclosure = ruleBody(css, ".tasks-bridge-note-card-subtask-disclosure");
     const completion = ruleBody(css, ".tasks-bridge-note-card-subtask-completion");
+    const rootCompletion = ruleBody(css, ".tasks-bridge-note-card-completion");
     const link = ruleBody(css, ".tasks-bridge-note-card-subtask-link");
 
     expect(heading).toContain("margin-block: var(--size-2-2) var(--size-4-2)");
@@ -97,6 +98,13 @@ describe("Project task card styles", () => {
     expect(css).not.toContain("data-branch-path");
     expect(css).not.toContain("data-branch");
     expect(completion).toContain("width: var(--checkbox-size)");
+    expect(completion).toContain("place-items: center");
+    expect(completion).toContain("line-height: 0");
+    expect(completion).not.toContain("position: absolute");
+    expect(rootCompletion).toContain("place-items: center");
+    expect(rootCompletion).toContain("line-height: 0");
+    expect(rootCompletion).not.toContain("position: absolute");
+    expect(css).not.toContain('[data-loading="true"] input');
     expect(link).toContain("font-family: var(--font-interface)");
     expect(link).toContain("font-size: var(--font-ui-small)");
     expect(link).toContain("font-weight: var(--font-normal)");

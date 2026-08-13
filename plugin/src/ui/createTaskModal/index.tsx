@@ -2,7 +2,7 @@ import { toCalendarDateTime, toZoned } from "@internationalized/date";
 import { Notice, type TFile } from "obsidian";
 import type React from "react";
 import { useEffect, useState } from "react";
-import { Button, Label, Menu, MenuItem, MenuTrigger } from "react-aria-components";
+import { Button } from "react-aria-components";
 
 import { t } from "@/i18n";
 import { timezone, today } from "@/infra/time";
@@ -14,6 +14,7 @@ import {
   useSettingsStore,
 } from "@/settings";
 import { ModalContext, PluginContext } from "@/ui/context";
+import { useObsidianMenu } from "@/ui/obsidianMenu";
 import { assertNever } from "@/utils/types";
 
 import type TodoistPlugin from "../..";
@@ -23,7 +24,6 @@ import { ObsidianIcon } from "../components/obsidian-icon";
 import { type Deadline, DeadlineSelector } from "./DeadlineSelector";
 import { type DueDate, DueDateSelector } from "./DueDateSelector";
 import { LabelSelector } from "./LabelSelector";
-import { Popover } from "./Popover";
 import { PrioritySelector } from "./PrioritySelector";
 import { type ProjectIdentifier, ProjectSelector } from "./ProjectSelector";
 import { TaskContentInput } from "./TaskContentInput";
@@ -288,6 +288,25 @@ const CreateTaskModalContent: React.FC<CreateTaskProps> = ({
   };
 
   const linkDestinationMessage = getLinkDestinationMessage(options.appendLinkTo, i18n);
+  const addTaskActions: Array<{ action: AddTaskAction; label: string }> = [
+    { action: "add", label: i18n.addTaskButtonLabel },
+    { action: "add-copy-app", label: i18n.addTaskAndCopyAppLabel },
+    { action: "add-copy-web", label: i18n.addTaskAndCopyWebLabel },
+  ];
+  const {
+    anchorRef: addTaskMenuAnchorRef,
+    isOpen: isAddTaskMenuOpen,
+    openMenu: openAddTaskMenu,
+  } = useObsidianMenu((menu) => {
+    for (const item of addTaskActions) {
+      menu.addItem((menuItem) =>
+        menuItem
+          .setTitle(item.label)
+          .setChecked(item.action === currentAction)
+          .onClick(() => setCurrentAction(item.action)),
+      );
+    }
+  });
 
   return (
     <div className="task-creation-modal-root">
@@ -337,32 +356,17 @@ const CreateTaskModalContent: React.FC<CreateTaskProps> = ({
             >
               {getActionLabel(currentAction)}
             </Button>
-            <MenuTrigger>
-              <Button
-                className="mod-cta add-task-dropdown"
-                isDisabled={isSubmitButtonDisabled}
-                aria-label={i18n.actionMenuLabel}
-              >
-                <ObsidianIcon id="chevron-down" size="s" />
-              </Button>
-              <Popover>
-                <Menu
-                  className="add-task-action-menu task-option-dialog"
-                  aria-label={i18n.actionMenuLabel}
-                  onAction={(key) => setCurrentAction(key as AddTaskAction)}
-                >
-                  <MenuItem key="add" id="add">
-                    <Label>{i18n.addTaskButtonLabel}</Label>
-                  </MenuItem>
-                  <MenuItem key="add-copy-app" id="add-copy-app">
-                    <Label>{i18n.addTaskAndCopyAppLabel}</Label>
-                  </MenuItem>
-                  <MenuItem key="add-copy-web" id="add-copy-web">
-                    <Label>{i18n.addTaskAndCopyWebLabel}</Label>
-                  </MenuItem>
-                </Menu>
-              </Popover>
-            </MenuTrigger>
+            <Button
+              ref={addTaskMenuAnchorRef}
+              aria-expanded={isAddTaskMenuOpen}
+              aria-haspopup="menu"
+              aria-label={i18n.actionMenuLabel}
+              className="mod-cta add-task-dropdown"
+              isDisabled={isSubmitButtonDisabled}
+              onPress={openAddTaskMenu}
+            >
+              <ObsidianIcon id="chevron-down" size="s" />
+            </Button>
           </div>
         </div>
       </div>

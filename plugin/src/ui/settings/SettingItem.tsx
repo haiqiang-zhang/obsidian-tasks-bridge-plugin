@@ -1,11 +1,11 @@
 import classNames from "classnames";
 import type React from "react";
-import type { OptionHTMLAttributes, PropsWithChildren } from "react";
-import { useState } from "react";
+import type { PropsWithChildren } from "react";
 
 import { t } from "@/i18n";
 
 import { ObsidianIcon } from "../components/obsidian-icon";
+import { ObsidianDropdown } from "./ObsidianDropdown";
 
 type RootProps = {
   name: string;
@@ -110,36 +110,18 @@ const ToggleControl: React.FC<ToggleControl> = ({
   );
 };
 
-type DropdownOptionValue = OptionHTMLAttributes<HTMLOptionElement>["value"];
-
-type DropdownControlProps<T extends DropdownOptionValue> = {
+type DropdownControlProps<T extends string> = {
   value: T;
   options: { label: string; value: T }[];
   onClick: (val: T) => Promise<void>;
 };
 
-const DropdownControl = <T extends DropdownOptionValue>({
+const DropdownControl = <T extends string>({
   value,
   options,
   onClick,
 }: DropdownControlProps<T>): React.ReactNode => {
-  const [selected, setSelected] = useState(value);
-
-  const onChange = async (ev: React.ChangeEvent<HTMLSelectElement>) => {
-    const val = ev.target.value as T;
-    setSelected(val);
-    await onClick(val);
-  };
-
-  return (
-    <select className="dropdown" value={selected} onChange={(event) => void onChange(event)}>
-      {options.map(({ label, value }) => (
-        <option key={label} value={value}>
-          {label}
-        </option>
-      ))}
-    </select>
-  );
+  return <ObsidianDropdown value={value} options={options} onChange={onClick} />;
 };
 
 export const Setting = {

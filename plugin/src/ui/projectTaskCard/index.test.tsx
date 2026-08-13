@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MarkdownRenderChild } from "obsidian";
 import type React from "react";
 import { describe, expect, it, vi } from "vitest";
@@ -44,6 +44,14 @@ const makeActions = () => ({
   open: vi.fn(async () => undefined),
   setCompleted: vi.fn(async () => undefined),
 });
+
+const deferred = <T,>() => {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+};
 
 describe("ProjectTaskCard", () => {
   it("joins Obsidian's native code-block action rail without replacing its edit control", () => {
@@ -125,6 +133,37 @@ describe("ProjectTaskCard", () => {
     expect(within(embedActions).getByRole("button", { name: "Edit Todoist task" })).toBeDisabled();
   });
 
+  it("replaces the root checkbox with a centered loader while completion is pending", async () => {
+    const completion = deferred<undefined>();
+    const actions = makeActions();
+    actions.setCompleted.mockReturnValue(completion.promise);
+    const { Wrapper } = makeRenderContext(false);
+    const { container } = render(<ProjectTaskCard actions={actions} task={task} />, {
+      wrapper: Wrapper,
+    });
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "Complete Todoist task" }));
+
+    const completionSlot = container.querySelector(".tasks-bridge-note-card-completion");
+    await waitFor(() =>
+      expect(screen.getByRole("status", { name: "Updating Todoist task" })).toBeInTheDocument(),
+    );
+    expect(completionSlot).toHaveAttribute("aria-busy", "true");
+    expect(completionSlot?.querySelector('input[type="checkbox"]')).not.toBeInTheDocument();
+    expect(completionSlot?.querySelector(".loader-spinner")).toHaveAttribute(
+      "data-icon-size",
+      "xs",
+    );
+
+    await act(async () => completion.resolve(undefined));
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("status", { name: "Updating Todoist task" }),
+      ).not.toBeInTheDocument();
+      expect(screen.getByRole("checkbox", { name: "Complete Todoist task" })).toBeInTheDocument();
+    });
+  });
+
   it("renders and collapses a recursive subtask list with aggregate progress", () => {
     const actions = makeActions();
     const child = {
@@ -188,6 +227,45 @@ describe("ProjectTaskCard", () => {
         { id: child.taskId, filePath: child.filePath },
         true,
       );
+    });
+  });
+
+  it("replaces a subtask checkbox instead of overlapping its pending loader", async () => {
+    const completion = deferred<undefined>();
+    const actions = makeActions();
+    actions.setCompleted.mockReturnValue(completion.promise);
+    const child = {
+      ...task,
+      content: "Chapter one",
+      filePath: "Task Projects/Work/Report/Chapter one.md",
+      taskId: "child-1",
+      subtasks: [],
+    };
+    const { Wrapper } = makeRenderContext(false);
+    const { container } = render(
+      <ProjectTaskCard actions={actions} task={{ ...task, subtasks: [child] }} />,
+      { wrapper: Wrapper },
+    );
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "Complete Chapter one" }));
+
+    const completionSlot = container.querySelector(".tasks-bridge-note-card-subtask-completion");
+    await waitFor(() =>
+      expect(screen.getByRole("status", { name: "Updating Chapter one" })).toBeInTheDocument(),
+    );
+    expect(completionSlot).toHaveAttribute("aria-busy", "true");
+    expect(completionSlot?.querySelector('input[type="checkbox"]')).not.toBeInTheDocument();
+    expect(completionSlot?.querySelector(".loader-spinner")).toHaveAttribute(
+      "data-icon-size",
+      "xs",
+    );
+
+    await act(async () => completion.resolve(undefined));
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("status", { name: "Updating Chapter one" }),
+      ).not.toBeInTheDocument();
+      expect(screen.getByRole("checkbox", { name: "Complete Chapter one" })).toBeInTheDocument();
     });
   });
 
