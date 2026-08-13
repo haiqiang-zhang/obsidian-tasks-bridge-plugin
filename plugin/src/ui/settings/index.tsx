@@ -318,7 +318,19 @@ const mountReactControl = (
   return () => root.unmount();
 };
 
-const SettingsLinks: React.FC = () => {
+export const SETTINGS_LINKS = {
+  documentation: "https://haiqiang-zhang.github.io/obsidian-tasks-bridge-plugin/",
+  donate: "https://www.buymeacoffee.com/jamiebrynes",
+  feedback: "https://github.com/haiqiang-zhang/obsidian-tasks-bridge-plugin/issues/new/choose",
+} as const;
+
+type SettingsLinksProps = {
+  navigate?: (url: string) => void;
+};
+
+export const SettingsLinks: React.FC<SettingsLinksProps> = ({
+  navigate = (url) => location.replace(url),
+}) => {
   const i18n = t().settings.general.links;
   return (
     <>
@@ -326,25 +338,21 @@ const SettingsLinks: React.FC = () => {
         label={i18n.docsButtonLabel}
         icon="book-open"
         onClick={() => {
-          location.replace(
-            "https://haiqiang-zhang.github.io/obsidian-tasks-bridge-plugin/docs/overview/",
-          );
+          navigate(SETTINGS_LINKS.documentation);
         }}
       />
       <Setting.ButtonControl
         label={i18n.feedbackButtonLabel}
         icon="github"
         onClick={() => {
-          location.replace(
-            "https://github.com/haiqiang-zhang/obsidian-tasks-bridge-plugin/issues/new/choose",
-          );
+          navigate(SETTINGS_LINKS.feedback);
         }}
       />
       <Setting.ButtonControl
         label={i18n.donateButtonLabel}
         icon="coffee"
         onClick={() => {
-          location.replace("https://www.buymeacoffee.com/jamiebrynes");
+          navigate(SETTINGS_LINKS.donate);
         }}
       />
     </>
@@ -541,31 +549,7 @@ const SettingsRoot: React.FC<Props> = ({ plugin }) => {
     <PluginContext.Provider value={plugin}>
       <h2>{i18n.general.header}</h2>
       <Setting.Root name={i18n.general.links.label} description="">
-        <Setting.ButtonControl
-          label={i18n.general.links.docsButtonLabel}
-          icon="book-open"
-          onClick={() => {
-            location.replace(
-              "https://haiqiang-zhang.github.io/obsidian-tasks-bridge-plugin/docs/overview/",
-            );
-          }}
-        />
-        <Setting.ButtonControl
-          label={i18n.general.links.feedbackButtonLabel}
-          icon="github"
-          onClick={() => {
-            location.replace(
-              "https://github.com/haiqiang-zhang/obsidian-tasks-bridge-plugin/issues/new/choose",
-            );
-          }}
-        />
-        <Setting.ButtonControl
-          label={i18n.general.links.donateButtonLabel}
-          icon="coffee"
-          onClick={() => {
-            location.replace("https://www.buymeacoffee.com/jamiebrynes");
-          }}
-        />
+        <SettingsLinks />
       </Setting.Root>
       <Setting.Root
         name={i18n.general.apiToken.label}

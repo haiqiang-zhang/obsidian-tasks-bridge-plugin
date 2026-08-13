@@ -1,5 +1,5 @@
 {
-  "name": "@obsidian-todoist/plugin",
+  "name": "@tasks-bridge/plugin",
   "version": "2.9.6",
   "description": "Synchronize Todoist tasks with Obsidian.",
   "scripts": {

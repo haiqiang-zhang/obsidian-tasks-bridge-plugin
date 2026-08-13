@@ -1,6 +1,6 @@
 {
-  "name": "obsidian-todoist-plugin-monorepo",
-  "version": "1.0.0",
+  "name": "obsidian-tasks-bridge-plugin",
+  "version": "2.9.6",
   "private": true,
   "workspaces": [
     "plugin",

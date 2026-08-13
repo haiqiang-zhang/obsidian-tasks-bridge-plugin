@@ -1,6 +1,6 @@
 {
-  "name": "@obsidian-todoist/scripts",
-  "version": "1.0.0",
+  "name": "@tasks-bridge/scripts",
+  "version": "2.9.6",
   "private": true,
   "type": "module",
   "scripts": {
@@ -12,7 +12,7 @@
     "test": "vite-node src/release-utils.test.ts"
   },
   "dependencies": {
-    "@obsidian-todoist/plugin": "*",
+    "@tasks-bridge/plugin": "*",
     "picocolors": "^1.1.1"
   },
   "devDependencies": {

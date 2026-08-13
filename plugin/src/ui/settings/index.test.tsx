@@ -1,4 +1,4 @@
-import { act, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import type { App } from "obsidian";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -15,7 +15,7 @@ vi.mock("./ProjectSyncMappingsControl", () => ({ ProjectSyncMappingsControl: () 
 vi.mock("./ProjectSyncNowControl", () => ({ ProjectSyncNowControl: () => null }));
 vi.mock("./TokenChecker", () => ({ TokenChecker: () => null }));
 
-import { SettingsTab } from "./index";
+import { SETTINGS_LINKS, SettingsLinks, SettingsTab } from "./index";
 
 describe("SettingsTab", () => {
   let containerEl: HTMLElement;
@@ -25,6 +25,19 @@ describe("SettingsTab", () => {
     containerEl = document.createElement("div");
     containerEl.empty = () => containerEl.replaceChildren();
     document.body.append(containerEl);
+  });
+
+  it("opens the canonical Tasks Bridge documentation from the Docs button", () => {
+    const navigate = vi.fn();
+    render(<SettingsLinks navigate={navigate} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Docs" }));
+
+    expect(navigate).toHaveBeenCalledOnce();
+    expect(navigate).toHaveBeenCalledWith(
+      "https://haiqiang-zhang.github.io/obsidian-tasks-bridge-plugin/",
+    );
+    expect(navigate).toHaveBeenCalledWith(SETTINGS_LINKS.documentation);
   });
 
   afterEach(() => {

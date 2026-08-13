@@ -9,7 +9,15 @@ import {
   validateReleaseVersionInput,
 } from "./release-utils";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -21,9 +29,12 @@ const RELEASE_ASSETS = ["main.js", "manifest.json", "styles.css"] as const;
 const RELEASE_FILES = [
   "docs/docs/changelog.md",
   "docs/docs/translation-status.json",
+  "docs/package.json",
   "manifest.json",
+  "package.json",
   "package-lock.json",
   "plugin/package.json",
+  "scripts/package.json",
   "versions.json",
 ] as const;
 const MS_PER_SECOND = 1000;
@@ -65,6 +76,7 @@ type PackageJson = {
 
 type PackageLock = {
   packages: Record<string, { version?: string }>;
+  version: string;
 };
 
 type ReleaseInfo = {
@@ -451,27 +463,46 @@ function updateChangelog(version: string): void {
 
 function updateVersionFiles(version: string): void {
   const manifest = readManifest();
-  const packagePath = join(REPO_ROOT, "plugin", "package.json");
-  const packageJson = readJson<PackageJson>(packagePath);
+  const packagePaths = [
+    join(REPO_ROOT, "package.json"),
+    join(REPO_ROOT, "plugin", "package.json"),
+    join(REPO_ROOT, "docs", "package.json"),
+    join(REPO_ROOT, "scripts", "package.json"),
+  ];
+  const packageJsons = packagePaths.map((path) => ({
+    path,
+    value: readJson<PackageJson>(path),
+  }));
+  const pluginPackage = packageJsons.find(({ path }) => path.endsWith("/plugin/package.json"));
+  if (!pluginPackage) {
+    fail("Could not find the plugin package.json.");
+  }
 
   manifest.version = version;
-  packageJson.version = version;
+  for (const packageJson of packageJsons) {
+    packageJson.value.version = version;
+  }
 
-  const obsidianVersion = packageJson.dependencies?.obsidian;
+  const obsidianVersion = pluginPackage.value.dependencies?.obsidian;
   if (obsidianVersion) {
     manifest.minAppVersion = obsidianVersion;
   }
 
   writeJson(manifestPath(), manifest);
-  writeJson(packagePath, packageJson);
+  for (const packageJson of packageJsons) {
+    writeJson(packageJson.path, packageJson.value);
+  }
 
   const packageLockPath = join(REPO_ROOT, "package-lock.json");
   const packageLock = readJson<PackageLock>(packageLockPath);
-  const lockedPlugin = packageLock.packages.plugin;
-  if (!lockedPlugin) {
-    fail('package-lock.json does not contain the "plugin" workspace.');
+  packageLock.version = version;
+  for (const workspace of ["", "plugin", "docs", "scripts"]) {
+    const lockedPackage = packageLock.packages[workspace];
+    if (!lockedPackage) {
+      fail(`package-lock.json does not contain the "${workspace || "root"}" workspace.`);
+    }
+    lockedPackage.version = version;
   }
-  lockedPlugin.version = version;
   writeJson(packageLockPath, packageLock);
 
   const versionsPath = join(REPO_ROOT, "versions.json");
@@ -486,15 +517,25 @@ function updateVersionFiles(version: string): void {
 
 function validatePreparedVersion(version: string): void {
   const manifest = readManifest();
-  const packageJson = readJson<PackageJson>(join(REPO_ROOT, "plugin", "package.json"));
+  const packageVersions = [
+    readJson<PackageJson>(join(REPO_ROOT, "package.json")).version,
+    readJson<PackageJson>(join(REPO_ROOT, "plugin", "package.json")).version,
+    readJson<PackageJson>(join(REPO_ROOT, "docs", "package.json")).version,
+    readJson<PackageJson>(join(REPO_ROOT, "scripts", "package.json")).version,
+  ];
   const packageLock = readJson<PackageLock>(join(REPO_ROOT, "package-lock.json"));
   const versions = readJson<Record<string, string>>(join(REPO_ROOT, "versions.json"));
 
-  if (manifest.version !== version || packageJson.version !== version) {
+  if (manifest.version !== version || packageVersions.some((value) => value !== version)) {
     fail(`Version files do not consistently contain ${version}.`);
   }
-  if (packageLock.packages.plugin?.version !== version) {
-    fail(`package-lock.json does not contain plugin version ${version}.`);
+  if (
+    packageLock.version !== version ||
+    ["", "plugin", "docs", "scripts"].some(
+      (workspace) => packageLock.packages[workspace]?.version !== version,
+    )
+  ) {
+    fail(`package-lock.json does not consistently contain version ${version}.`);
   }
   if (versions[version] !== manifest.minAppVersion) {
     fail(`versions.json does not map ${version} to ${manifest.minAppVersion}.`);
@@ -849,6 +890,36 @@ function validateReleaseContents(version: string, release: ReleaseInfo): void {
   }
 }
 
+function installPublishedReleaseIntoLinkedVault(version: string): void {
+  const distPath = join(REPO_ROOT, "plugin", "dist");
+  if (!existsSync(distPath) || !lstatSync(distPath).isSymbolicLink()) {
+    return;
+  }
+
+  logStarted(`Installing Tasks Bridge ${version} into the linked development Vault...`);
+  run("gh", [
+    "release",
+    "download",
+    version,
+    "--repo",
+    EXPECTED_REPOSITORY,
+    "--dir",
+    distPath,
+    "--pattern",
+    "main.js",
+    "--pattern",
+    "manifest.json",
+    "--pattern",
+    "styles.css",
+    "--clobber",
+  ]);
+  const installedManifest = readJson<Manifest>(join(distPath, "manifest.json"));
+  if (installedManifest.id !== "tasks-bridge" || installedManifest.version !== version) {
+    fail(`The linked development Vault did not receive Tasks Bridge ${version}.`);
+  }
+  logCompleted(`Linked development Vault updated to Tasks Bridge ${version}`);
+}
+
 function printUsage(): void {
   console.log(`Usage:
   npm run release -- <x.y.z|major|minor|patch>
@@ -896,6 +967,7 @@ async function main(): Promise<void> {
       );
     }
     validatePublishedRelease(version, existingRelease);
+    installPublishedReleaseIntoLinkedVault(version);
     clearReleaseState();
     logCompleted(`Tasks Bridge ${version} is already released: ${existingRelease.url}`);
     return;
@@ -967,6 +1039,7 @@ async function main(): Promise<void> {
     validateReleaseContents(version, draft);
     const published = publishRelease(version, draft);
     validatePublishedRelease(version, published);
+    installPublishedReleaseIntoLinkedVault(version);
 
     clearReleaseState();
     logCompleted(`Release complete: ${published.url}`);

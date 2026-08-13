@@ -1,6 +1,6 @@
 {
-  "name": "docs",
-  "version": "0.0.0",
+  "name": "@tasks-bridge/docs",
+  "version": "2.9.6",
   "private": true,
   "type": "module",
   "scripts": {

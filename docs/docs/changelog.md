@@ -12,6 +12,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### 🔁 Changes
+
+- Renamed every npm workspace to the Tasks Bridge namespace and aligned the root, plugin, documentation, scripts, and lockfile workspace versions. The release command now updates and validates all workspace versions together.
+- Streamlined the release command so a completed release also installs its official assets into a symlinked development Vault while preserving the plugin's existing settings and local data.
+
+### 🐛 Bug Fixes
+
+- Corrected the **Docs** button in both supported Settings implementations and the README Project sync guide to use the deployed Tasks Bridge documentation routes.
+
 ## v2.9.6 (2026-08-12)
 
 ### 🐛 Bug Fixes
