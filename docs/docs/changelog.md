@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v2.9.7 (2026-08-13)
+
 ### 🔁 Changes
 
 - Renamed every npm workspace to the Tasks Bridge namespace and aligned the root, plugin, documentation, scripts, and lockfile workspace versions. The release command now updates and validates all workspace versions together.
