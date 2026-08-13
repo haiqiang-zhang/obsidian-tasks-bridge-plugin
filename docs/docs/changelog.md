@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v2.9.8 (2026-08-13)
+
 ### ✨ Features
 
 - Project sync now represents task hierarchy directly in the Vault: a task with subtasks becomes a same-named folder containing its own Markdown note and its direct children, with the same structure applied recursively for deeper subtasks.
