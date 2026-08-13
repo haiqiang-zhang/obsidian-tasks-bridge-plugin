@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v2.9.9 (2026-08-13)
+
 ### ✨ Features
 
 - Redesigned Tasks List so Project overview focuses on the completion percentage and daily heatmap, while each always-visible project row carries its complete descendant-aware counts and progress. Task rows start collapsed without hiding child projects.
