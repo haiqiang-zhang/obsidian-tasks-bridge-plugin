@@ -3,6 +3,8 @@ import type { ProjectCompletionEvent } from "@/api/domain/task";
 import type { Task } from "@/data/task";
 import type { ProjectSyncMapping } from "@/settings";
 
+import type { ProjectCatalogTask } from "./catalog";
+
 export type { ProjectCompletionEvent } from "@/api/domain/task";
 export type { ProjectSyncMapping } from "@/settings";
 
@@ -71,6 +73,7 @@ export type ProjectSyncStatisticsScope = Readonly<{
   rootProjectId: string;
   includeSubprojects: boolean;
   projects: readonly ProjectSyncProjectStatistics[];
+  tasks?: readonly ProjectCatalogTask[];
 }>;
 
 export type ProjectSyncStatisticsSnapshot = Readonly<{

@@ -19,6 +19,7 @@ export {
   MANAGED_BODY_END,
   MANAGED_BODY_START,
   MANAGED_FRONTMATTER_KEYS,
+  MANAGED_TASK_CODE_BLOCK,
   makeManagedBody,
   makeTaskFrontmatter,
   readManagedNoteIdentity,

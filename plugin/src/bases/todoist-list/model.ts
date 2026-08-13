@@ -1,5 +1,7 @@
 import type { BasesEntry, BasesEntryGroup, BasesPropertyId, Value } from "obsidian";
 
+import type { ProjectSyncStatisticsSnapshot } from "@/project-sync";
+
 import type {
   TodoistListCounts,
   TodoistListDiagnostics,
@@ -69,6 +71,17 @@ const hiddenMetadataProperties = new Set<BasesPropertyId>([
 type BuildOptions = {
   order: BasesPropertyId[];
   getDisplayName?: (propertyId: BasesPropertyId) => string;
+  projectStatisticsSnapshot?: ProjectSyncStatisticsSnapshot | null;
+};
+
+type CatalogTaskContext = {
+  mappingId: string;
+  rootProjectId: string;
+  projectId: string;
+  projectIdPath: string[];
+  parentTaskId?: string;
+  sectionId?: string;
+  order: number;
 };
 
 type OrderedTaskRecord = {
@@ -129,9 +142,10 @@ export const buildTodoistListModel = (
   const modelGroups: TodoistListGroup[] = [];
   const counts = emptyCounts();
   let taskCount = 0;
+  const catalogTasks = makeCatalogTaskContexts(options.projectStatisticsSnapshot ?? null);
 
   for (const [index, sourceGroup] of groups.entries()) {
-    const result = buildGroup(sourceGroup, index, options, taskIdentities);
+    const result = buildGroup(sourceGroup, index, options, taskIdentities, catalogTasks);
     modelGroups.push(result.group);
     addCounts(counts, result.group.counts);
     taskCount += result.taskCount;
@@ -166,6 +180,7 @@ const buildGroup = (
   groupIndex: number,
   options: BuildOptions,
   taskIdentities: TaskIdentityState,
+  catalogTasks: ReadonlyMap<string, CatalogTaskContext>,
 ): GroupBuildResult => {
   const diagnostics: TodoistListDiagnostics = {
     ignoredNonManaged: 0,
@@ -192,24 +207,25 @@ const buildGroup = (
       continue;
     }
     taskIdentities.seenFilePaths.add(entry.file.path);
-    if (!readBoolean(entry, properties.managed)) {
+    const taskId = readString(entry, properties.taskId);
+    if (taskId === undefined) {
       diagnostics.ignoredNonManaged++;
       continue;
     }
 
-    const taskId = readString(entry, properties.taskId);
-    const rootProjectId = readString(entry, properties.rootProjectId);
-    if (taskId === undefined || rootProjectId === undefined) {
+    const context = catalogTasks.get(taskId);
+    const rootProjectId = context?.rootProjectId ?? readString(entry, properties.rootProjectId);
+    const mappingId = context?.mappingId ?? readString(entry, properties.mappingId);
+    if (rootProjectId === undefined) {
       diagnostics.ignoredInvalid++;
       continue;
     }
-    const mappingId = readString(entry, properties.mappingId);
     const taskKey = todoistListTaskScopeKey(mappingId, rootProjectId, taskId);
     taskIdentities.occurrencesByTaskKey.set(
       taskKey,
       (taskIdentities.occurrencesByTaskKey.get(taskKey) ?? 0) + 1,
     );
-    const task = readTask(entry, options);
+    const task = readTask(entry, options, context);
     if (task === null) {
       diagnostics.ignoredInvalid++;
       continue;
@@ -526,15 +542,19 @@ const countTasks = (tasks: TodoistListTaskNode[]): TodoistListCounts => {
   return counts;
 };
 
-const readTask = (entry: BasesEntry, options: BuildOptions): TodoistListTaskRecord | null => {
+const readTask = (
+  entry: BasesEntry,
+  options: BuildOptions,
+  context?: CatalogTaskContext,
+): TodoistListTaskRecord | null => {
   const id = readString(entry, properties.taskId);
-  const mappingId = readString(entry, properties.mappingId);
-  const rootProjectId = readString(entry, properties.rootProjectId);
+  const mappingId = context?.mappingId ?? readString(entry, properties.mappingId);
+  const rootProjectId = context?.rootProjectId ?? readString(entry, properties.rootProjectId);
   const content = readString(entry, properties.content);
   const status = readStatus(entry);
-  const projectId = readString(entry, properties.projectId);
+  const projectId = context?.projectId ?? readString(entry, properties.projectId);
   const projectName = readString(entry, properties.project);
-  const projectIdPath = readStringList(entry, properties.projectIdPath);
+  const projectIdPath = context?.projectIdPath ?? readStringList(entry, properties.projectIdPath);
   const projectPath = readStringList(entry, properties.projectPath);
   if (
     id === undefined ||
@@ -564,8 +584,8 @@ const readTask = (entry: BasesEntry, options: BuildOptions): TodoistListTaskReco
     projectName,
     projectIdPath,
     projectPath,
-    parentTaskId: readString(entry, properties.parentTaskId),
-    sectionId: readString(entry, properties.sectionId),
+    parentTaskId: context?.parentTaskId ?? readString(entry, properties.parentTaskId),
+    sectionId: context?.sectionId ?? readString(entry, properties.sectionId),
     sectionName: readString(entry, properties.section),
     labels: readStringList(entry, properties.labels) ?? [],
     priority: readString(entry, properties.priority),
@@ -576,10 +596,58 @@ const readTask = (entry: BasesEntry, options: BuildOptions): TodoistListTaskReco
     deadline: readString(entry, properties.deadline),
     duration: readNumber(entry, properties.duration),
     durationUnit: readString(entry, properties.durationUnit),
-    order: readNumber(entry, properties.order),
+    order: context?.order ?? readNumber(entry, properties.order),
     url: readString(entry, properties.url),
     metadata: readMetadata(entry, options),
   };
+};
+
+const makeCatalogTaskContexts = (
+  snapshot: ProjectSyncStatisticsSnapshot | null,
+): Map<string, CatalogTaskContext> => {
+  const result = new Map<string, CatalogTaskContext>();
+  const duplicates = new Set<string>();
+  for (const scope of snapshot?.scopes ?? []) {
+    const projects = new Map(scope.projects.map((project) => [project.id, project]));
+    for (const task of scope.tasks ?? []) {
+      if (result.has(task.id)) {
+        duplicates.add(task.id);
+        continue;
+      }
+      const projectIdPath = resolveCatalogProjectIdPath(task.projectId, projects);
+      if (projectIdPath.length === 0) {
+        continue;
+      }
+      result.set(task.id, {
+        mappingId: scope.mappingId,
+        rootProjectId: scope.rootProjectId,
+        projectId: task.projectId,
+        projectIdPath,
+        ...(task.parentId === undefined ? {} : { parentTaskId: task.parentId }),
+        ...(task.sectionId === undefined ? {} : { sectionId: task.sectionId }),
+        order: task.order,
+      });
+    }
+  }
+  for (const taskId of duplicates) {
+    result.delete(taskId);
+  }
+  return result;
+};
+
+const resolveCatalogProjectIdPath = (
+  projectId: string,
+  projects: ReadonlyMap<string, { id: string; parentId: string | null }>,
+): string[] => {
+  const result: string[] = [];
+  const seen = new Set<string>();
+  let current = projects.get(projectId);
+  while (current !== undefined && !seen.has(current.id)) {
+    seen.add(current.id);
+    result.push(current.id);
+    current = current.parentId === null ? undefined : projects.get(current.parentId);
+  }
+  return result.reverse();
 };
 
 const makeScopeKey = (mappingId: string | undefined, rootProjectId: string): string =>

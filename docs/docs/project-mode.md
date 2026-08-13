@@ -12,15 +12,22 @@ Each mapping connects one Todoist project to one existing Vault folder. That Vau
 ```text
 Todoist projects/
 ├── Work/                              ← mapped directly to Todoist “Work”
-│   ├── Prepare quarterly plan.md
-│   ├── Prepare quarterly plan (2).md   ← duplicate title in the same folder
+│   ├── Prepare quarterly plan/         ← a task with subtasks
+│   │   ├── Prepare quarterly plan.md   ← parent task, matching its folder name
+│   │   ├── Draft milestones.md         ← direct subtask
+│   │   └── Review owners/              ← a subtask with its own children
+│   │       ├── Review owners.md
+│   │       └── Confirm launch owner.md
+│   ├── Prepare quarterly plan (2).md   ← duplicate leaf-task title
 │   └── Product launch/                ← child Todoist project
 │       └── Publish release notes.md
 └── Personal/                          ← a second independent mapping
     └── Renew passport.md
 ```
 
-Task filenames use the sanitized Todoist task title. When tasks in the same folder would have the same filename, one uses `Title.md` and additional tasks use `Title (2).md`, `Title (3).md`, and so on. Stable task identity remains in the `todoist_task_id` frontmatter property and is not exposed in the filename.
+Leaf-task filenames use the sanitized Todoist task title. A task with direct subtasks becomes a same-named folder and its own Markdown note is placed inside that folder beside its subtasks. The same rule is applied recursively at every task depth. When sibling tasks would use the same file or folder name, stable numbered names such as `Title (2)` and `Title (3)` keep them distinct. Stable task identity remains in the `todoist_task_id` frontmatter property and is not exposed in the filename.
+
+If Todoist changes a task's title or parent relationship, the existing managed note is moved to its new canonical location with `FileManager.renameFile()`, so Obsidian can update links according to the user's preferences. User-authored frontmatter and body content move with the note. Missing, cyclic, self-referential, or cross-project parent references are not followed into unsafe paths; those tasks remain at their project root.
 
 ## Configure project sync
 
@@ -59,11 +66,19 @@ The `completedTasks: true` option in a query block still loads the newest three 
 Each task note has two plugin-managed areas:
 
 - flat `todoist_*` frontmatter properties for Bases; and
-- a body section between `todoist-sync-plus:managed` HTML comments containing the current task title, Todoist link, and description.
+- a body section between `todoist-sync-plus:managed` HTML comments containing an Obsidian-styled task card.
 
 Text outside the managed body comments is preserved. Frontmatter properties not listed below are also preserved. You can therefore add your own notes, links, tags, and Base-specific properties to a synchronized file.
 
-The synchronized files remain a one-way projection. Changes made to plugin-managed `todoist_*` properties or to the managed body section are replaced with Todoist's values during the next synchronization. Other local content is not sent to Todoist. Use the explicit actions in **Tasks List** when you want to update a task on the server.
+The task card shows the task, description, ordered project path, section, priority, and labels without exposing synchronization metadata. Its checkbox, edit action, and Todoist link use Obsidian's native interaction patterns.
+
+All user-relevant task data remains visible as native Markdown properties, including the task name, description, completion state, status, ordered project path, section, priority, labels, dates, deadline, duration, and task ID. This is the canonical data surface for Obsidian Bases. Tasks Bridge does not depend on a third-party property-hiding mechanism.
+
+`todoist_task_id` is the only binding identifier stored in a task note. Mapping ownership, project and section IDs, parent relationships, Todoist order, missing-task counters, and completion-event history are synchronization implementation details stored in the plugin's `data.json`. This keeps Markdown useful to people and native Bases while preserving a complete local sync index.
+
+Most synchronized values remain a one-way projection. Changes made to plugin-managed `todoist_*` properties or to the managed body section are replaced with Todoist's values during the next synchronization. The exception is **`todoist_completed`**: changing its checkbox completes or reopens the task in Todoist and immediately refreshes the Markdown projection. If Todoist rejects the request, the checkbox is restored. Other local content is not sent to Todoist.
+
+`todoist_project_path` is an ordered YAML list from the hierarchy root to the task's current project. Tasks Bridge never stores it as a set or alphabetically re-sorts it.
 
 ### Properties available to Bases
 
@@ -73,20 +88,15 @@ The synchronized files remain a one-way projection. Changes made to plugin-manag
 | `todoist_content` | Task name |
 | `todoist_description` | Task description |
 | `todoist_status` | `active`, `completed`, `stale`, or `out_of_scope` |
-| `todoist_completed` | Whether the task is completed |
-| `todoist_project_id` | Todoist project ID |
+| `todoist_completed` | Whether the task is completed; this user-editable checkbox is synchronized back to Todoist |
 | `todoist_project` | Project name |
 | `todoist_project_path` | Project hierarchy as a list of names |
-| `todoist_project_id_path` | Project hierarchy as a list of stable Todoist project IDs |
-| `todoist_parent_task_id` | Parent task ID for a subtask |
-| `todoist_section_id` | Section ID |
 | `todoist_section` | Section name |
 | `todoist_labels` | List of Todoist label names |
 | `todoist_priority` | Todoist priority from `P1` to `P4` |
 | `todoist_created_at` | Task creation date and time |
 | `todoist_updated_at` | Todoist's source revision time when the API provides it |
 | `todoist_completed_at` | Completion date and time |
-| `todoist_completion_events` | Complete completion-event history for this task, including repeated complete → reopen → complete cycles |
 | `todoist_due_date` | Due date |
 | `todoist_due_datetime` | Due date and time when the task has a scheduled time |
 | `todoist_due_timezone` | Todoist time zone for a scheduled due time |
@@ -94,14 +104,8 @@ The synchronized files remain a one-way projection. Changes made to plugin-manag
 | `todoist_deadline` | Task deadline |
 | `todoist_duration` | Duration amount |
 | `todoist_duration_unit` | Duration unit |
-| `todoist_order` | Todoist child order |
 | `todoist_url` | Web link to the task in Todoist |
 | `todoist_synced_at` | Time of the last successful update to this note |
-| `todoist_stale_since` | Time the task was first marked stale |
-| `todoist_sync_managed` | Ownership marker used by Tasks Bridge |
-| `todoist_sync_mapping_id` | Stable identity of the project mapping that owns the projection |
-| `todoist_sync_root_id` | Root project that owns this projection |
-| `todoist_sync_missing_count` | Number of complete snapshots in which the task was absent |
 
 Properties that do not apply to a task are omitted rather than written with placeholder values.
 
@@ -125,7 +129,7 @@ Project and section headers, nested task indentation, descriptions, status count
 
 1. Enable Project sync and complete at least one successful synchronization.
 2. Create a new Base in Obsidian, or open an existing `.base` file.
-3. Add a filter for `todoist_sync_managed == true`. Add any folder or status filters needed for this particular workspace.
+3. Add a filter for `todoist_task_id != null`. Add a folder filter for the Project sync mapping, plus any status filters needed for this particular workspace.
 4. Open the view menu on the left side of the Base toolbar. Select the chevron beside the view, and change its layout to **Tasks List**.
 5. Open **Properties** and choose the task properties to display. Their order in the Properties menu is also their display order in each task row.
 
@@ -140,7 +144,7 @@ Obsidian stores every choice in that individual view's entry in the `.base` file
 
 :::note Managed Project sync notes only
 
-Tasks List renders only valid notes created and owned by Project sync. A normal Markdown note is ignored even if it passes the Base filter. Keep the `todoist_sync_managed`, task identity, and project hierarchy properties intact; Project sync maintains them automatically.
+Tasks List renders only valid notes whose `todoist_task_id` is present in the local Project sync catalog. A normal Markdown note is ignored even if it passes the Base filter. Keep the task ID intact; Project sync maintains the remaining projection properties automatically.
 
 :::
 
@@ -167,7 +171,7 @@ Expand **Project overview** above the task list to see statistics for the select
 - the time of the latest complete Project sync; and
 - a nested project breakdown in which each project's counts include all of its descendants.
 
-These statistics come from the complete local Project Sync projection, not from the files currently visible after Base filters are applied. Task Markdown stores current state and every completion occurrence. Tasks Bridge stores each mapping's complete project hierarchy, including projects with no tasks, in the plugin's own `data.json`. Project Overview reads that local projection immediately when the Vault opens and rebuilds after local or synchronized file changes. A failed or interrupted Todoist refresh leaves the last complete local projection available.
+These statistics come from the complete local Project Sync projection, not from the files currently visible after Base filters are applied. Task Markdown stores the current user-facing state. Tasks Bridge stores each mapping's complete project hierarchy, task relationships, and every completion occurrence—including projects with no tasks—in the plugin's own `data.json`. Project Overview reads that local projection immediately when the Vault opens and rebuilds after local or synchronized file changes. A failed or interrupted Todoist refresh leaves the last complete local projection available.
 
 Select the **Project overview** header to collapse or expand the panel. That choice is saved for the individual Base view. Before the first complete Project sync has created the local catalog, the panel displays a waiting state instead of partial statistics. If Project Sync is not configured, disabled, or the initial sync fails, the panel reports that state directly.
 
@@ -227,16 +231,16 @@ Overlapping requests on one device are combined, so repeatedly starting a sync d
 
 Each mapped Vault folder is an independent projection boundary, but the plugin does not assume ownership of every file inside it. The settings prevent mapped boundaries from being equal, nested, case variants, or Unicode-normalization variants of one another.
 
-- Only notes carrying the plugin's ownership properties are updated or moved. Unrelated notes are never adopted, including when a managed task transfers between configured mappings.
+- Only notes whose `todoist_task_id` belongs to a configured mapping's local catalog are updated or moved. Unrelated notes are never adopted, including when a managed task transfers between configured mappings.
 - An unrelated file at a required path is reported as a conflict and is never overwritten.
 - User-authored body text outside the managed comments and non-managed frontmatter properties are retained.
-- Managed frontmatter and the managed body are revalidated against the live file and written together with one atomic `Vault.process()` operation. If Obsidian Sync changes the note's task, mapping, root, project, or newer Todoist revision between scan and write, the older projection is rejected instead of overwriting it.
+- Managed frontmatter and the managed body are revalidated against the live file and written together with one atomic `Vault.process()` operation. If Obsidian Sync changes the note's task ID or newer Todoist revision between scan and write, the older projection is rejected instead of overwriting it.
 - File creation and rename destinations are checked again immediately before the operation. A path that appears during synchronization becomes a reported conflict and is never overwritten.
 - A damaged or structurally unreadable likely-managed YAML document fences new file creation for that mapping during the run, preventing an unsafe `Task (2).md` replacement.
 - If a live note has `todoist_updated_at` but Todoist returns a revisionless snapshot, semantic changes are blocked. Missing-task bookkeeping also compares the live source and sync revisions inside the atomic write, so an older empty snapshot cannot mark a newer note as missing.
 - A failed or incomplete Todoist fetch is not applied as a successful snapshot.
-- A task missing from one complete successful snapshot is retained with `todoist_sync_missing_count: 1`. If it is absent from the next complete snapshot as well, its status becomes `stale` and `todoist_stale_since` is recorded. Stale notes are never automatically trashed or deleted.
-- If a stale task reappears, its current Todoist data is restored, the missing count returns to zero, and `todoist_stale_since` is removed.
+- A task missing from one complete successful snapshot is retained. If it is absent from the next complete snapshot as well, its `todoist_status` becomes `stale`. The internal missing counter lives in `data.json`; stale notes are never automatically trashed or deleted.
+- If a stale task reappears, its current Todoist data is restored and the internal missing counter returns to zero.
 - If **Include child projects** is turned off, previously synchronized descendant tasks are retained and marked `out_of_scope`. They are not deleted. Re-enabling descendants restores their current Todoist state on the next sync.
 - If a task moves from one currently configured project mapping to another, its existing managed note is moved to the destination mapping so user-authored content is retained and a duplicate note is not created.
 - If you change a mapping's **Vault folder**, the plugin remembers every previous projection root and moves its managed notes into the new root. Interrupted or deferred moves resume on a later sync. Historical roots remain registered so a note delivered late by Obsidian Sync can still be recognized and moved instead of becoming an orphan or duplicate; the mapping's Settings card lists these monitored roots.
@@ -245,6 +249,8 @@ Each mapped Vault folder is an independent projection boundary, but the plugin d
 - Removing a mapping or disabling project sync does not silently delete its previous projection.
 
 Task and project names are converted to portable Vault paths. Unsupported filesystem characters are replaced, long names are shortened safely, and stable IDs disambiguate collisions.
+
+Parent-task folders are created only when every existing item inside the candidate folder belongs to that Todoist task subtree. An unrelated file or project folder is never adopted. If the preferred folder name is already in use, Project sync preserves it and chooses a stable numbered folder for the task hierarchy.
 
 ## Source of truth
 

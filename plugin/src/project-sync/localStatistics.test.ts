@@ -4,7 +4,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { makeProject, makeTask } from "@/factories/data";
 
-import type { ProjectCatalog, ProjectCatalogStorage } from "./catalog";
+import {
+  mergeProjectCatalogCollections,
+  type ProjectCatalog,
+  type ProjectCatalogStorage,
+} from "./catalog";
 import { makeManagedBody, makeTaskFrontmatter, renderNewTaskDocument } from "./document";
 import { projectHierarchyPath } from "./hierarchy";
 import {
@@ -124,11 +128,13 @@ class FakeFileManager {
 class FakeCatalogStorage implements ProjectCatalogStorage {
   readonly catalogs = new Map<string, ProjectCatalog>();
   readonly persistCatalogs = vi.fn(async (catalogs: readonly ProjectCatalog[]) => {
-    for (const catalog of catalogs) {
-      const current = this.catalogs.get(catalog.mappingId);
-      if (current === undefined || current.syncedAt <= catalog.syncedAt) {
-        this.catalogs.set(catalog.mappingId, structuredClone(catalog));
-      }
+    const current = Object.fromEntries(this.catalogs);
+    const incoming = Object.fromEntries(catalogs.map((catalog) => [catalog.mappingId, catalog]));
+    this.catalogs.clear();
+    for (const [mappingId, catalog] of Object.entries(
+      mergeProjectCatalogCollections(current, incoming),
+    )) {
+      this.catalogs.set(mappingId, structuredClone(catalog));
     }
   });
 
@@ -394,6 +400,17 @@ describe("ObsidianProjectSyncStatisticsRepository", () => {
       completionEvents: [],
       syncedAt: "2026-08-12T01:01:00.000Z",
     };
+    storage.catalogs.set(mapping.id, {
+      mappingId: mapping.id,
+      rootProjectId: root.id,
+      includeSubprojects: true,
+      syncedAt: initialSnapshot.syncedAt,
+      projects: [
+        { id: root.id, parentId: root.parentId, name: root.name, childOrder: root.childOrder },
+      ],
+      tasks: [{ id: task.id, projectId: root.id, order: task.order }],
+      completionEvents: [localEvent],
+    });
     await repository.persistProjectCatalog(initialSnapshot, mapping, {
       assertValid: () => undefined,
     });

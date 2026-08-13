@@ -11,6 +11,7 @@ const runtime = vi.hoisted(() => ({
   addSettingTab: vi.fn(),
   loadData: vi.fn(),
   loadLocalStorage: vi.fn(),
+  metadataCacheOn: vi.fn(),
   makeServices: vi.fn(),
   notices: [] as unknown[],
   registerCommands: vi.fn(),
@@ -27,6 +28,13 @@ const runtime = vi.hoisted(() => ({
 }));
 
 vi.mock("obsidian", () => ({
+  MarkdownRenderChild: class {
+    public readonly containerEl: HTMLElement;
+
+    constructor(containerEl: HTMLElement) {
+      this.containerEl = containerEl;
+    }
+  },
   Notice: class {
     constructor(message: unknown) {
       runtime.notices.push(message);
@@ -249,11 +257,16 @@ const makeServices = () => ({
     sync: vi.fn(async (): Promise<ProjectSyncResult | null> => null),
   },
   projectTasks: {
+    applyCompletedProperty: vi.fn(async () => undefined),
     completeTask: vi.fn(async () => ({ projection: Promise.resolve() })),
     isReady: vi.fn(() => true),
     loadEditableTask: vi.fn(),
     reopenTask: vi.fn(async () => ({ projection: Promise.resolve() })),
     updateTask: vi.fn(async () => undefined),
+  },
+  projectTaskProperties: {
+    dispose: vi.fn(),
+    handleMetadataChange: vi.fn(),
   },
   todoist: {
     initialize: vi.fn<(client: unknown) => Promise<void>>(async () => undefined),
@@ -339,6 +352,10 @@ const makePlugin = (
   const app = {
     ...(internalPlugins === null ? {} : { internalPlugins }),
     loadLocalStorage: runtime.loadLocalStorage,
+    metadataCache: {
+      getFileCache: vi.fn(),
+      on: runtime.metadataCacheOn,
+    },
     saveLocalStorage: runtime.saveLocalStorage,
     vault: {
       on: runtime.vaultOn,
@@ -593,7 +610,16 @@ describe("TodoistPlugin async lifecycle", () => {
     expect(runtime.saveData).toHaveBeenCalledWith(
       expect.objectContaining({
         debugLogging: true,
-        projectSyncCatalogs: stored.projectSyncCatalogs,
+        projectSyncCatalogs: {
+          version: 2,
+          items: [
+            expect.objectContaining({
+              mappingId: "mapping-work",
+              tasks: [],
+              completionEvents: [],
+            }),
+          ],
+        },
       }),
     );
   });

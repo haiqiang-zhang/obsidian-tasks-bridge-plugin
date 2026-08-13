@@ -1,0 +1,419 @@
+.tasks-bridge-note-card {
+  position: relative;
+  display: flex;
+  width: 100%;
+  box-sizing: border-box;
+  align-items: flex-start;
+  flex-direction: column;
+  margin: 0;
+  padding: var(--size-4-4);
+  border: 0;
+  border-radius: 0;
+  background: var(--background-secondary);
+  box-shadow: none;
+  color: var(--text-normal);
+  font-family: var(--font-interface);
+}
+
+.tasks-bridge-note-card-main {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  align-items: flex-start;
+  gap: var(--size-4-3);
+}
+
+.tasks-bridge-note-card-completion {
+  position: relative;
+  display: grid;
+  width: var(--size-4-6);
+  min-width: var(--size-4-6);
+  height: var(--size-4-6);
+  place-items: center;
+  margin-block-start: var(--size-2-1);
+
+  input {
+    width: var(--checkbox-size);
+    height: var(--checkbox-size);
+    margin: 0;
+  }
+
+  .obsidian-icon {
+    position: absolute;
+  }
+
+  &[data-loading="true"] input {
+    visibility: hidden;
+  }
+}
+
+.tasks-bridge-note-card-content {
+  min-width: 0;
+}
+
+.tasks-bridge-note-card-heading {
+  --tasks-bridge-note-card-actions-width: calc(var(--size-4-18) + var(--size-4-9));
+
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--size-2-2);
+  padding-inline-end: var(--tasks-bridge-note-card-actions-width);
+
+  h1 {
+    margin: 0;
+    color: var(--text-normal);
+    font-family: var(--font-interface);
+    font-size: var(--font-ui-medium);
+    font-weight: var(--font-semibold);
+    line-height: var(--line-height-tight);
+  }
+}
+
+.tasks-bridge-note-card[data-status="completed"] h1 {
+  color: var(--checklist-done-color);
+  text-decoration: var(--checklist-done-decoration);
+}
+
+.tasks-bridge-note-card-status {
+  padding: 1px var(--size-2-3);
+  border-radius: var(--radius-s);
+  background: var(--background-modifier-hover);
+  color: var(--text-muted);
+  font-size: var(--font-smallest);
+  text-transform: capitalize;
+}
+
+.tasks-bridge-note-card-description {
+  margin: var(--size-2-2) 0 0;
+  color: var(--text-muted);
+  font-family: var(--font-text);
+  font-size: var(--font-text-size);
+  white-space: pre-wrap;
+}
+
+.tasks-bridge-note-card-meta {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: var(--size-2-2);
+  margin-block-start: var(--size-4-3);
+
+  > span,
+  > output {
+    display: inline-flex;
+    max-width: 100%;
+    align-items: center;
+    gap: var(--size-2-1);
+    padding: var(--size-2-1) var(--size-2-3);
+    border-radius: var(--radius-s);
+    background: var(--background-primary);
+    color: var(--text-muted);
+    font-size: var(--font-ui-smaller);
+  }
+}
+
+.tasks-bridge-note-card-error {
+  display: block;
+  margin-block-start: var(--size-4-2);
+  color: var(--text-error);
+  font-size: var(--font-ui-smaller);
+}
+
+.tasks-bridge-note-card-subtask-region {
+  width: 100%;
+  box-sizing: border-box;
+  margin-block-start: var(--size-4-4);
+  padding-block-start: var(--size-4-2);
+  border-block-start: var(--border-width) solid var(--background-modifier-border);
+}
+
+.tasks-bridge-note-card-subtask-header {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--size-4-3);
+  padding-inline: var(--size-4-2);
+}
+
+.tasks-bridge-note-card-subtask-heading,
+.tasks-bridge-note-card-subtask-progress {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: var(--size-2-2);
+  color: var(--text-muted);
+  font-family: var(--font-interface);
+  font-size: var(--font-ui-smaller);
+  line-height: var(--line-height-tight);
+}
+
+.tasks-bridge-note-card-subtask-heading {
+  margin-block: var(--size-2-2) var(--size-4-2);
+  margin-inline: 0;
+  padding: var(--size-2-2) var(--size-4-2);
+  border: var(--border-width) solid transparent;
+  border-radius: var(--button-radius);
+  background: transparent;
+  box-shadow: none;
+  font-weight: var(--font-semibold);
+  cursor: pointer;
+}
+
+.tasks-bridge-note-card-subtask-heading[aria-expanded="false"] {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+
+.tasks-bridge-note-card-subtask-heading[aria-expanded="false"]:hover {
+  border-color: var(--background-modifier-border-hover);
+  background: transparent;
+  color: var(--nav-heading-color-hover);
+}
+
+.tasks-bridge-note-card-subtask-heading[aria-expanded="false"]:focus-visible {
+  border-color: var(--background-modifier-border-focus);
+  background: transparent;
+  color: var(--nav-heading-color-hover);
+}
+
+.tasks-bridge-note-card-subtask-heading[aria-expanded="true"] {
+  border-color: var(--background-modifier-border-focus);
+  background: var(--background-modifier-active-hover);
+  box-shadow: none;
+  color: var(--text-normal);
+}
+
+.tasks-bridge-note-card-subtask-heading[aria-expanded="true"]:hover,
+.tasks-bridge-note-card-subtask-heading[aria-expanded="true"]:focus-visible {
+  border-color: var(--background-modifier-border-focus);
+  background: var(--background-modifier-active-hover);
+  box-shadow: none;
+}
+
+.tasks-bridge-note-card-subtask-progress {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.tasks-bridge-note-card-subtasks {
+  width: 100%;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tasks-bridge-note-card .tasks-bridge-note-card-subtasks {
+  margin-block: 0;
+}
+
+.tasks-bridge-note-card-subtasks[data-depth="0"] {
+  padding: var(--size-2-2);
+  border: var(--border-width) solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  background: var(--background-primary);
+}
+
+.tasks-bridge-note-card-subtasks[data-depth]:not([data-depth="0"]) {
+  width: auto;
+  margin: 0;
+  padding-inline-start: var(--nav-item-children-padding-start);
+  border-inline-start: 0;
+}
+
+.tasks-bridge-note-card-subtasks > .tasks-bridge-note-card-subtask {
+  margin: 0;
+  margin-inline-start: 0;
+  padding: 0;
+  padding-block: 0;
+  list-style: none;
+}
+
+.tasks-bridge-note-card-subtask-row {
+  display: flex;
+  min-height: calc(var(--checkbox-size) + var(--size-4-2));
+  align-items: center;
+  gap: var(--size-2-3);
+  padding: var(--size-2-3) var(--size-4-2);
+  border: 0;
+  border-radius: var(--nav-item-radius);
+  color: var(--nav-item-color);
+}
+
+.tasks-bridge-note-card-subtask-row:hover,
+.tasks-bridge-note-card-subtask-row:focus-within {
+  background: var(--nav-item-background-hover);
+  color: var(--nav-item-color-hover);
+}
+
+.tasks-bridge-note-card-subtask-disclosure {
+  --icon-size: var(--icon-xs);
+  --icon-stroke: var(--icon-xs-stroke-width);
+
+  display: inline-flex;
+  width: var(--size-4-5);
+  min-width: var(--size-4-5);
+  height: var(--size-4-5);
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: var(--clickable-icon-radius);
+  background: transparent;
+  box-shadow: none;
+  color: var(--nav-collapse-icon-color);
+  cursor: pointer;
+}
+
+.tasks-bridge-note-card-subtask-disclosure:hover,
+.tasks-bridge-note-card-subtask-disclosure:focus-visible {
+  background: var(--background-modifier-hover);
+  color: var(--nav-collapse-icon-color);
+}
+
+.tasks-bridge-note-card-subtask-completion {
+  position: relative;
+  display: grid;
+  width: var(--checkbox-size);
+  min-width: var(--checkbox-size);
+  height: var(--checkbox-size);
+  place-items: center;
+
+  input {
+    width: var(--checkbox-size);
+    height: var(--checkbox-size);
+    margin: 0;
+  }
+
+  .obsidian-icon {
+    position: absolute;
+  }
+
+  &[data-loading="true"] input {
+    visibility: hidden;
+  }
+}
+
+.tasks-bridge-note-card-subtask-link {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  padding: 0;
+  color: var(--text-normal);
+  font-family: var(--font-interface);
+  font-size: var(--font-ui-small);
+  font-weight: var(--font-normal);
+  line-height: var(--line-height-tight);
+  text-align: start;
+  text-decoration: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tasks-bridge-note-card-subtask-link:hover,
+.tasks-bridge-note-card-subtask-link:focus-visible {
+  color: var(--text-accent-hover);
+  text-decoration: var(--link-decoration-hover);
+  text-decoration-thickness: var(--link-decoration-thickness);
+}
+
+.tasks-bridge-note-card-subtask[data-status="completed"]
+  > .tasks-bridge-note-card-subtask-row
+  > .tasks-bridge-note-card-subtask-link {
+  color: var(--checklist-done-color);
+  text-decoration: var(--checklist-done-decoration);
+}
+
+.tasks-bridge-note-card-subtask-count {
+  flex: none;
+  padding-inline: var(--size-2-2);
+  border-radius: var(--radius-s);
+  background: var(--background-secondary);
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller);
+  font-variant-numeric: tabular-nums;
+}
+
+.tasks-bridge-note-card-subtask > .tasks-bridge-note-card-error {
+  margin: var(--size-2-2) 0 var(--size-2-2)
+    calc(var(--size-4-5) + var(--checkbox-size) + var(--size-4-4));
+}
+
+.tasks-bridge-note-card-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--size-2-1);
+}
+
+.embed-actions > .tasks-bridge-note-card-actions {
+  order: -1;
+}
+
+.cm-lang-tasks-bridge-task {
+  --embed-block-shadow-hover: none;
+}
+
+.cm-lang-tasks-bridge-task .embed-actions:focus-within {
+  opacity: 1;
+}
+
+.tasks-bridge-note-card-action {
+  --icon-size: var(--icon-m);
+  --icon-stroke: var(--icon-m-stroke-width);
+
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: var(--clickable-icon-radius);
+  background: transparent;
+  box-shadow: none;
+  color: var(--embed-action-color);
+  opacity: 1;
+}
+
+.tasks-bridge-note-card-action:hover,
+.tasks-bridge-note-card-action:focus-visible {
+  background: var(--background-modifier-hover);
+  color: var(--embed-action-color);
+  opacity: 1;
+}
+
+.tasks-bridge-note-card-action:disabled {
+  background: transparent;
+  color: var(--embed-action-color);
+  opacity: 1;
+}
+
+.tasks-bridge-note-card-fallback-actions {
+  position: absolute;
+  z-index: 1;
+  inset-block-start: var(--size-2-2);
+  inset-inline-end: var(--size-2-2);
+  opacity: 0;
+  transition: opacity var(--anim-duration-fast) ease-in-out;
+}
+
+.tasks-bridge-note-card:hover .tasks-bridge-note-card-fallback-actions,
+.tasks-bridge-note-card-fallback-actions:focus-within {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .tasks-bridge-note-card-fallback-actions {
+    opacity: 1;
+  }
+}
+
+@media (max-width: 500px) {
+  .tasks-bridge-note-card {
+    padding: var(--size-4-3);
+  }
+}

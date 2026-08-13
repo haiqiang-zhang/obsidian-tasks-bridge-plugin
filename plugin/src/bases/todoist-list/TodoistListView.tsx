@@ -165,6 +165,7 @@ export class TasksListView extends BasesView implements HoverParent {
     const model = buildTodoistListModel(this.data.groupedData, {
       order: this.config.getOrder(),
       getDisplayName: (propertyId) => this.config.getDisplayName(propertyId),
+      projectStatisticsSnapshot: this.projectStatisticsSnapshot,
     });
     const rootProjectId = readRootProjectId(this.config.get(rootProjectConfigKey));
     const projectOverviewCollapsed = this.config.get(projectOverviewCollapsedConfigKey) === true;

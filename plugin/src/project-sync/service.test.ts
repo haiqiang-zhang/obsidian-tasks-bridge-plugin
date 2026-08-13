@@ -326,6 +326,14 @@ describe("ProjectFolderSyncService", () => {
               ],
             },
           ],
+          tasks: [
+            { id: "grandchild-active", projectId: grandchild.id, order: 0 },
+            { id: "grandchild-completed-1", projectId: grandchild.id, order: 0 },
+            { id: "grandchild-completed-2", projectId: grandchild.id, order: 0 },
+            { id: "root-active-1", projectId: root.id, order: 0 },
+            { id: "root-active-2", projectId: root.id, order: 0 },
+            { id: "root-completed", projectId: root.id, order: 0 },
+          ],
         },
       ],
     });

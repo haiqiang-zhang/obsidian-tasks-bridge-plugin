@@ -13,6 +13,7 @@ import {
   ProjectTaskCommandService,
   type ProjectTaskProjectionCoordinator,
 } from "@/services/projectTaskCommands";
+import { ProjectTaskPropertySyncService } from "@/services/projectTaskProperties";
 import { VaultTokenAccessor } from "@/services/tokenAccessor";
 import { useSettingsStore } from "@/settings";
 
@@ -22,6 +23,7 @@ export type Services = {
   todoist: TodoistAdapter;
   projectSync: ProjectFolderSyncService;
   projectTasks: ProjectTaskCommandService;
+  projectTaskProperties: ProjectTaskPropertySyncService;
 };
 
 export const makeServices = (plugin: TodoistPlugin): Services => {
@@ -54,6 +56,7 @@ export const makeServices = (plugin: TodoistPlugin): Services => {
         return paths;
       },
       runInternalMutation,
+      plugin.projectCatalogStorage,
     ),
     projectSyncConfig,
     new ObsidianProjectSyncStatisticsRepository(
@@ -68,18 +71,22 @@ export const makeServices = (plugin: TodoistPlugin): Services => {
     runInternalMutation,
   };
 
+  const projectTasks = new ProjectTaskCommandService(
+    plugin.app.vault,
+    plugin.app.fileManager,
+    plugin.app.metadataCache,
+    todoist,
+    projectSync,
+    projectTaskProjectionCoordinator,
+    plugin.projectCatalogStorage,
+  );
+
   return {
     modals: new ModalHandler(plugin),
     token: new VaultTokenAccessor(plugin.app.vault, plugin.app.secretStorage),
     todoist,
     projectSync,
-    projectTasks: new ProjectTaskCommandService(
-      plugin.app.vault,
-      plugin.app.fileManager,
-      plugin.app.metadataCache,
-      todoist,
-      projectSync,
-      projectTaskProjectionCoordinator,
-    ),
+    projectTasks,
+    projectTaskProperties: new ProjectTaskPropertySyncService(projectTasks),
   };
 };

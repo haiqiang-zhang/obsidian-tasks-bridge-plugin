@@ -13,6 +13,7 @@ import {
   type ProjectFolderSyncService,
   readManagedNoteIdentity,
 } from "@/project-sync";
+import type { ProjectCatalogStorage } from "@/project-sync/catalog";
 import type { ManagedFrontmatter, ManagedNoteIdentity } from "@/project-sync/document";
 
 const LOCAL_COMPLETION_EVENT_PREFIX = "local:";
@@ -49,6 +50,9 @@ type ManagedProjectTaskStatus = "active" | "completed";
 type ManagedProjectTaskTarget = {
   file: TFile;
   identity: ManagedNoteIdentity;
+  mappingId: string;
+  rootProjectId: string;
+  projectId?: string;
   status: ManagedProjectTaskStatus;
   taskId: string;
 };
@@ -77,6 +81,7 @@ export class ProjectTaskCommandService {
   private readonly todoist: TodoistAdapter;
   private readonly projectSync: ProjectFolderSyncService;
   private readonly projectionCoordinator: ProjectTaskProjectionCoordinator;
+  private readonly catalogStorage?: ProjectCatalogStorage;
 
   constructor(
     vault: Vault,
@@ -85,6 +90,7 @@ export class ProjectTaskCommandService {
     todoist: TodoistAdapter,
     projectSync: ProjectFolderSyncService,
     projectionCoordinator: ProjectTaskProjectionCoordinator,
+    catalogStorage?: ProjectCatalogStorage,
   ) {
     this.vault = vault;
     this.fileManager = fileManager;
@@ -92,6 +98,7 @@ export class ProjectTaskCommandService {
     this.todoist = todoist;
     this.projectSync = projectSync;
     this.projectionCoordinator = projectionCoordinator;
+    this.catalogStorage = catalogStorage;
   }
 
   public isReady(): boolean {
@@ -159,6 +166,46 @@ export class ProjectTaskCommandService {
     return this.startStatusProjection(target, "active");
   }
 
+  /**
+   * Applies the user-editable `todoist_completed` property to Todoist.
+   *
+   * `todoist_status` is the last server-projected state, so a mismatch between the two fields is
+   * an explicit local completion intent. Plugin projections update both values atomically and do
+   * not enter this path.
+   */
+  public async applyCompletedProperty(
+    reference: ManagedProjectTaskReference,
+    completed: boolean,
+  ): Promise<void> {
+    const target = this.resolveTarget(reference);
+    const desiredStatus: ManagedProjectTaskStatus = completed ? "completed" : "active";
+    if (target.status === desiredStatus) {
+      return;
+    }
+
+    try {
+      const result = completed
+        ? await this.completeTask(reference)
+        : await this.reopenTask(reference);
+      await result.projection;
+    } catch (error: unknown) {
+      // A projection error means Todoist already accepted the mutation. Never roll the property
+      // back to the old value in that case; doing so would misrepresent server state and could
+      // submit the inverse mutation when the metadata observer runs again.
+      if (!(error instanceof ProjectTaskProjectionError)) {
+        try {
+          await this.restoreCompletedProperty(target);
+        } catch (restoreError: unknown) {
+          console.error(
+            "Failed to restore todoist_completed after Todoist rejected it",
+            restoreError,
+          );
+        }
+      }
+      throw error;
+    }
+  }
+
   private resolveTarget(reference: ManagedProjectTaskReference): ManagedProjectTaskTarget {
     if (!this.todoist.isReady()) {
       throw new ProjectTaskCommandError("Todoist is not ready yet");
@@ -189,13 +236,7 @@ export class ProjectTaskCommandService {
       this.projectSync.listProjects().map((project) => project.id),
     );
     const candidates = config.mappings.filter((mapping) => {
-      if (mapping.project?.projectId !== identity.rootProjectId) {
-        return false;
-      }
-      if (!availableProjectIds.has(mapping.project.projectId)) {
-        return false;
-      }
-      if (identity.mappingId !== undefined && mapping.id !== identity.mappingId) {
+      if (mapping.project === null || !availableProjectIds.has(mapping.project.projectId)) {
         return false;
       }
       return [mapping.folder, ...mapping.previousFolders].some((folder) =>
@@ -213,7 +254,37 @@ export class ProjectTaskCommandService {
       throw new ProjectTaskCommandError("This task is unavailable until Project sync restores it");
     }
 
-    return { file, identity, status, taskId: identity.taskId };
+    const owner = candidates[0];
+    if (owner?.project === null || owner === undefined) {
+      throw new ProjectTaskCommandError(
+        "This managed task note does not belong to one configured Project sync mapping",
+      );
+    }
+    const catalog = this.catalogStorage?.getCatalog(owner.id);
+    if (
+      catalog === null ||
+      catalog === undefined ||
+      catalog.rootProjectId !== owner.project.projectId
+    ) {
+      throw new ProjectTaskCommandError(
+        "This task is unavailable until Project sync confirms its Todoist project",
+      );
+    }
+    const catalogTask = catalog?.tasks.find((task) => task.id === identity.taskId);
+    if (catalogTask === undefined) {
+      throw new ProjectTaskCommandError(
+        "This task is unavailable until Project sync confirms its Todoist project",
+      );
+    }
+    return {
+      file,
+      identity,
+      mappingId: owner.id,
+      rootProjectId: owner.project.projectId,
+      projectId: catalogTask?.projectId,
+      status,
+      taskId: identity.taskId,
+    };
   }
 
   private requireStatus(
@@ -297,6 +368,8 @@ export class ProjectTaskCommandService {
     // Invalidate first so a snapshot captured before the Todoist response cannot overwrite this
     // targeted projection. The canonical refresh is queued only after this atomic write settles.
     this.projectSync.invalidate();
+    const completedAtIso =
+      status === "completed" && completedAt !== undefined ? completedAt.toISOString() : undefined;
     await this.fileManager.processFrontMatter(target.file, (frontmatter: unknown) => {
       assertValid();
       if (!isRecord(frontmatter)) {
@@ -307,25 +380,48 @@ export class ProjectTaskCommandService {
       frontmatter.todoist_status = status;
       frontmatter.todoist_completed = status === "completed";
       frontmatter.todoist_synced_at = syncedAt;
-      frontmatter.todoist_sync_missing_count = 0;
-      delete frontmatter.todoist_stale_since;
 
-      if (status === "completed" && completedAt !== undefined) {
-        const completedAtIso = completedAt.toISOString();
+      if (completedAtIso !== undefined) {
         frontmatter.todoist_completed_at = completedAtIso;
-        frontmatter.todoist_completion_events = appendLocalCompletionEvent(
-          frontmatter.todoist_completion_events,
-          {
-            id: makeLocalCompletionEventId(target, completedAtIso),
-            task_id: target.taskId,
-            project_id: target.identity.projectId,
-            completed_at: completedAtIso,
-          },
-        );
       } else {
         delete frontmatter.todoist_completed_at;
       }
     });
+    if (completedAtIso !== undefined) {
+      await this.persistLocalCompletionEvent(target, completedAtIso);
+    }
+  }
+
+  private async persistLocalCompletionEvent(
+    target: ManagedProjectTaskTarget,
+    completedAt: string,
+  ): Promise<void> {
+    if (this.catalogStorage === undefined || target.projectId === undefined) {
+      return;
+    }
+    const catalog = this.catalogStorage.getCatalog(target.mappingId);
+    if (catalog === null) {
+      return;
+    }
+    const event = {
+      id: `${LOCAL_COMPLETION_EVENT_PREFIX}${JSON.stringify([
+        target.mappingId,
+        target.rootProjectId,
+        target.taskId,
+        completedAt,
+      ])}`,
+      taskId: target.taskId,
+      projectId: target.projectId,
+      completedAt,
+    };
+    if (!catalog.completionEvents.some(({ id }) => id === event.id)) {
+      catalog.completionEvents.push(event);
+      catalog.completionEvents.sort((left, right) => {
+        const byTime = left.completedAt.localeCompare(right.completedAt);
+        return byTime !== 0 ? byTime : left.id.localeCompare(right.id);
+      });
+      await this.catalogStorage.persistCatalogs([catalog]);
+    }
   }
 
   private requireSameIdentity(
@@ -333,15 +429,26 @@ export class ProjectTaskCommandService {
     frontmatter: ManagedFrontmatter,
   ): void {
     const identity = readManagedNoteIdentity(frontmatter);
-    if (
-      identity === null ||
-      identity.taskId !== target.identity.taskId ||
-      identity.mappingId !== target.identity.mappingId ||
-      identity.rootProjectId !== target.identity.rootProjectId ||
-      identity.projectId !== target.identity.projectId
-    ) {
+    if (identity === null || identity.taskId !== target.identity.taskId) {
       throw new Error("The managed Todoist task identity changed before its status was projected");
     }
+  }
+
+  private async restoreCompletedProperty(target: ManagedProjectTaskTarget): Promise<void> {
+    await this.projectionCoordinator.runInternalMutation(
+      this.automaticProjectionPaths(target.file.path),
+      async () => {
+        await this.fileManager.processFrontMatter(target.file, (frontmatter: unknown) => {
+          if (!isRecord(frontmatter)) {
+            throw new Error(`Invalid frontmatter in '${target.file.path}'`);
+          }
+          this.requireSameIdentity(target, frontmatter);
+          // Only repair the editable switch. The canonical Project sync projection remains the
+          // sole owner of status timestamps and completion history.
+          frontmatter.todoist_completed = target.status === "completed";
+        });
+      },
+    );
   }
 
   private async syncAfterRemoteMutation(taskId: string): Promise<void> {
@@ -376,31 +483,3 @@ export class ProjectTaskCommandService {
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
-
-const makeLocalCompletionEventId = (
-  target: ManagedProjectTaskTarget,
-  completedAt: string,
-): string =>
-  `${LOCAL_COMPLETION_EVENT_PREFIX}${JSON.stringify([
-    target.identity.mappingId ?? null,
-    target.identity.rootProjectId,
-    target.taskId,
-    completedAt,
-  ])}`;
-
-const appendLocalCompletionEvent = (
-  current: unknown,
-  event: Record<string, string>,
-): Record<string, string>[] => {
-  const result = Array.isArray(current)
-    ? current.filter(
-        (entry): entry is Record<string, string> =>
-          isRecord(entry) &&
-          typeof entry.id === "string" &&
-          typeof entry.task_id === "string" &&
-          typeof entry.project_id === "string" &&
-          typeof entry.completed_at === "string",
-      )
-    : [];
-  return result.some((entry) => entry.id === event.id) ? result : [...result, event];
-};

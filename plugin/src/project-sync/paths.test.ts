@@ -2,7 +2,13 @@ import { describe, expect, it } from "vitest";
 
 import { makeProject } from "@/factories/data";
 
-import { makeProjectSegments, makeTaskFilename, sanitizePathSegment, truncateUtf8 } from "./paths";
+import {
+  makeProjectSegments,
+  makeTaskFilename,
+  makeTaskFolderSegment,
+  sanitizePathSegment,
+  truncateUtf8,
+} from "./paths";
 
 describe("project sync paths", () => {
   it("sanitizes cross-platform path characters and reserved names", () => {
@@ -21,6 +27,15 @@ describe("project sync paths", () => {
     expect(makeTaskFilename("Read RFC")).toBe("Read RFC.md");
     expect(makeTaskFilename("Read RFC", 2)).toBe("Read RFC (2).md");
     expect(makeTaskFilename("...")).toBe("Untitled task.md");
+  });
+
+  it("uses matching portable names for parent-task folders and their notes", () => {
+    expect(makeTaskFolderSegment("Parent task")).toBe("Parent task");
+    expect(makeTaskFolderSegment("Parent task", 2)).toBe("Parent task (2)");
+    expect(makeTaskFilename(makeTaskFolderSegment("Parent task", 2))).toBe("Parent task (2).md");
+    expect(
+      new TextEncoder().encode(makeTaskFolderSegment("网络任务".repeat(100))).length,
+    ).toBeLessThanOrEqual(96);
   });
 
   it("keeps the complete Unicode filename within its UTF-8 byte budget", () => {

@@ -12,6 +12,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### ✨ Features
+
+- Project sync now represents task hierarchy directly in the Vault: a task with subtasks becomes a same-named folder containing its own Markdown note and its direct children, with the same structure applied recursively for deeper subtasks.
+- Replaced the raw managed task body with a compact Obsidian-styled task card with collapsible subtask controls, while keeping user-relevant task fields visible as native Markdown properties for Bases.
+- Added automatic Todoist write-back when `todoist_completed` is checked or unchecked, including serialized updates and rollback after rejected requests.
+
+### 🔁 Changes
+
+- Documented and tested `todoist_project_path` as an ordered root-to-current-project list.
+- Simplified Project sync notes to one binding identifier, `todoist_task_id`; synchronization-only ownership, hierarchy IDs, missing counters, order, and completion history now live in the plugin's `data.json` catalog.
+
 ## v2.9.7 (2026-08-13)
 
 ### 🔁 Changes

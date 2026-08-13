@@ -10,8 +10,16 @@ import {
 } from "obsidian";
 
 import {
+  makeProjectCatalog,
+  mergeProjectCompletionEvents,
+  type ProjectCatalog,
+  type ProjectCatalogStorage,
+} from "./catalog";
+import {
+  applyManagedTaskRelationships,
   isRecoverableManagedFrontmatterResidue,
   isSameUserOwnedTaskDocument,
+  LEGACY_IMPLEMENTATION_FRONTMATTER_KEYS,
   MANAGED_BODY_START,
   ManagedBodyConflictError,
   type ManagedFrontmatter,
@@ -20,6 +28,7 @@ import {
   makeTaskFrontmatter,
   readManagedNoteIdentity,
   readUserOwnedTaskDocument,
+  removeLegacyImplementationFrontmatter,
   renderNewTaskDocument,
   renderTaskDocumentWithUserContent,
   replaceManagedTaskDocument,
@@ -31,6 +40,7 @@ import {
   makeDisambiguatedProjectSegment,
   makeProjectSegments,
   makeTaskFilename,
+  makeTaskFolderSegment,
   sanitizePathSegment,
 } from "./paths";
 import type {
@@ -40,6 +50,7 @@ import type {
   ProjectSyncResult,
   ProjectSyncRunContext,
   ProjectSyncSnapshot,
+  SnapshotTask,
 } from "./types";
 
 export type OpenFilePathsProvider = () => Iterable<string>;
@@ -66,6 +77,28 @@ type ResolvedFilePath = {
   path: string;
   usedAlternate: boolean;
   unmanagedCollision: boolean;
+};
+
+type ResolvedTaskFolder = {
+  path: string;
+  preferredPath: string;
+  segment: string;
+  usedAlternate: boolean;
+  unmanagedCollision: boolean;
+};
+
+type TaskFilePlan = {
+  depth: number;
+  folder: string;
+  filenameContent: string;
+  preferredPath: string;
+  folderCollision?: ResolvedTaskFolder;
+};
+
+type ProjectedTaskFile = {
+  file: TFile;
+  relationshipFrontmatter: ManagedFrontmatter;
+  outcome: "created" | "updated" | "unchanged";
 };
 
 type ManagedFileScan = {
@@ -104,7 +137,6 @@ type DuplicateCandidate = {
 
 const YAML_DELIMITER_WITH_LEADING_LINE_BREAK = "\n---";
 const YAML_OPENING_LENGTH = 4;
-const LOCAL_EVENT_MATCH_TOLERANCE_MS = 120_000;
 
 const emptyResult = (): ProjectSyncResult => ({
   created: 0,
@@ -177,6 +209,8 @@ export class ObsidianProjectSyncVault {
   private readonly fileManager: FileManager;
   private readonly openFilePaths: OpenFilePathsProvider;
   private readonly runInternalMutation: ProjectSyncInternalMutationRunner;
+  private readonly catalogStorage?: ProjectCatalogStorage;
+  private readonly missingCounts = new Map<string, number>();
   private readonly managedFileIndexes = new WeakMap<object, Promise<IndexedVaultFile[]>>();
 
   constructor(
@@ -184,11 +218,13 @@ export class ObsidianProjectSyncVault {
     fileManager: FileManager,
     openFilePaths: OpenFilePathsProvider,
     runInternalMutation: ProjectSyncInternalMutationRunner = runMutationDirectly,
+    catalogStorage?: ProjectCatalogStorage,
   ) {
     this.vault = vault;
     this.fileManager = fileManager;
     this.openFilePaths = openFilePaths;
     this.runInternalMutation = runInternalMutation;
+    this.catalogStorage = catalogStorage;
   }
 
   public validateConfig(config: ProjectSyncConfig): void {
@@ -249,6 +285,7 @@ export class ObsidianProjectSyncVault {
       throw new Error("Project sync snapshot does not match its configured Todoist project");
     }
     const result = emptyResult();
+    const previousCatalog = this.catalogStorage?.getCatalog(mapping.id) ?? null;
     const rootPath = this.validateRootFolder(mapping.folder);
     const missingHistoricalRoot = mapping.previousFolders.some(
       (folder) => this.tryResolveExistingRootFolder(folder) === null,
@@ -280,13 +317,40 @@ export class ObsidianProjectSyncVault {
     const managedFiles = new Set<TFile>(
       [...configuredByTaskId.values()].flatMap((files) => files.map(({ file }) => file)),
     );
+    const previousTaskFolders = collectProjectedTaskFolders(managedById, rootPath);
+    const taskFilePlans = await this.ensureTaskFilePlans(
+      snapshot.tasks,
+      projectFolders,
+      configuredByTaskId,
+      managedFiles,
+      rootPath,
+      pathIndex,
+      runContext,
+    );
+    runContext.assertValid();
     const completionEventsByTaskId = groupCompletionEventsByTaskId(snapshot.completionEvents ?? []);
+    const projectedFilesByTaskId = new Map<string, ProjectedTaskFile>();
     const conflictedIds = new Set<string>();
     const desiredIds = new Set(snapshot.tasks.map(({ task }) => task.id));
-
-    const orderedSnapshotTasks = [...snapshot.tasks].sort((left, right) =>
-      compareStableIds(left.task.id, right.task.id),
+    for (const taskId of desiredIds) {
+      // A task that reappears starts a new missing-task sequence. Do not let an in-memory count
+      // from an earlier disappearance make a later first miss stale immediately.
+      this.missingCounts.delete(`${mapping.id}\u0000${taskId}`);
+    }
+    const desiredTaskFolders = new Set(
+      [...taskFilePlans.values()].flatMap((plan) =>
+        plan.folderCollision === undefined ? [] : [portablePathKey(plan.folder)],
+      ),
     );
+
+    const orderedSnapshotTasks = [...snapshot.tasks].sort((left, right) => {
+      const depthComparison =
+        (taskFilePlans.get(left.task.id)?.depth ?? 0) -
+        (taskFilePlans.get(right.task.id)?.depth ?? 0);
+      return depthComparison === 0
+        ? compareStableIds(left.task.id, right.task.id)
+        : depthComparison;
+    });
     for (const snapshotTask of orderedSnapshotTasks) {
       runContext.assertValid();
       const taskId = snapshotTask.task.id;
@@ -294,8 +358,8 @@ export class ObsidianProjectSyncVault {
         continue;
       }
 
-      const projectFolder = projectFolders.get(snapshotTask.task.project.id);
-      if (projectFolder === undefined) {
+      const taskFilePlan = taskFilePlans.get(taskId);
+      if (taskFilePlan === undefined) {
         result.conflicts.push({
           taskId,
           message: `Task '${taskId}' belongs to a project outside the selected hierarchy`,
@@ -314,6 +378,13 @@ export class ObsidianProjectSyncVault {
         completionEventsByTaskId.get(taskId) ?? [],
       );
       const desiredBody = makeManagedBody(snapshotTask.task);
+      if (taskFilePlan.folderCollision?.unmanagedCollision === true) {
+        result.conflicts.push({
+          taskId,
+          path: taskFilePlan.folderCollision.path,
+          message: `Parent-task folder '${taskFilePlan.folderCollision.preferredPath}' is already in use; using '${taskFilePlan.folderCollision.path}'`,
+        });
+      }
       // A duplicate is scoped to this selected mapping/root plus Todoist's immutable task ID.
       // Same-ID notes owned by another configured mapping are migration candidates, not copies
       // that this mapping may discard.
@@ -324,12 +395,11 @@ export class ObsidianProjectSyncVault {
             duplicateFiles,
             desiredFrontmatter,
             desiredBody,
-            projectFolder,
-            snapshotTask.task.content,
+            taskFilePlan.folder,
+            taskFilePlan.filenameContent,
             rootPath,
             pathIndex,
             managedFiles,
-            mapping.id,
             runContext,
           );
           configuredByTaskId.set(taskId, [reconciled.managed]);
@@ -339,6 +409,11 @@ export class ObsidianProjectSyncVault {
           if (!reconciled.updated && !reconciled.moved) {
             result.unchanged++;
           }
+          projectedFilesByTaskId.set(taskId, {
+            file: reconciled.managed.file,
+            relationshipFrontmatter: { ...desiredFrontmatter },
+            outcome: reconciled.updated || reconciled.moved ? "updated" : "unchanged",
+          });
           continue;
         } catch (error: unknown) {
           if (error instanceof ActiveManagedNoteError) {
@@ -395,8 +470,8 @@ export class ObsidianProjectSyncVault {
         continue;
       }
       const resolvedPath = this.resolveAvailableTaskFilePath(
-        projectFolder,
-        snapshotTask.task.content,
+        taskFilePlan.folder,
+        taskFilePlan.filenameContent,
         existing?.file,
         rootPath,
         pathIndex,
@@ -404,13 +479,10 @@ export class ObsidianProjectSyncVault {
       );
       const targetPath = resolvedPath.path;
       if (resolvedPath.unmanagedCollision) {
-        const canonicalPath = normalizePath(
-          `${projectFolder}/${makeTaskFilename(snapshotTask.task.content)}`,
-        );
         result.conflicts.push({
           taskId,
           path: targetPath,
-          message: `Task path '${canonicalPath}' is occupied by an unmanaged vault item; using '${targetPath}'`,
+          message: `Task path '${taskFilePlan.preferredPath}' is occupied by an unmanaged vault item; using '${targetPath}'`,
         });
       }
 
@@ -424,6 +496,11 @@ export class ObsidianProjectSyncVault {
           );
           pathIndex.add(created);
           managedFiles.add(created);
+          projectedFilesByTaskId.set(taskId, {
+            file: created,
+            relationshipFrontmatter: { ...desiredFrontmatter },
+            outcome: "created",
+          });
           runContext.assertValid();
           result.created++;
           continue;
@@ -446,6 +523,11 @@ export class ObsidianProjectSyncVault {
         if (!update.moved && !update.updated) {
           result.unchanged++;
         }
+        projectedFilesByTaskId.set(taskId, {
+          file: existing.file,
+          relationshipFrontmatter: { ...existing.frontmatter },
+          outcome: update.moved || update.updated ? "updated" : "unchanged",
+        });
       } catch (error: unknown) {
         if (error instanceof ActiveManagedNoteError) {
           this.recordDeferred(result, taskId, existing?.file.path, error.message);
@@ -466,6 +548,13 @@ export class ObsidianProjectSyncVault {
         });
       }
     }
+
+    await this.projectTaskRelationships(
+      orderedSnapshotTasks,
+      projectedFilesByTaskId,
+      result,
+      runContext,
+    );
 
     const orderedManagedEntries = [...managedById].sort(([left], [right]) =>
       compareStableIds(left, right),
@@ -491,13 +580,16 @@ export class ObsidianProjectSyncVault {
       }
 
       const managed = files[0];
+      const catalogTask =
+        previousCatalog?.tasks.find((task) => task.id === taskId) ?? readLegacyCatalogTask(managed);
+      const outOfScopeProjectId =
+        catalogTask?.projectId ?? readLegacyProjectIdFromPath(managed, snapshot.projects);
       try {
         const migration = await this.moveHistoricalManagedFile(
           managed,
           rootPath,
           pathIndex,
           managedFiles,
-          mapping.id,
           runContext,
         );
         if (migration.moved) {
@@ -539,9 +631,13 @@ export class ObsidianProjectSyncVault {
         throw error;
       }
 
-      if (!mapping.includeSubprojects && managed.identity.projectId !== snapshot.rootProjectId) {
+      if (
+        !mapping.includeSubprojects &&
+        outOfScopeProjectId !== undefined &&
+        outOfScopeProjectId !== snapshot.rootProjectId
+      ) {
         try {
-          const updated = await this.markOutOfScope(managed, mapping.id, runContext);
+          const updated = await this.markOutOfScope(managed, runContext);
           result.outOfScope++;
           if (updated) {
             result.updated++;
@@ -567,15 +663,29 @@ export class ObsidianProjectSyncVault {
         continue;
       }
 
+      const missingKey = `${mapping.id}\u0000${taskId}`;
+      const legacyMissingCount = readNonNegativeInteger(
+        managed.frontmatter.todoist_sync_missing_count,
+      );
+      const currentMissingCount =
+        catalogTask?.missingCount ?? this.missingCounts.get(missingKey) ?? legacyMissingCount;
+      const nextMissingCount = Math.min(2, currentMissingCount + 1);
+      this.missingCounts.set(missingKey, nextMissingCount);
       let missingUpdate: { updated: boolean; becameStale: boolean };
       try {
-        missingUpdate = await this.markMissing(managed, snapshot.syncedAt, mapping.id, runContext);
+        missingUpdate = await this.markMissing(
+          managed,
+          snapshot.syncedAt,
+          nextMissingCount,
+          runContext,
+        );
       } catch (error: unknown) {
         if (error instanceof ActiveManagedNoteError) {
           this.recordDeferred(result, taskId, managed.file.path, error.message);
           continue;
         }
         if (error instanceof ManagedNoteIdentityConflictError) {
+          this.missingCounts.set(missingKey, currentMissingCount);
           result.conflicts.push({
             taskId,
             path: managed.file.path,
@@ -596,6 +706,13 @@ export class ObsidianProjectSyncVault {
       }
     }
 
+    await this.cleanupObsoleteTaskFolders(
+      previousTaskFolders,
+      desiredTaskFolders,
+      rootPath,
+      runContext,
+    );
+
     const historicalOwnedNoteRemains = [...managedById.values()].some((files) =>
       files.some(({ file }) => !isPathInside(rootPath, normalizePath(file.path))),
     );
@@ -608,7 +725,127 @@ export class ObsidianProjectSyncVault {
       result.settledMappingIds.push(mapping.id);
     }
 
+    await this.persistCatalogState(snapshot, mapping, previousCatalog, managedById);
+
     return result;
+  }
+
+  /**
+   * Write task hierarchy only after every canonical file has reached its final path. This keeps
+   * generated links correct when a single sync creates or moves both sides of a relationship.
+   */
+  private async projectTaskRelationships(
+    snapshotTasks: readonly SnapshotTask[],
+    projectedFilesByTaskId: ReadonlyMap<string, ProjectedTaskFile>,
+    result: ProjectSyncResult,
+    runContext: ProjectSyncRunContext,
+  ): Promise<void> {
+    const tasksById = new Map(snapshotTasks.map(({ task }) => [task.id, task] as const));
+    const parentByTaskId = makeSafeTaskParentMap(
+      snapshotTasks,
+      new Map(snapshotTasks.map((snapshotTask) => [snapshotTask.task.id, snapshotTask])),
+    );
+    const childrenByTaskId = new Map<string, (typeof snapshotTasks)[number]["task"][]>();
+    for (const [taskId, parentId] of parentByTaskId) {
+      const task = tasksById.get(taskId);
+      if (task === undefined || !projectedFilesByTaskId.has(taskId)) {
+        continue;
+      }
+      const children = childrenByTaskId.get(parentId) ?? [];
+      children.push(task);
+      childrenByTaskId.set(parentId, children);
+    }
+    for (const children of childrenByTaskId.values()) {
+      children.sort(compareTaskProjectionOrder);
+    }
+
+    for (const snapshotTask of snapshotTasks) {
+      runContext.assertValid();
+      const projected = projectedFilesByTaskId.get(snapshotTask.task.id);
+      if (projected === undefined) {
+        continue;
+      }
+      const parentFile =
+        snapshotTask.task.parentId === undefined
+          ? undefined
+          : projectedFilesByTaskId.get(parentByTaskId.get(snapshotTask.task.id) ?? "")?.file;
+      const subtasks = (childrenByTaskId.get(snapshotTask.task.id) ?? []).flatMap((child) => {
+        const file = projectedFilesByTaskId.get(child.id)?.file;
+        return file === undefined
+          ? []
+          : [
+              this.fileManager.generateMarkdownLink(
+                file,
+                projected.file.path,
+                undefined,
+                child.content,
+              ),
+            ];
+      });
+      const parentTask =
+        parentFile === undefined
+          ? undefined
+          : this.fileManager.generateMarkdownLink(
+              parentFile,
+              projected.file.path,
+              undefined,
+              tasksById.get(parentByTaskId.get(snapshotTask.task.id) ?? "")?.content ?? "",
+            );
+
+      if (
+        parentTask === undefined &&
+        subtasks.length === 0 &&
+        !hasTaskRelationshipProperties(projected.relationshipFrontmatter)
+      ) {
+        continue;
+      }
+
+      const desiredRelationshipFrontmatter = { ...projected.relationshipFrontmatter };
+      if (
+        !applyManagedTaskRelationships(desiredRelationshipFrontmatter, { parentTask, subtasks })
+      ) {
+        continue;
+      }
+
+      let changed = false;
+      try {
+        await this.runInternalMutation([projected.file.path], async () => {
+          await this.fileManager.processFrontMatter(projected.file, (frontmatter: unknown) => {
+            runContext.assertValid();
+            if (!isRecord(frontmatter)) {
+              throw new ManagedNoteIdentityConflictError(
+                `Invalid frontmatter in '${projected.file.path}'`,
+              );
+            }
+            const identity = readManagedNoteIdentity(frontmatter);
+            if (identity?.taskId !== snapshotTask.task.id) {
+              throw new ManagedNoteIdentityConflictError(
+                `Managed note '${projected.file.path}' changed identity before task relationships were projected`,
+              );
+            }
+            changed = applyManagedTaskRelationships(frontmatter, { parentTask, subtasks });
+          });
+        });
+      } catch (error: unknown) {
+        if (!(error instanceof ManagedNoteIdentityConflictError)) {
+          throw error;
+        }
+        result.conflicts.push({
+          taskId: snapshotTask.task.id,
+          path: projected.file.path,
+          message: error.message,
+          projectionBlocked: true,
+        });
+        continue;
+      }
+
+      if (!changed || projected.outcome === "created" || projected.outcome === "updated") {
+        continue;
+      }
+      result.unchanged = Math.max(0, result.unchanged - 1);
+      result.updated++;
+      projected.outcome = "updated";
+    }
   }
 
   private validateRootFolder(folder: string): string {
@@ -728,6 +965,335 @@ export class ObsidianProjectSyncVault {
     }
   }
 
+  private async ensureTaskFilePlans(
+    snapshotTasks: readonly SnapshotTask[],
+    projectFolders: ReadonlyMap<string, string>,
+    configuredByTaskId: ReadonlyMap<string, readonly ManagedFile[]>,
+    managedFiles: ReadonlySet<TFile>,
+    rootPath: string,
+    pathIndex: PortableVaultPathIndex,
+    runContext: ProjectSyncRunContext,
+  ): Promise<Map<string, TaskFilePlan>> {
+    const tasksById = new Map(
+      snapshotTasks.map((snapshotTask) => [snapshotTask.task.id, snapshotTask]),
+    );
+    const parentByTaskId = makeSafeTaskParentMap(snapshotTasks, tasksById);
+    const desiredTaskIds = new Set(tasksById.keys());
+    const parentTaskIds = new Set(parentByTaskId.values());
+    const childrenByTaskId = new Map<string, string[]>();
+    for (const [taskId, parentId] of parentByTaskId) {
+      const children = childrenByTaskId.get(parentId) ?? [];
+      children.push(taskId);
+      childrenByTaskId.set(parentId, children);
+    }
+    const managedTaskIdByFile = new Map<TFile, string>();
+    for (const [taskId, files] of configuredByTaskId) {
+      for (const { file } of files) {
+        managedTaskIdByFile.set(file, taskId);
+      }
+    }
+    const plans = new Map<string, TaskFilePlan>();
+    const reservedFolders = new Set([...projectFolders.values()].map(portablePathKey));
+    const visiting = new Set<string>();
+
+    const planTask = async (snapshotTask: SnapshotTask): Promise<TaskFilePlan | undefined> => {
+      const taskId = snapshotTask.task.id;
+      const existingPlan = plans.get(taskId);
+      if (existingPlan !== undefined) {
+        return existingPlan;
+      }
+      if (visiting.has(taskId)) {
+        return undefined;
+      }
+      visiting.add(taskId);
+
+      const parentId = parentByTaskId.get(taskId);
+      const parentPlan =
+        parentId === undefined
+          ? undefined
+          : await planTask(tasksById.get(parentId) as SnapshotTask);
+      const containingFolder =
+        parentPlan?.folder ?? projectFolders.get(snapshotTask.task.project.id);
+      if (containingFolder === undefined) {
+        visiting.delete(taskId);
+        return undefined;
+      }
+
+      let plan: TaskFilePlan;
+      if (parentTaskIds.has(taskId)) {
+        const existingFiles = configuredByTaskId.get(taskId) ?? [];
+        const current = existingFiles.length === 1 ? existingFiles[0]?.file : undefined;
+        const resolvedFolder = await this.resolveTaskFolder(
+          containingFolder,
+          snapshotTask.task.content,
+          current,
+          rootPath,
+          pathIndex,
+          reservedFolders,
+          collectTaskSubtreeIds(taskId, childrenByTaskId),
+          desiredTaskIds,
+          managedFiles,
+          managedTaskIdByFile,
+          runContext,
+        );
+        plan = {
+          depth: (parentPlan?.depth ?? -1) + 1,
+          folder: resolvedFolder.path,
+          filenameContent: resolvedFolder.segment,
+          preferredPath: normalizePath(
+            `${resolvedFolder.path}/${makeTaskFilename(resolvedFolder.segment)}`,
+          ),
+          folderCollision: resolvedFolder,
+        };
+      } else {
+        plan = {
+          depth: (parentPlan?.depth ?? -1) + 1,
+          folder: containingFolder,
+          filenameContent: snapshotTask.task.content,
+          preferredPath: normalizePath(
+            `${containingFolder}/${makeTaskFilename(snapshotTask.task.content)}`,
+          ),
+        };
+      }
+      plans.set(taskId, plan);
+      visiting.delete(taskId);
+      return plan;
+    };
+
+    for (const snapshotTask of [...snapshotTasks].sort((left, right) =>
+      compareStableIds(left.task.id, right.task.id),
+    )) {
+      runContext.assertValid();
+      await planTask(snapshotTask);
+    }
+    return plans;
+  }
+
+  private async resolveTaskFolder(
+    containingFolder: string,
+    content: string,
+    current: TFile | undefined,
+    rootPath: string,
+    pathIndex: PortableVaultPathIndex,
+    reservedFolders: Set<string>,
+    allowedTaskIds: ReadonlySet<string>,
+    desiredTaskIds: ReadonlySet<string>,
+    managedFiles: ReadonlySet<TFile>,
+    managedTaskIdByFile: ReadonlyMap<TFile, string>,
+    runContext: ProjectSyncRunContext,
+  ): Promise<ResolvedTaskFolder> {
+    const preferredPath = normalizePath(`${containingFolder}/${makeTaskFolderSegment(content)}`);
+    let preferredCollisionIndex = this.currentTaskFolderCollisionIndex(
+      containingFolder,
+      content,
+      current,
+    );
+    let nextCollisionIndex = 1;
+    const triedCollisionIndexes = new Set<number>();
+    let unmanagedCollision = false;
+    for (;;) {
+      runContext.assertValid();
+      const collisionIndex = preferredCollisionIndex ?? nextCollisionIndex++;
+      preferredCollisionIndex = undefined;
+      if (triedCollisionIndexes.has(collisionIndex)) {
+        continue;
+      }
+      triedCollisionIndexes.add(collisionIndex);
+      const segment = makeTaskFolderSegment(content, collisionIndex);
+      const path = normalizePath(`${containingFolder}/${segment}`);
+      const pathKey = portablePathKey(path);
+      this.assertWithinRoot(rootPath, path);
+      if (reservedFolders.has(pathKey)) {
+        continue;
+      }
+
+      const notePath = normalizePath(`${path}/${makeTaskFilename(segment)}`);
+      const noteOccupants = pathIndex.occupants(notePath, current);
+      if (noteOccupants.length > 0) {
+        unmanagedCollision ||= noteOccupants.some(
+          (occupant) =>
+            !(occupant instanceof TFile) || current === undefined || occupant !== current,
+        );
+        continue;
+      }
+
+      const folder = this.vault.getFolderByPath(path);
+      if (folder !== null) {
+        if (
+          !this.isReusableTaskFolder(
+            path,
+            current,
+            allowedTaskIds,
+            desiredTaskIds,
+            managedFiles,
+            managedTaskIdByFile,
+          )
+        ) {
+          unmanagedCollision = true;
+          continue;
+        }
+        reservedFolders.add(pathKey);
+        return {
+          path,
+          preferredPath,
+          segment,
+          usedAlternate: collisionIndex > 1,
+          unmanagedCollision,
+        };
+      }
+      if (this.vault.getAbstractFileByPath(path) !== null) {
+        unmanagedCollision = true;
+        continue;
+      }
+
+      try {
+        runContext.assertValid();
+        const created = await this.runInternalMutation(
+          [path],
+          async () => await this.vault.createFolder(path),
+        );
+        pathIndex.add(created);
+        reservedFolders.add(pathKey);
+        runContext.assertValid();
+        return {
+          path,
+          preferredPath,
+          segment,
+          usedAlternate: collisionIndex > 1,
+          unmanagedCollision,
+        };
+      } catch (error: unknown) {
+        const racedFolder = this.vault.getFolderByPath(path);
+        if (racedFolder !== null && !reservedFolders.has(pathKey)) {
+          pathIndex.add(racedFolder);
+          reservedFolders.add(pathKey);
+          return {
+            path,
+            preferredPath,
+            segment,
+            usedAlternate: collisionIndex > 1,
+            unmanagedCollision,
+          };
+        }
+        if (this.vault.getAbstractFileByPath(path) === null) {
+          throw error;
+        }
+        unmanagedCollision = true;
+      }
+    }
+  }
+
+  private isReusableTaskFolder(
+    path: string,
+    current: TFile | undefined,
+    allowedTaskIds: ReadonlySet<string>,
+    desiredTaskIds: ReadonlySet<string>,
+    managedFiles: ReadonlySet<TFile>,
+    managedTaskIdByFile: ReadonlyMap<TFile, string>,
+  ): boolean {
+    const allowedManagedPaths = new Set(
+      [...managedTaskIdByFile].flatMap(([file, taskId]) =>
+        allowedTaskIds.has(taskId) || !desiredTaskIds.has(taskId) ? [normalizePath(file.path)] : [],
+      ),
+    );
+    if (current !== undefined) {
+      allowedManagedPaths.add(normalizePath(current.path));
+    }
+    for (const entry of this.vault.getAllLoadedFiles()) {
+      const entryPath = normalizePath(entry.path);
+      if (!entryPath.startsWith(`${path}/`)) {
+        continue;
+      }
+      if (this.vault.getFolderByPath(entryPath) !== null) {
+        if (![...allowedManagedPaths].some((filePath) => filePath.startsWith(`${entryPath}/`))) {
+          return false;
+        }
+        continue;
+      }
+      if (entry === current) {
+        continue;
+      }
+      if (!(entry instanceof TFile) || !managedFiles.has(entry)) {
+        return false;
+      }
+      const taskId = managedTaskIdByFile.get(entry);
+      if (taskId === undefined || (desiredTaskIds.has(taskId) && !allowedTaskIds.has(taskId))) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  private async cleanupObsoleteTaskFolders(
+    candidates: ReadonlySet<string>,
+    desiredFolders: ReadonlySet<string>,
+    rootPath: string,
+    runContext: ProjectSyncRunContext,
+  ): Promise<void> {
+    const ordered = [...candidates].sort((left, right) => {
+      const depthComparison = right.split("/").length - left.split("/").length;
+      return depthComparison === 0 ? comparePortablePaths(left, right) : depthComparison;
+    });
+    for (const path of ordered) {
+      runContext.assertValid();
+      if (desiredFolders.has(portablePathKey(path)) || !isPathInside(rootPath, path)) {
+        continue;
+      }
+      const folder = this.vault.getFolderByPath(path);
+      if (folder === null) {
+        continue;
+      }
+      if (
+        this.vault
+          .getAllLoadedFiles()
+          .some((entry) => normalizePath(entry.path).startsWith(`${path}/`))
+      ) {
+        continue;
+      }
+      await this.runInternalMutation([path], async () => await this.fileManager.trashFile(folder));
+      runContext.assertValid();
+    }
+  }
+
+  private currentTaskFolderCollisionIndex(
+    containingFolder: string,
+    content: string,
+    current: TFile | undefined,
+  ): number | undefined {
+    if (current === undefined) {
+      return undefined;
+    }
+    const currentPath = normalizePath(current.path);
+    const fileSeparator = currentPath.lastIndexOf("/");
+    if (fileSeparator < 0) {
+      return undefined;
+    }
+    const currentFolder = currentPath.slice(0, fileSeparator);
+    const folderSeparator = currentFolder.lastIndexOf("/");
+    const currentContainingFolder =
+      folderSeparator < 0 ? "" : currentFolder.slice(0, folderSeparator);
+    if (currentContainingFolder !== normalizePath(containingFolder)) {
+      return undefined;
+    }
+    const segment = currentFolder.slice(folderSeparator + 1);
+    if (currentPath !== normalizePath(`${currentFolder}/${makeTaskFilename(segment)}`)) {
+      return undefined;
+    }
+    if (segment === makeTaskFolderSegment(content)) {
+      return 1;
+    }
+    const suffix = segment.match(/ \((\d+)\)$/u);
+    if (suffix === null) {
+      return undefined;
+    }
+    const collisionIndex = Number(suffix[1]);
+    return Number.isSafeInteger(collisionIndex) &&
+      collisionIndex >= 2 &&
+      segment === makeTaskFolderSegment(content, collisionIndex)
+      ? collisionIndex
+      : undefined;
+  }
+
   private resolveAvailableTaskFilePath(
     folder: string,
     content: string,
@@ -805,7 +1371,6 @@ export class ObsidianProjectSyncVault {
     currentRoot: string,
     pathIndex: PortableVaultPathIndex,
     managedFiles: ReadonlySet<TFile>,
-    mappingId: string,
     runContext: ProjectSyncRunContext,
   ): Promise<{ moved: boolean; usedAlternate: boolean; unmanagedCollision: boolean }> {
     const currentPath = normalizePath(managed.file.path);
@@ -840,7 +1405,7 @@ export class ObsidianProjectSyncVault {
     runContext.assertValid();
     this.assertBackgroundFile(managed.file);
     await this.ensureParentFolders(resolved.path, currentRoot, pathIndex, runContext);
-    await this.assertLiveManagedIdentity(managed, mappingId, [managed.identity.projectId]);
+    await this.assertLiveManagedIdentity(managed);
     this.assertLivePathAvailable(resolved.path, managed.file);
     const oldPath = managed.file.path;
     try {
@@ -878,7 +1443,6 @@ export class ObsidianProjectSyncVault {
     rootPath: string,
     pathIndex: PortableVaultPathIndex,
     managedFiles: Set<TFile>,
-    mappingId: string,
     runContext: ProjectSyncRunContext,
   ): Promise<{ managed: ManagedFile; moved: boolean; updated: boolean }> {
     runContext.assertValid();
@@ -896,7 +1460,6 @@ export class ObsidianProjectSyncVault {
         managed.identity,
         live.identity,
         taskId,
-        mappingId,
         managed.file.path,
       );
       candidates.push({
@@ -958,7 +1521,6 @@ export class ObsidianProjectSyncVault {
         candidate.managed.identity,
         current.identity,
         taskId,
-        mappingId,
         candidate.managed.file.path,
       );
       const currentUser = readUserOwnedTaskDocument(
@@ -980,7 +1542,6 @@ export class ObsidianProjectSyncVault {
         canonical.managed.identity,
         current.identity,
         taskId,
-        mappingId,
         canonical.managed.file.path,
       );
       const currentUser = readUserOwnedTaskDocument(
@@ -1007,7 +1568,6 @@ export class ObsidianProjectSyncVault {
           duplicate.managed.identity,
           current.identity,
           taskId,
-          mappingId,
           duplicate.managed.file.path,
         );
         const currentUser = readUserOwnedTaskDocument(
@@ -1076,17 +1636,9 @@ export class ObsidianProjectSyncVault {
     expected: ManagedNoteIdentity,
     current: ManagedNoteIdentity,
     taskId: string,
-    mappingId: string,
     path: string,
   ): void {
-    const mappingMatches =
-      current.mappingId === mappingId ||
-      (current.mappingId === undefined && expected.mappingId === undefined);
-    if (
-      current.taskId !== taskId ||
-      current.rootProjectId !== expected.rootProjectId ||
-      !mappingMatches
-    ) {
+    if (current.taskId !== taskId || current.taskId !== expected.taskId) {
       throw new DuplicateManagedNoteConflictError(
         `Managed note '${path}' changed Todoist identity while duplicate reconciliation was running; it was preserved`,
       );
@@ -1251,21 +1803,15 @@ export class ObsidianProjectSyncVault {
   private async markMissing(
     managed: ManagedFile,
     syncedAt: string,
-    mappingId: string,
+    missingCount: number,
     runContext: ProjectSyncRunContext,
   ): Promise<{ updated: boolean; becameStale: boolean }> {
     runContext.assertValid();
     const live = await this.readLiveManagedNote(managed.file);
     runContext.assertValid();
-    this.assertSameManagedIdentity(
-      managed.identity,
-      live.identity,
-      mappingId,
-      [managed.identity.projectId],
-      managed.file.path,
-    );
+    this.assertSameManagedIdentity(managed.identity, live.identity, managed.file.path);
     this.assertMissingSnapshotNotOlder(live.frontmatter, syncedAt, managed.file.path);
-    if (!this.needsMissingUpdate(live.frontmatter, live.identity, mappingId)) {
+    if (!this.needsMissingUpdate(live.frontmatter, missingCount)) {
       return { updated: false, becameStale: false };
     }
 
@@ -1278,35 +1824,17 @@ export class ObsidianProjectSyncVault {
       await this.processFileInternally(managed.file, (content) => {
         runContext.assertValid();
         const current = this.parseLiveManagedNote(content, managed.file.path);
-        this.assertSameManagedIdentity(
-          managed.identity,
-          current.identity,
-          mappingId,
-          [managed.identity.projectId],
-          managed.file.path,
-        );
+        this.assertSameManagedIdentity(managed.identity, current.identity, managed.file.path);
         this.assertMissingSnapshotNotOlder(current.frontmatter, syncedAt, managed.file.path);
-        if (!this.needsMissingUpdate(current.frontmatter, current.identity, mappingId)) {
+        if (!this.needsMissingUpdate(current.frontmatter, missingCount)) {
           throw new NoManagedDocumentChangeError();
         }
 
         const nextFrontmatter = { ...current.frontmatter };
-        const nextMissingCount = Math.min(2, current.identity.missingCount + 1);
-        becameStale = current.identity.missingCount < 2 && nextMissingCount >= 2;
-        if (nextFrontmatter.todoist_sync_missing_count !== nextMissingCount) {
-          nextFrontmatter.todoist_sync_missing_count = nextMissingCount;
-          updated = true;
-        }
-        if (nextFrontmatter.todoist_sync_mapping_id !== mappingId) {
-          nextFrontmatter.todoist_sync_mapping_id = mappingId;
-          updated = true;
-        }
-        if (nextMissingCount >= 2 && nextFrontmatter.todoist_status !== "stale") {
+        updated = removeLegacyImplementationFrontmatter(nextFrontmatter);
+        becameStale = nextFrontmatter.todoist_status !== "stale";
+        if (becameStale) {
           nextFrontmatter.todoist_status = "stale";
-          updated = true;
-        }
-        if (nextMissingCount >= 2 && typeof nextFrontmatter.todoist_stale_since !== "string") {
-          nextFrontmatter.todoist_stale_since = syncedAt;
           updated = true;
         }
 
@@ -1321,63 +1849,6 @@ export class ObsidianProjectSyncVault {
     runContext.assertValid();
 
     return { updated, becameStale };
-  }
-
-  private async markOutOfScope(
-    managed: ManagedFile,
-    mappingId: string,
-    runContext: ProjectSyncRunContext,
-  ): Promise<boolean> {
-    runContext.assertValid();
-    const live = await this.readLiveManagedNote(managed.file);
-    runContext.assertValid();
-    this.assertSameManagedIdentity(
-      managed.identity,
-      live.identity,
-      mappingId,
-      [managed.identity.projectId],
-      managed.file.path,
-    );
-    if (!this.needsOutOfScopeUpdate(live.frontmatter, live.identity, mappingId)) {
-      return false;
-    }
-
-    let updated = false;
-    runContext.assertValid();
-    this.assertBackgroundFile(managed.file);
-    try {
-      await this.processFrontmatterInternally(managed.file, (frontmatter: unknown) => {
-        runContext.assertValid();
-        if (!isRecord(frontmatter)) {
-          throw new ManagedNoteIdentityConflictError(
-            `Managed note '${managed.file.path}' no longer has valid frontmatter`,
-          );
-        }
-        const identity = this.requireLiveManagedIdentity(frontmatter, managed.file.path);
-        this.assertSameManagedIdentity(
-          managed.identity,
-          identity,
-          mappingId,
-          [managed.identity.projectId],
-          managed.file.path,
-        );
-        if (!this.needsOutOfScopeUpdate(frontmatter, identity, mappingId)) {
-          throw new NoManagedDocumentChangeError();
-        }
-
-        frontmatter.todoist_status = "out_of_scope";
-        frontmatter.todoist_sync_mapping_id = mappingId;
-        frontmatter.todoist_sync_missing_count = 0;
-        delete frontmatter.todoist_stale_since;
-        updated = true;
-      });
-    } catch (error: unknown) {
-      if (!(error instanceof NoManagedDocumentChangeError)) {
-        throw error;
-      }
-    }
-    runContext.assertValid();
-    return updated;
   }
 
   private async createManagedFile(
@@ -1401,21 +1872,45 @@ export class ObsidianProjectSyncVault {
     return created;
   }
 
+  private async markOutOfScope(
+    managed: ManagedFile,
+    runContext: ProjectSyncRunContext,
+  ): Promise<boolean> {
+    runContext.assertValid();
+    const live = await this.readLiveManagedNote(managed.file);
+    this.assertSameManagedIdentity(managed.identity, live.identity, managed.file.path);
+    if (
+      live.frontmatter.todoist_status === "out_of_scope" &&
+      !hasLegacyImplementationFrontmatter(live.frontmatter)
+    ) {
+      return false;
+    }
+    this.assertBackgroundFile(managed.file);
+    await this.processFileInternally(managed.file, (content) => {
+      runContext.assertValid();
+      const current = this.parseLiveManagedNote(content, managed.file.path);
+      this.assertSameManagedIdentity(managed.identity, current.identity, managed.file.path);
+      if (
+        current.frontmatter.todoist_status === "out_of_scope" &&
+        !hasLegacyImplementationFrontmatter(current.frontmatter)
+      ) {
+        throw new NoManagedDocumentChangeError();
+      }
+      const nextFrontmatter = { ...current.frontmatter, todoist_status: "out_of_scope" };
+      removeLegacyImplementationFrontmatter(nextFrontmatter);
+      const yaml = dumpYaml(nextFrontmatter, { lineWidth: -1, noRefs: true });
+      return `---\n${yaml}---\n${content.slice(current.contentStart)}`;
+    });
+    runContext.assertValid();
+    return true;
+  }
+
   private async processFileInternally(
     file: TFile,
     processor: (content: string) => string,
   ): Promise<void> {
     await this.runInternalMutation([file.path], async () => {
       await this.vault.process(file, processor);
-    });
-  }
-
-  private async processFrontmatterInternally(
-    file: TFile,
-    processor: (frontmatter: unknown) => void,
-  ): Promise<void> {
-    await this.runInternalMutation([file.path], async () => {
-      await this.fileManager.processFrontMatter(file, processor);
     });
   }
 
@@ -1471,20 +1966,9 @@ export class ObsidianProjectSyncVault {
   private assertSameManagedIdentity(
     expected: ManagedNoteIdentity,
     current: ManagedNoteIdentity,
-    targetMappingId: string | undefined,
-    allowedProjectIds: readonly string[],
     path: string,
   ): void {
-    const mappingMatches =
-      current.mappingId === expected.mappingId ||
-      (expected.mappingId === undefined && current.mappingId === targetMappingId);
-    const projectMatches = allowedProjectIds.includes(current.projectId);
-    if (
-      current.taskId !== expected.taskId ||
-      current.rootProjectId !== expected.rootProjectId ||
-      !mappingMatches ||
-      !projectMatches
-    ) {
+    if (current.taskId !== expected.taskId) {
       throw new ManagedNoteIdentityConflictError(
         `Managed note '${path}' changed identity before synchronization; it was not overwritten`,
       );
@@ -1505,19 +1989,9 @@ export class ObsidianProjectSyncVault {
     );
   }
 
-  private async assertLiveManagedIdentity(
-    managed: ManagedFile,
-    targetMappingId: string | undefined,
-    allowedProjectIds: readonly string[],
-  ): Promise<void> {
+  private async assertLiveManagedIdentity(managed: ManagedFile): Promise<void> {
     const live = await this.readLiveManagedNote(managed.file);
-    this.assertSameManagedIdentity(
-      managed.identity,
-      live.identity,
-      targetMappingId,
-      allowedProjectIds,
-      managed.file.path,
-    );
+    this.assertSameManagedIdentity(managed.identity, live.identity, managed.file.path);
   }
 
   private async assertLiveManagedIdentityTransition(
@@ -1555,10 +2029,6 @@ export class ObsidianProjectSyncVault {
     ) {
       write.todoist_updated_at = current.todoist_updated_at;
     }
-    write.todoist_completion_events = mergeProjectedCompletionEvents(
-      current.todoist_completion_events,
-      desired.todoist_completion_events,
-    );
     return write;
   }
 
@@ -1615,31 +2085,47 @@ export class ObsidianProjectSyncVault {
     }
   }
 
-  private needsMissingUpdate(
-    frontmatter: ManagedFrontmatter,
-    identity: ManagedNoteIdentity,
-    mappingId: string,
-  ): boolean {
-    const nextMissingCount = Math.min(2, identity.missingCount + 1);
+  private needsMissingUpdate(frontmatter: ManagedFrontmatter, missingCount: number): boolean {
     return (
-      nextMissingCount !== identity.missingCount ||
-      identity.mappingId !== mappingId ||
-      (nextMissingCount >= 2 && frontmatter.todoist_status !== "stale") ||
-      (nextMissingCount >= 2 && typeof frontmatter.todoist_stale_since !== "string")
+      hasLegacyImplementationFrontmatter(frontmatter) ||
+      (missingCount >= 2 && frontmatter.todoist_status !== "stale")
     );
   }
 
-  private needsOutOfScopeUpdate(
-    frontmatter: ManagedFrontmatter,
-    identity: ManagedNoteIdentity,
-    mappingId: string,
-  ): boolean {
-    return (
-      frontmatter.todoist_status !== "out_of_scope" ||
-      identity.missingCount !== 0 ||
-      identity.mappingId !== mappingId ||
-      "todoist_stale_since" in frontmatter
+  private async persistCatalogState(
+    snapshot: ProjectSyncSnapshot,
+    mapping: ProjectSyncMapping,
+    previous: ProjectCatalog | null,
+    managedById: ReadonlyMap<string, readonly ManagedFile[]>,
+  ): Promise<void> {
+    if (this.catalogStorage === undefined) {
+      return;
+    }
+    const next = makeProjectCatalog(snapshot, mapping);
+    const desiredIds = new Set(next.tasks.map((task) => task.id));
+    const previousTasks = new Map((previous?.tasks ?? []).map((task) => [task.id, task]));
+    for (const [taskId, managedFiles] of managedById) {
+      if (desiredIds.has(taskId)) {
+        continue;
+      }
+      const task =
+        previousTasks.get(taskId) ??
+        readLegacyCatalogTask(managedFiles[0]) ??
+        readCatalogTaskFromUserProjection(managedFiles[0], snapshot.projects);
+      if (task === undefined) {
+        continue;
+      }
+      const missingCount = this.missingCounts.get(`${mapping.id}\u0000${task.id}`);
+      next.tasks.push({
+        ...task,
+        ...(missingCount === undefined ? {} : { missingCount }),
+      });
+    }
+    next.completionEvents = mergeProjectCompletionEvents(
+      previous?.completionEvents ?? [],
+      next.completionEvents,
     );
+    await this.catalogStorage.persistCatalogs([next]);
   }
 
   private assertLivePathAvailable(path: string, current?: TAbstractFile): void {
@@ -1731,10 +2217,30 @@ export class ObsidianProjectSyncVault {
         }
         continue;
       }
+      const containingRoots = configuredRoots.filter((root) => isPathInside(root.path, filePath));
+      const catalogOwners = containingRoots.filter((root) => {
+        const catalog = this.catalogStorage?.getCatalog(root.mappingId);
+        return (
+          catalog?.rootProjectId === root.rootProjectId &&
+          catalog.tasks.some((task) => task.id === identity.taskId)
+        );
+      });
+      const hasConflictingCatalogOwner = containingRoots.some((root) => {
+        const catalog = this.catalogStorage?.getCatalog(root.mappingId);
+        return (
+          catalog?.tasks.some((task) => task.id === identity.taskId) === true &&
+          catalog.rootProjectId !== root.rootProjectId
+        );
+      });
+      let identityRoots = containingRoots;
+      if (catalogOwners.length > 0) {
+        identityRoots = catalogOwners;
+      } else if (hasConflictingCatalogOwner) {
+        identityRoots = [];
+      }
       const activeIdentityRoot = mostSpecificMatchingIdentityRoot(
-        configuredRoots.filter(({ active }) => active),
+        identityRoots.filter(({ active }) => active),
         filePath,
-        identity,
       );
       if (activeIdentityRoot !== undefined) {
         const managed = {
@@ -1900,6 +2406,156 @@ export class ObsidianProjectSyncVault {
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
+const readNonNegativeInteger = (value: unknown): number =>
+  typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0;
+
+const readLegacyCatalogTask = (
+  managed: ManagedFile | undefined,
+): import("./catalog").ProjectCatalogTask | undefined => {
+  if (managed === undefined) {
+    return undefined;
+  }
+  const frontmatter = managed.frontmatter;
+  const projectId = readNonEmptyString(frontmatter.todoist_project_id);
+  if (projectId === null) {
+    return undefined;
+  }
+  const parentId = readNonEmptyString(frontmatter.todoist_parent_task_id);
+  const sectionId = readNonEmptyString(frontmatter.todoist_section_id);
+  const order =
+    typeof frontmatter.todoist_order === "number" && Number.isFinite(frontmatter.todoist_order)
+      ? frontmatter.todoist_order
+      : 0;
+  const missingCount = readNonNegativeInteger(frontmatter.todoist_sync_missing_count);
+  return {
+    id: managed.identity.taskId,
+    projectId,
+    ...(parentId === null ? {} : { parentId }),
+    ...(sectionId === null ? {} : { sectionId }),
+    order,
+    ...(missingCount === 0 ? {} : { missingCount }),
+  };
+};
+
+const readLegacyProjectIdFromPath = (
+  managed: ManagedFile,
+  currentProjects: readonly { id: string; name: string }[],
+): string | undefined => {
+  const projectPath = managed.frontmatter.todoist_project_path;
+  if (!Array.isArray(projectPath) || projectPath.length === 0) {
+    return undefined;
+  }
+  const projectName = projectPath[projectPath.length - 1];
+  if (typeof projectName !== "string") {
+    return undefined;
+  }
+  const matches = currentProjects.filter((project) => project.name === projectName);
+  return matches.length === 1 ? matches[0]?.id : `legacy-project:${projectName}`;
+};
+
+const readCatalogTaskFromUserProjection = (
+  managed: ManagedFile | undefined,
+  projects: readonly { id: string; name: string }[],
+): import("./catalog").ProjectCatalogTask | undefined => {
+  if (managed === undefined) {
+    return undefined;
+  }
+  const projectId = readLegacyProjectIdFromPath(managed, projects);
+  if (projectId === undefined) {
+    return undefined;
+  }
+  return { id: managed.identity.taskId, projectId, order: 0 };
+};
+
+const hasLegacyImplementationFrontmatter = (frontmatter: ManagedFrontmatter): boolean =>
+  LEGACY_IMPLEMENTATION_FRONTMATTER_KEYS.some((key) => key in frontmatter);
+
+const readNonEmptyString = (value: unknown): string | null =>
+  typeof value === "string" && value.trim() !== "" ? value : null;
+
+const hasTaskRelationshipProperties = (frontmatter: ManagedFrontmatter): boolean =>
+  "todoist_parent_task" in frontmatter || "todoist_subtasks" in frontmatter;
+
+const makeSafeTaskParentMap = (
+  snapshotTasks: readonly SnapshotTask[],
+  tasksById: ReadonlyMap<string, SnapshotTask>,
+): Map<string, string> => {
+  const candidates = new Map<string, string>();
+  for (const { task } of snapshotTasks) {
+    if (task.parentId === undefined || task.parentId === task.id) {
+      continue;
+    }
+    const parent = tasksById.get(task.parentId)?.task;
+    if (parent === undefined || parent.project.id !== task.project.id) {
+      continue;
+    }
+    candidates.set(task.id, parent.id);
+  }
+
+  const safe = new Map<string, string>();
+  for (const [taskId, parentId] of candidates) {
+    const seen = new Set<string>([taskId]);
+    let current: string | undefined = parentId;
+    let cyclic = false;
+    while (current !== undefined) {
+      if (seen.has(current)) {
+        cyclic = true;
+        break;
+      }
+      seen.add(current);
+      current = candidates.get(current);
+    }
+    if (!cyclic) {
+      safe.set(taskId, parentId);
+    }
+  }
+  return safe;
+};
+
+const collectTaskSubtreeIds = (
+  rootTaskId: string,
+  childrenByTaskId: ReadonlyMap<string, readonly string[]>,
+): Set<string> => {
+  const result = new Set<string>();
+  const pending = [rootTaskId];
+  while (pending.length > 0) {
+    const taskId = pending.pop();
+    if (taskId === undefined || result.has(taskId)) {
+      continue;
+    }
+    result.add(taskId);
+    pending.push(...(childrenByTaskId.get(taskId) ?? []));
+  }
+  return result;
+};
+
+const collectProjectedTaskFolders = (
+  managedById: ReadonlyMap<string, readonly ManagedFile[]>,
+  rootPath: string,
+): Set<string> => {
+  const result = new Set<string>();
+  for (const files of managedById.values()) {
+    for (const { file } of files) {
+      const filePath = normalizePath(file.path);
+      const separator = filePath.lastIndexOf("/");
+      if (separator < 0) {
+        continue;
+      }
+      const parentPath = filePath.slice(0, separator);
+      const folderSeparator = parentPath.lastIndexOf("/");
+      const folderSegment = parentPath.slice(folderSeparator + 1);
+      if (
+        parentPath !== rootPath &&
+        isPathInside(rootPath, parentPath) &&
+        filePath === normalizePath(`${parentPath}/${makeTaskFilename(folderSegment)}`)
+      ) {
+        result.add(parentPath);
+      }
+    }
+  }
+  return result;
+};
+
 const groupCompletionEventsByTaskId = (
   events: readonly import("./types").ProjectCompletionEvent[],
 ): Map<string, import("./types").ProjectCompletionEvent[]> => {
@@ -1915,52 +2571,6 @@ const groupCompletionEventsByTaskId = (
     result.set(event.taskId, taskEvents);
   }
   return result;
-};
-
-const mergeProjectedCompletionEvents = (current: unknown, desired: unknown): unknown[] => {
-  const desiredEvents: Record<string, unknown>[] = Array.isArray(desired)
-    ? desired.filter((event): event is Record<string, unknown> => isRecord(event))
-    : [];
-  const localEvents: Record<string, unknown>[] = Array.isArray(current)
-    ? current.filter(
-        (event): event is Record<string, unknown> =>
-          isRecord(event) && typeof event.id === "string" && event.id.startsWith("local:"),
-      )
-    : [];
-  const desiredIds = new Set(
-    desiredEvents.flatMap((event) =>
-      isRecord(event) && typeof event.id === "string" ? [event.id] : [],
-    ),
-  );
-  return [
-    ...desiredEvents,
-    ...localEvents.filter(
-      (event) =>
-        !desiredIds.has(String(event.id)) &&
-        !desiredEvents.some((candidate) => completionEventsMatch(event, candidate)),
-    ),
-  ];
-};
-
-const completionEventsMatch = (
-  local: Record<string, unknown>,
-  canonical: Record<string, unknown>,
-): boolean => {
-  if (
-    local.task_id !== canonical.task_id ||
-    local.project_id !== canonical.project_id ||
-    typeof local.completed_at !== "string" ||
-    typeof canonical.completed_at !== "string"
-  ) {
-    return false;
-  }
-  const localTime = Date.parse(local.completed_at);
-  const canonicalTime = Date.parse(canonical.completed_at);
-  return (
-    Number.isFinite(localTime) &&
-    Number.isFinite(canonicalTime) &&
-    Math.abs(localTime - canonicalTime) <= LOCAL_EVENT_MATCH_TOLERANCE_MS
-  );
 };
 
 /**
@@ -2009,10 +2619,7 @@ const getManagedFrontMatterInfo = (content: string): ManagedFrontMatterInfo => {
 };
 
 const sameManagedOwnership = (left: ManagedNoteIdentity, right: ManagedNoteIdentity): boolean =>
-  left.taskId === right.taskId &&
-  left.mappingId === right.mappingId &&
-  left.rootProjectId === right.rootProjectId &&
-  left.projectId === right.projectId;
+  left.taskId === right.taskId;
 
 const readTimestamp = (value: unknown): number | undefined => {
   if (typeof value !== "string") {
@@ -2045,6 +2652,14 @@ const compareStableIds = (left: string, right: string): number => {
   return 0;
 };
 
+const compareTaskProjectionOrder = (
+  left: SnapshotTask["task"],
+  right: SnapshotTask["task"],
+): number => {
+  const orderComparison = left.order - right.order;
+  return orderComparison === 0 ? compareStableIds(left.id, right.id) : orderComparison;
+};
+
 const mostSpecificContainingRoot = (
   roots: readonly string[],
   filePath: string,
@@ -2056,13 +2671,7 @@ const mostSpecificContainingRoot = (
 const mostSpecificMatchingIdentityRoot = (
   roots: readonly ResolvedMappingRoot[],
   filePath: string,
-  identity: ManagedNoteIdentity,
 ): ResolvedMappingRoot | undefined =>
   roots
-    .filter(
-      (root) =>
-        isPathInside(root.path, filePath) &&
-        root.rootProjectId === identity.rootProjectId &&
-        (identity.mappingId === root.mappingId || identity.mappingId === undefined),
-    )
+    .filter((root) => isPathInside(root.path, filePath))
     .sort((left, right) => right.path.length - left.path.length)[0];

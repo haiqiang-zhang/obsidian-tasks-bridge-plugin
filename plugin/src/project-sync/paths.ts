@@ -1,6 +1,7 @@
 import type { Project } from "@/api/domain/project";
 
 const DEFAULT_PROJECT_SEGMENT_BYTES = 96;
+const DEFAULT_TASK_FOLDER_SEGMENT_BYTES = 96;
 const DEFAULT_TASK_FILENAME_BYTES = 200;
 const LAST_C0_CONTROL_CODE_POINT = 31;
 const DELETE_CONTROL_CODE_POINT = 127;
@@ -66,6 +67,16 @@ export const makeTaskFilename = (content: string, collisionIndex = 1): string =>
     : 1;
   const suffix = normalizedCollisionIndex === 1 ? ".md" : ` (${normalizedCollisionIndex}).md`;
   const availableBytes = Math.max(1, DEFAULT_TASK_FILENAME_BYTES - utf8Length(suffix));
+  const stem = sanitizePathSegment(content, "Untitled task", availableBytes);
+  return `${stem}${suffix}`;
+};
+
+export const makeTaskFolderSegment = (content: string, collisionIndex = 1): string => {
+  const normalizedCollisionIndex = Number.isFinite(collisionIndex)
+    ? Math.max(1, Math.floor(collisionIndex))
+    : 1;
+  const suffix = normalizedCollisionIndex === 1 ? "" : ` (${normalizedCollisionIndex})`;
+  const availableBytes = Math.max(1, DEFAULT_TASK_FOLDER_SEGMENT_BYTES - utf8Length(suffix));
   const stem = sanitizePathSegment(content, "Untitled task", availableBytes);
   return `${stem}${suffix}`;
 };

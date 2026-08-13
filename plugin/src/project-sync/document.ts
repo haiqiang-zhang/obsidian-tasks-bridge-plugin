@@ -9,30 +9,39 @@ import type { SnapshotTask } from "./types";
 
 export const MANAGED_BODY_START = "<!-- todoist-sync-plus:managed:start -->";
 export const MANAGED_BODY_END = "<!-- todoist-sync-plus:managed:end -->";
+export const MANAGED_TASK_CODE_BLOCK = "tasks-bridge-task";
 
-export const MANAGED_FRONTMATTER_KEYS = [
+export const LEGACY_IMPLEMENTATION_FRONTMATTER_KEYS = [
   "todoist_sync_managed",
   "todoist_sync_mapping_id",
   "todoist_sync_root_id",
   "todoist_sync_missing_count",
+  "todoist_project_id",
+  "todoist_project_id_path",
+  "todoist_parent_task_id",
+  "todoist_section_id",
+  "todoist_completion_events",
+  "todoist_order",
+  "todoist_stale_since",
+] as const;
+
+export const MANAGED_FRONTMATTER_KEYS = [
+  // Legacy implementation metadata remains in the allowlist so the next Project sync removes it
+  // from existing notes instead of reclassifying it as user-authored frontmatter.
+  ...LEGACY_IMPLEMENTATION_FRONTMATTER_KEYS,
   "todoist_task_id",
   "todoist_content",
   "todoist_description",
   "todoist_status",
   "todoist_completed",
-  "todoist_project_id",
   "todoist_project",
   "todoist_project_path",
-  "todoist_project_id_path",
-  "todoist_parent_task_id",
-  "todoist_section_id",
   "todoist_section",
   "todoist_labels",
   "todoist_priority",
   "todoist_created_at",
   "todoist_updated_at",
   "todoist_completed_at",
-  "todoist_completion_events",
   "todoist_due_date",
   "todoist_due_datetime",
   "todoist_due_timezone",
@@ -40,10 +49,13 @@ export const MANAGED_FRONTMATTER_KEYS = [
   "todoist_deadline",
   "todoist_duration",
   "todoist_duration_unit",
-  "todoist_order",
   "todoist_url",
   "todoist_synced_at",
-  "todoist_stale_since",
+] as const;
+
+export const MANAGED_TASK_RELATIONSHIP_FRONTMATTER_KEYS = [
+  "todoist_parent_task",
+  "todoist_subtasks",
 ] as const;
 
 export type ManagedFrontmatter = Record<string, unknown>;
@@ -56,10 +68,6 @@ export type UserOwnedTaskDocument = {
 
 export type ManagedNoteIdentity = {
   taskId: string;
-  mappingId?: string;
-  rootProjectId: string;
-  projectId: string;
-  missingCount: number;
 };
 
 export class ManagedBodyConflictError extends Error {}
@@ -78,40 +86,33 @@ export const makeTaskFrontmatter = (
 ): ManagedFrontmatter => {
   const { task, completed } = snapshotTask;
   const frontmatter: ManagedFrontmatter = {
-    todoist_sync_managed: true,
-    todoist_sync_root_id: rootProjectId,
-    todoist_sync_missing_count: 0,
     todoist_task_id: task.id,
     todoist_content: task.content,
     todoist_description: task.description,
     todoist_status: completed ? "completed" : "active",
     todoist_completed: completed,
-    todoist_project_id: task.project.id,
     todoist_project: task.project.name,
     todoist_project_path: projectPath.names,
-    todoist_project_id_path: projectPath.ids,
     todoist_labels: task.labels.map((label) => label.name),
     todoist_priority: priorityName(task.priority),
     todoist_created_at: task.createdAt,
-    todoist_order: task.order,
     todoist_url: todoistTaskWebUrl(task.project.id, task.id),
     todoist_synced_at: syncedAt,
-    todoist_completion_events: normalizeCompletionEvents(completionEvents, task.id),
   };
 
-  if (mappingId !== undefined) {
-    frontmatter.todoist_sync_mapping_id = mappingId;
-  }
+  // Project IDs, mapping IDs, parent IDs, section IDs, Todoist order, missing counters, and raw
+  // completion history belong to the plugin's local catalog. The Markdown task binds to Todoist
+  // through one immutable key only: todoist_task_id.
+  void rootProjectId;
+  void projectPath.ids;
+  void mappingId;
+  void completionEvents;
 
   if (task.updatedAt !== undefined) {
     frontmatter.todoist_updated_at = task.updatedAt;
   }
 
-  if (task.parentId !== undefined) {
-    frontmatter.todoist_parent_task_id = task.parentId;
-  }
   if (task.section !== undefined) {
-    frontmatter.todoist_section_id = task.section.id;
     frontmatter.todoist_section = task.section.name;
   }
   if (completed && task.completedAt != null) {
@@ -140,29 +141,6 @@ export const makeTaskFrontmatter = (
   return frontmatter;
 };
 
-const normalizeCompletionEvents = (
-  events: readonly ProjectCompletionEvent[],
-  taskId: string,
-): Array<{ id: string; task_id: string; project_id: string; completed_at: string }> => {
-  const byId = new Map<string, ProjectCompletionEvent>();
-  for (const event of events) {
-    if (event.taskId === taskId && !byId.has(event.id)) {
-      byId.set(event.id, event);
-    }
-  }
-  return [...byId.values()]
-    .sort((left, right) => {
-      const byTime = left.completedAt.localeCompare(right.completedAt);
-      return byTime !== 0 ? byTime : left.id.localeCompare(right.id);
-    })
-    .map((event) => ({
-      id: event.id,
-      task_id: event.taskId,
-      project_id: event.projectId,
-      completed_at: event.completedAt,
-    }));
-};
-
 export const applyManagedFrontmatter = (
   target: ManagedFrontmatter,
   desired: ManagedFrontmatter,
@@ -187,19 +165,64 @@ export const applyManagedFrontmatter = (
   return changed;
 };
 
+export type ManagedTaskRelationships = {
+  parentTask?: string;
+  subtasks: readonly string[];
+};
+
+/** Project the user-facing Obsidian links that describe one task's direct hierarchy. */
+export const applyManagedTaskRelationships = (
+  target: ManagedFrontmatter,
+  relationships: ManagedTaskRelationships,
+): boolean => {
+  const desired: ManagedFrontmatter = {
+    ...(relationships.parentTask === undefined
+      ? {}
+      : { todoist_parent_task: relationships.parentTask }),
+    ...(relationships.subtasks.length === 0
+      ? {}
+      : { todoist_subtasks: [...relationships.subtasks] }),
+  };
+  let changed = false;
+
+  for (const key of MANAGED_TASK_RELATIONSHIP_FRONTMATTER_KEYS) {
+    if (!(key in desired)) {
+      if (key in target) {
+        delete target[key];
+        changed = true;
+      }
+      continue;
+    }
+    if (!isSameValue(target[key], desired[key])) {
+      target[key] = desired[key];
+      changed = true;
+    }
+  }
+
+  return changed;
+};
+
+export const removeLegacyImplementationFrontmatter = (frontmatter: ManagedFrontmatter): boolean => {
+  let changed = false;
+  for (const key of LEGACY_IMPLEMENTATION_FRONTMATTER_KEYS) {
+    if (key in frontmatter) {
+      delete frontmatter[key];
+      changed = true;
+    }
+  }
+  return changed;
+};
+
 const isSameValue = (left: unknown, right: unknown): boolean =>
   JSON.stringify(left) === JSON.stringify(right);
 
-const escapeManagedMarkers = (value: string): string =>
-  value.split("todoist-sync-plus:managed:").join("todoist-sync-plus:managed&#58;");
-
 export const makeManagedBody = (task: Task): string => {
-  const normalizedTitle = task.content.replace(/\s*\n\s*/g, " ").trim();
-  const title = escapeManagedMarkers(normalizedTitle === "" ? "Untitled task" : normalizedTitle);
-  const description = escapeManagedMarkers(task.description.trim());
-  const descriptionSection = description === "" ? "" : `\n\n${description}`;
-
-  return `${MANAGED_BODY_START}\n# ${title}\n\n[Open in Todoist](${todoistTaskWebUrl(task.project.id, task.id)})${descriptionSection}\n${MANAGED_BODY_END}`;
+  // The task card resolves current values from the note's managed frontmatter. Keeping the code
+  // block payload empty avoids duplicating mutable Todoist data in a second serialized format.
+  // The source task is intentionally accepted here because callers build the managed body from
+  // the same snapshot as the frontmatter used by the card.
+  void task;
+  return `${MANAGED_BODY_START}\n\`\`\`${MANAGED_TASK_CODE_BLOCK}\n\`\`\`\n${MANAGED_BODY_END}`;
 };
 
 export const replaceManagedBody = (
@@ -244,7 +267,10 @@ const findAll = (value: string, needle: string): number[] => {
   return offsets;
 };
 
-const managedFrontmatterKeys = new Set<string>(MANAGED_FRONTMATTER_KEYS);
+const managedFrontmatterKeys = new Set<string>([
+  ...MANAGED_FRONTMATTER_KEYS,
+  ...MANAGED_TASK_RELATIONSHIP_FRONTMATTER_KEYS,
+]);
 
 const normalizeUserBody = (value: string): string =>
   value
@@ -377,32 +403,9 @@ export const replaceManagedTaskDocument = (
 export const readManagedNoteIdentity = (
   frontmatter: ManagedFrontmatter,
 ): ManagedNoteIdentity | null => {
-  if (frontmatter.todoist_sync_managed !== true) {
-    return null;
-  }
-
   const taskId = frontmatter.todoist_task_id;
-  const rawMappingId = frontmatter.todoist_sync_mapping_id;
-  const rootProjectId = frontmatter.todoist_sync_root_id;
-  const projectId = frontmatter.todoist_project_id;
-  if (
-    typeof taskId !== "string" ||
-    taskId === "" ||
-    typeof rootProjectId !== "string" ||
-    rootProjectId === "" ||
-    typeof projectId !== "string" ||
-    projectId === ""
-  ) {
+  if (typeof taskId !== "string" || taskId.trim() === "") {
     return null;
   }
-
-  const rawMissingCount = frontmatter.todoist_sync_missing_count;
-  const missingCount =
-    typeof rawMissingCount === "number" && Number.isFinite(rawMissingCount)
-      ? Math.max(0, Math.floor(rawMissingCount))
-      : 0;
-
-  const mappingId =
-    typeof rawMappingId === "string" && rawMappingId !== "" ? rawMappingId : undefined;
-  return { taskId, mappingId, rootProjectId, projectId, missingCount };
+  return { taskId };
 };

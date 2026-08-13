@@ -309,6 +309,7 @@ describe("TasksListView", () => {
     expect(runtime.buildModel).toHaveBeenCalledWith(groupedData, {
       order: ["note.todoist_priority"],
       getDisplayName: expect.any(Function),
+      projectStatisticsSnapshot: null,
     });
     const element = runtime.render.mock.calls[0]?.[0] as ReactElement<TodoistListProps>;
     expect(element.props.options).toEqual({

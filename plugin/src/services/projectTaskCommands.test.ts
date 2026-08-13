@@ -5,6 +5,7 @@ import type { UpdateTaskParams } from "@/api/domain/task";
 import { type TodoistAdapter, TodoistRemoteMutationFollowupError } from "@/data";
 import { makeApiTask } from "@/factories/data";
 import type { ProjectFolderSyncService } from "@/project-sync";
+import type { ProjectCatalog, ProjectCatalogStorage } from "@/project-sync/catalog";
 import type { ManagedFrontmatter } from "@/project-sync/document";
 import type { ProjectSyncMapping, ProjectSyncResult } from "@/project-sync/types";
 
@@ -68,12 +69,7 @@ const mapping = (overrides: Partial<ProjectSyncMapping> = {}): ProjectSyncMappin
 });
 
 const managedFrontmatter = (overrides: ManagedFrontmatter = {}): ManagedFrontmatter => ({
-  todoist_sync_managed: true,
-  todoist_sync_mapping_id: MAPPING_ID,
-  todoist_sync_root_id: ROOT_PROJECT_ID,
-  todoist_sync_missing_count: 0,
   todoist_task_id: TASK_ID,
-  todoist_project_id: "child-1",
   todoist_status: "active",
   ...overrides,
 });
@@ -86,6 +82,7 @@ type HarnessOptions = {
   frontmatter?: ManagedFrontmatter | undefined;
   mappings?: ProjectSyncMapping[];
   ready?: boolean;
+  catalog?: ProjectCatalog | null;
 };
 
 const makeHarness = (options: HarnessOptions = {}) => {
@@ -147,6 +144,31 @@ const makeHarness = (options: HarnessOptions = {}) => {
     runAutomaticProjection,
     runInternalMutation,
   } as ProjectTaskProjectionCoordinator;
+  let catalog =
+    "catalog" in options
+      ? options.catalog
+      : ({
+          mappingId: MAPPING_ID,
+          rootProjectId: ROOT_PROJECT_ID,
+          includeSubprojects: true,
+          syncedAt: "2026-08-10T00:00:00.000Z",
+          projects: [
+            { id: ROOT_PROJECT_ID, parentId: null, name: "Root", childOrder: 0 },
+            { id: "child-1", parentId: ROOT_PROJECT_ID, name: "Child", childOrder: 0 },
+          ],
+          tasks: [{ id: TASK_ID, projectId: "child-1", order: 0 }],
+          completionEvents: [],
+        } satisfies ProjectCatalog);
+  const persistCatalogs = vi.fn(async (catalogs: readonly ProjectCatalog[]) => {
+    const incoming = catalogs.find((candidate) => candidate.mappingId === MAPPING_ID);
+    if (incoming !== undefined) {
+      catalog = structuredClone(incoming);
+    }
+  });
+  const catalogStorage: ProjectCatalogStorage = {
+    getCatalog: (mappingId) => (catalog?.mappingId === mappingId ? structuredClone(catalog) : null),
+    persistCatalogs,
+  };
 
   const service = new ProjectTaskCommandService(
     { getFileByPath } as unknown as Vault,
@@ -155,6 +177,7 @@ const makeHarness = (options: HarnessOptions = {}) => {
     todoist,
     projectSync,
     projectionCoordinator,
+    catalogStorage,
   );
 
   return {
@@ -164,6 +187,10 @@ const makeHarness = (options: HarnessOptions = {}) => {
     getFileCache,
     invalidate,
     listProjects,
+    get catalog() {
+      return catalog;
+    },
+    persistCatalogs,
     frontmatter,
     processFrontMatter,
     runAutomaticProjection,
@@ -188,6 +215,51 @@ describe("ProjectTaskCommandService", () => {
     expect(makeHarness({ availableRootProjectIds: [] }).service.isReady()).toBe(false);
   });
 
+  it("applies a changed todoist_completed property through the existing complete action", async () => {
+    const harness = makeHarness({
+      frontmatter: managedFrontmatter({ todoist_completed: true, todoist_status: "active" }),
+    });
+
+    await harness.service.applyCompletedProperty(reference, true);
+
+    expect(harness.actions.closeProjectTask).toHaveBeenCalledWith(TASK_ID);
+    expect(harness.frontmatter).toMatchObject({
+      todoist_completed: true,
+      todoist_status: "completed",
+    });
+  });
+
+  it("applies an unchecked todoist_completed property through the existing reopen action", async () => {
+    const harness = makeHarness({
+      frontmatter: managedFrontmatter({ todoist_completed: false, todoist_status: "completed" }),
+    });
+
+    await harness.service.applyCompletedProperty(reference, false);
+
+    expect(harness.actions.reopenProjectTask).toHaveBeenCalledWith(TASK_ID);
+    expect(harness.frontmatter).toMatchObject({
+      todoist_completed: false,
+      todoist_status: "active",
+    });
+  });
+
+  it("restores todoist_completed when Todoist rejects a property mutation", async () => {
+    const harness = makeHarness({
+      frontmatter: managedFrontmatter({ todoist_completed: true, todoist_status: "active" }),
+    });
+    harness.actions.closeProjectTask.mockRejectedValueOnce(new Error("Todoist unavailable"));
+
+    await expect(harness.service.applyCompletedProperty(reference, true)).rejects.toThrow(
+      "Todoist unavailable",
+    );
+
+    expect(harness.frontmatter).toMatchObject({
+      todoist_completed: false,
+      todoist_status: "active",
+    });
+    expect(harness.runInternalMutation).toHaveBeenCalled();
+  });
+
   it.each([
     {
       name: "Todoist is unavailable",
@@ -205,8 +277,8 @@ describe("ProjectTaskCommandService", () => {
       message: "The managed task note metadata is not ready yet",
     },
     {
-      name: "the note is not managed",
-      options: { frontmatter: managedFrontmatter({ todoist_sync_managed: false }) },
+      name: "the note has no Todoist task ID",
+      options: { frontmatter: { todoist_status: "active" } },
       message: "This note is not the selected managed Todoist task",
     },
     {
@@ -215,19 +287,14 @@ describe("ProjectTaskCommandService", () => {
       message: "This note is not the selected managed Todoist task",
     },
     {
-      name: "the root project differs from the mapping",
-      options: { frontmatter: managedFrontmatter({ todoist_sync_root_id: "other-root" }) },
-      message: "This managed task note does not belong to one configured Project sync mapping",
-    },
-    {
       name: "the mapping belongs to a project unavailable in the current account",
       options: { availableRootProjectIds: [] },
       message: "This managed task note does not belong to one configured Project sync mapping",
     },
     {
-      name: "the mapping ID differs from the mapping",
-      options: { frontmatter: managedFrontmatter({ todoist_sync_mapping_id: "other-mapping" }) },
-      message: "This managed task note does not belong to one configured Project sync mapping",
+      name: "the task is absent from the selected project catalog",
+      options: { catalog: null },
+      message: "This task is unavailable until Project sync confirms its Todoist project",
     },
     {
       name: "the note path is outside the mapping folder",
@@ -237,7 +304,6 @@ describe("ProjectTaskCommandService", () => {
     {
       name: "more than one mapping owns an identity without a mapping ID",
       options: {
-        frontmatter: managedFrontmatter({ todoist_sync_mapping_id: undefined }),
         mappings: [mapping(), mapping({ id: "mapping-2" })],
       },
       message: "This managed task note does not belong to one configured Project sync mapping",
@@ -346,8 +412,6 @@ describe("ProjectTaskCommandService", () => {
     const harness = makeHarness({
       frontmatter: managedFrontmatter({
         todoist_completed: false,
-        todoist_stale_since: "2026-08-09T05:00:00.000Z",
-        todoist_sync_missing_count: 2,
       }),
     });
 
@@ -361,17 +425,15 @@ describe("ProjectTaskCommandService", () => {
       todoist_completed_at: COMPLETED_AT.toISOString(),
       todoist_status: "completed",
       todoist_synced_at: expect.any(String),
-      todoist_sync_missing_count: 0,
-      todoist_completion_events: [
-        {
-          id: expect.stringMatching(/^local:/u),
-          task_id: TASK_ID,
-          project_id: "child-1",
-          completed_at: COMPLETED_AT.toISOString(),
-        },
-      ],
     });
-    expect(harness.frontmatter).not.toHaveProperty("todoist_stale_since");
+    expect(harness.catalog?.completionEvents).toEqual([
+      {
+        id: expect.stringMatching(/^local:/u),
+        taskId: TASK_ID,
+        projectId: "child-1",
+        completedAt: COMPLETED_AT.toISOString(),
+      },
+    ]);
     expect(harness.invalidate).toHaveBeenCalledOnce();
     expect(harness.actions.closeProjectTask.mock.invocationCallOrder[0]).toBeLessThan(
       harness.invalidate.mock.invocationCallOrder[0],
@@ -395,9 +457,7 @@ describe("ProjectTaskCommandService", () => {
       frontmatter: managedFrontmatter({
         todoist_completed: true,
         todoist_completed_at: COMPLETED_AT.toISOString(),
-        todoist_stale_since: "2026-08-09T05:00:00.000Z",
         todoist_status: "completed",
-        todoist_sync_missing_count: 2,
       }),
     });
 
@@ -409,10 +469,8 @@ describe("ProjectTaskCommandService", () => {
       todoist_completed: false,
       todoist_status: "active",
       todoist_synced_at: expect.any(String),
-      todoist_sync_missing_count: 0,
     });
     expect(harness.frontmatter).not.toHaveProperty("todoist_completed_at");
-    expect(harness.frontmatter).not.toHaveProperty("todoist_stale_since");
     expect(harness.invalidate).toHaveBeenCalledOnce();
     await vi.waitFor(() => expect(harness.sync).toHaveBeenCalledOnce());
 
@@ -439,9 +497,9 @@ describe("ProjectTaskCommandService", () => {
     const second = await harness.service.completeTask(reference);
     await second.projection;
 
-    expect(harness.frontmatter.todoist_completion_events).toEqual([
-      expect.objectContaining({ completed_at: "2026-08-10T05:00:00.000Z" }),
-      expect.objectContaining({ completed_at: "2026-08-11T05:00:00.000Z" }),
+    expect(harness.catalog?.completionEvents).toEqual([
+      expect.objectContaining({ completedAt: "2026-08-10T05:00:00.000Z" }),
+      expect.objectContaining({ completedAt: "2026-08-11T05:00:00.000Z" }),
     ]);
   });
 

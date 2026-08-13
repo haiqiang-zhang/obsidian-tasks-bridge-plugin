@@ -1,6 +1,6 @@
 import classNames from "classnames";
 import type React from "react";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Button } from "react-aria-components";
 import { createPortal } from "react-dom";
 
@@ -8,8 +8,8 @@ import { type CommandId, fireCommand } from "@/commands";
 import { t } from "@/i18n";
 import { type Settings, useSettingsStore } from "@/settings";
 import { ObsidianIcon } from "@/ui/components/obsidian-icon";
-import { PluginContext, RenderChildContext } from "@/ui/context";
-import { useObsidianTooltip } from "@/ui/hooks";
+import { PluginContext } from "@/ui/context";
+import { useEmbedActions, useObsidianTooltip } from "@/ui/hooks";
 import { assertNever } from "@/utils/types";
 
 const getAddTaskCommandId = (settings: Settings): CommandId => {
@@ -82,33 +82,6 @@ export const QueryHeader: React.FC<Props> = ({
       {embedActions !== null && createPortal(controls, embedActions)}
     </>
   );
-};
-
-const useEmbedActions = (): HTMLElement | null => {
-  const renderChild = RenderChildContext.use();
-  const findContainer = () =>
-    renderChild.containerEl.parentElement?.querySelector<HTMLElement>(":scope > .embed-actions") ??
-    null;
-  const [container, setContainer] = useState<HTMLElement | null>(findContainer);
-
-  useEffect(() => {
-    const parent = renderChild.containerEl.parentElement;
-    if (parent === null) {
-      setContainer(null);
-      return;
-    }
-
-    const updateContainer = () => {
-      setContainer(parent.querySelector<HTMLElement>(":scope > .embed-actions"));
-    };
-
-    updateContainer();
-    const observer = new MutationObserver(updateContainer);
-    observer.observe(parent, { childList: true });
-    return () => observer.disconnect();
-  }, [renderChild]);
-
-  return container;
 };
 
 type ButtonProps = {

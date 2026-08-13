@@ -21,6 +21,7 @@ import { secondsToMillis } from "@/infra/time";
 import {
   cloneProjectCatalog,
   isProjectSyncPath,
+  MANAGED_TASK_CODE_BLOCK,
   mergeProjectCatalogCollections,
   type ProjectCatalog,
   type ProjectCatalogCollection,
@@ -31,6 +32,7 @@ import {
   readProjectCatalogCollection,
   withProjectCatalogCollection,
 } from "@/project-sync";
+import { ProjectTaskCardInjector } from "@/project-sync/taskCardInjector";
 import { QueryInjector } from "@/query/injector";
 import { makeServices, type Services } from "@/services";
 import {
@@ -102,6 +104,7 @@ export default class TodoistPlugin extends Plugin {
     }
 
     const queryInjector = new QueryInjector(this);
+    const projectTaskCardInjector = new ProjectTaskCardInjector(this);
     this.registerBasesView(
       TASKS_LIST_VIEW_ID,
       createTasksListViewRegistration(
@@ -113,10 +116,19 @@ export default class TodoistPlugin extends Plugin {
       "todoist",
       queryInjector.onNewBlock.bind(queryInjector),
     );
+    this.registerMarkdownCodeBlockProcessor(
+      MANAGED_TASK_CODE_BLOCK,
+      projectTaskCardInjector.onNewBlock.bind(projectTaskCardInjector),
+    );
     this.addSettingTab(new SettingsTab(this.app, this));
 
     registerCommands(this);
     this.registerProjectSyncVaultActivityListeners();
+    this.registerEvent(
+      this.app.metadataCache.on("changed", (file, _data, cache) => {
+        this.services.projectTaskProperties.handleMetadataChange(file, cache);
+      }),
+    );
     try {
       await this.services.projectSync.refreshStatisticsFromLocalProjection();
     } catch (error: unknown) {
@@ -220,6 +232,7 @@ export default class TodoistPlugin extends Plugin {
     this.apiTokenGeneration++;
     this.projectSyncConfigGeneration++;
     this.services.todoist.reset();
+    this.services.projectTaskProperties.dispose();
     this.services.projectSync.dispose();
   }
 

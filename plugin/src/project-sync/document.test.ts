@@ -4,6 +4,7 @@ import { makeProject, makeTask } from "@/factories/data";
 
 import {
   applyManagedFrontmatter,
+  applyManagedTaskRelationships,
   MANAGED_BODY_END,
   MANAGED_BODY_START,
   ManagedBodyConflictError,
@@ -41,29 +42,26 @@ describe("project task documents", () => {
       updatedAt: "2026-08-10T01:30:00.000Z",
     };
 
-    expect(
-      makeTaskFrontmatter(
-        { task, completed: true },
-        project.id,
-        { ids: [project.id], names: [project.name] },
-        "2026-08-10T02:00:00.000Z",
-        "mapping-1",
-        [
-          completionEvent("second", "2026-08-10T01:00:00.000Z"),
-          completionEvent("first", "2026-08-09T01:00:00.000Z"),
-          completionEvent("second", "2026-08-10T01:00:00.000Z"),
-        ],
-      ),
-    ).toMatchObject({
-      todoist_sync_managed: true,
-      todoist_sync_root_id: "project-1",
+    const frontmatter = makeTaskFrontmatter(
+      { task, completed: true },
+      project.id,
+      { ids: [project.id], names: [project.name] },
+      "2026-08-10T02:00:00.000Z",
+      "mapping-1",
+      [
+        completionEvent("second", "2026-08-10T01:00:00.000Z"),
+        completionEvent("first", "2026-08-09T01:00:00.000Z"),
+        completionEvent("second", "2026-08-10T01:00:00.000Z"),
+      ],
+    );
+    expect(frontmatter).toMatchObject({
       todoist_task_id: "task-1",
       todoist_content: "Read RFC",
       todoist_description: "Read the transport requirements",
       todoist_status: "completed",
       todoist_completed: true,
+      todoist_project: "Networking",
       todoist_project_path: ["Networking"],
-      todoist_project_id_path: ["project-1"],
       todoist_labels: ["study"],
       todoist_priority: "P1",
       todoist_updated_at: "2026-08-10T01:30:00.000Z",
@@ -71,21 +69,16 @@ describe("project task documents", () => {
       todoist_due_datetime: "2026-08-12T09:30:00.000Z",
       todoist_due_timezone: "Asia/Shanghai",
       todoist_due_is_recurring: false,
-      todoist_completion_events: [
-        {
-          id: "first",
-          task_id: "task-1",
-          project_id: "project-1",
-          completed_at: "2026-08-09T01:00:00.000Z",
-        },
-        {
-          id: "second",
-          task_id: "task-1",
-          project_id: "project-1",
-          completed_at: "2026-08-10T01:00:00.000Z",
-        },
-      ],
     });
+    expect(frontmatter).not.toHaveProperty("todoist_sync_managed");
+    expect(frontmatter).not.toHaveProperty("todoist_sync_mapping_id");
+    expect(frontmatter).not.toHaveProperty("todoist_sync_root_id");
+    expect(frontmatter).not.toHaveProperty("todoist_project_id");
+    expect(frontmatter).not.toHaveProperty("todoist_project_id_path");
+    expect(frontmatter).not.toHaveProperty("todoist_parent_task_id");
+    expect(frontmatter).not.toHaveProperty("todoist_section_id");
+    expect(frontmatter).not.toHaveProperty("todoist_completion_events");
+    expect(frontmatter).not.toHaveProperty("todoist_order");
   });
 
   it("retains legacy timed due dates encoded in the date field", () => {
@@ -129,6 +122,31 @@ describe("project task documents", () => {
     });
   });
 
+  it("projects parent and ordered subtask links without touching user properties", () => {
+    const frontmatter = {
+      todoist_parent_task: "[[Old parent]]",
+      todoist_subtasks: ["[[Old child]]"],
+      user_property: "keep me",
+    };
+
+    expect(
+      applyManagedTaskRelationships(frontmatter, {
+        parentTask: "[[Tasks/Parent|Parent]]",
+        subtasks: ["[[Tasks/First|First]]", "[[Tasks/Second|Second]]"],
+      }),
+    ).toBe(true);
+    expect(frontmatter).toEqual({
+      todoist_parent_task: "[[Tasks/Parent|Parent]]",
+      todoist_subtasks: ["[[Tasks/First|First]]", "[[Tasks/Second|Second]]"],
+      user_property: "keep me",
+    });
+
+    expect(
+      applyManagedTaskRelationships(frontmatter, { parentTask: undefined, subtasks: [] }),
+    ).toBe(true);
+    expect(frontmatter).toEqual({ user_property: "keep me" });
+  });
+
   it("replaces only the generated body region", () => {
     const before = `---\nuser: value\n---\n${MANAGED_BODY_START}\nold\n${MANAGED_BODY_END}\n\nUser notes`;
     const replacement = `${MANAGED_BODY_START}\nnew\n${MANAGED_BODY_END}`;
@@ -170,6 +188,17 @@ describe("project task documents", () => {
 
     expect(result.content).toContain(body);
     expect(result.content).toContain("Existing user notes");
+  });
+
+  it("renders managed tasks as a compact Tasks Bridge card code block", () => {
+    const body = makeManagedBody(
+      makeTask("task-1", { content: "A title with todoist-sync-plus:managed:start" }),
+    );
+
+    expect(body).toBe(
+      `${MANAGED_BODY_START}\n\`\`\`tasks-bridge-task\n\`\`\`\n${MANAGED_BODY_END}`,
+    );
+    expect(body).not.toContain("A title with");
   });
 
   it("rejects malformed or duplicate marker regions", () => {

@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { buildTodoistListModel, scopeTodoistListGroups } from "./model";
 
 type EntryOptions = {
+  taskId?: string | null;
   projectCatalog?: boolean;
   managed?: boolean;
   mappingId?: string;
@@ -54,7 +55,6 @@ const makeEntry = (id: string, options: EntryOptions = {}): BasesEntry => {
     ["note.tasks_bridge_project_catalog_managed", primitive(options.projectCatalog ?? false)],
     ["note.todoist_sync_managed", primitive(options.managed ?? true)],
     ["note.todoist_sync_root_id", primitive(rootProjectId)],
-    ["note.todoist_task_id", primitive(id)],
     ["note.todoist_content", primitive(options.content ?? id)],
     ["note.todoist_description", primitive(options.description ?? "")],
     ["note.todoist_status", primitive(options.status ?? "active")],
@@ -65,6 +65,10 @@ const makeEntry = (id: string, options: EntryOptions = {}): BasesEntry => {
     ["note.todoist_project_path", list(options.projectPath ?? [projectName])],
     ["note.todoist_labels", list(options.labels ?? [])],
   ]);
+
+  if (options.taskId !== null) {
+    values.set("note.todoist_task_id", primitive(options.taskId ?? id));
+  }
 
   if (options.mappingId !== undefined) {
     values.set("note.todoist_sync_mapping_id", primitive(options.mappingId));
@@ -238,7 +242,7 @@ describe("buildTodoistListModel", () => {
     });
     const model = build([
       makeGroup([
-        makeEntry("plain", { managed: false }),
+        makeEntry("plain", { managed: false, taskId: null }),
         malformed,
         makeEntry("valid"),
         moveEntry(makeEntry("valid"), "(2)"),

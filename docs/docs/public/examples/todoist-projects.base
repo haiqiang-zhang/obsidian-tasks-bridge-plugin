@@ -1,6 +1,6 @@
 filters:
   and:
-    - 'todoist_sync_managed == true'
+    - 'todoist_task_id != null'
     - 'todoist_status != "out_of_scope"'
 
 properties:

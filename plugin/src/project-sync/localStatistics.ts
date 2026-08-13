@@ -36,11 +36,8 @@ const LOCAL_REFRESH_DEBOUNCE_MS = 50;
 
 type LocalTaskProjection = {
   taskId: string;
-  mappingId?: string;
-  rootProjectId: string;
-  projectId: string;
+  filePath: string;
   status: "active" | "completed" | "stale" | "out_of_scope";
-  completionEvents: ProjectCompletionEvent[];
 };
 
 export class ObsidianProjectSyncStatisticsRepository implements ProjectSyncStatisticsRepository {
@@ -262,24 +259,18 @@ export class ObsidianProjectSyncStatisticsRepository implements ProjectSyncStati
 
   private async readTaskProjection(file: TFile): Promise<LocalTaskProjection | null> {
     const frontmatter = parseFrontmatter(await this.vault.read(file));
-    if (frontmatter === null || frontmatter.todoist_sync_managed !== true) {
+    if (frontmatter === null) {
       return null;
     }
     const taskId = readNonEmptyString(frontmatter.todoist_task_id);
-    const mappingId = readNonEmptyString(frontmatter.todoist_sync_mapping_id) ?? undefined;
-    const rootProjectId = readNonEmptyString(frontmatter.todoist_sync_root_id);
-    const projectId = readNonEmptyString(frontmatter.todoist_project_id);
     const status = readTaskStatus(frontmatter.todoist_status);
-    if (taskId === null || rootProjectId === null || projectId === null || status === null) {
+    if (taskId === null || status === null) {
       return null;
     }
     return {
       taskId,
-      mappingId,
-      rootProjectId,
-      projectId,
+      filePath: file.path,
       status,
-      completionEvents: readCompletionEvents(frontmatter.todoist_completion_events),
     };
   }
 
@@ -363,6 +354,8 @@ const parseLegacyProjectCatalog = (content: string): ProjectCatalog | null => {
     includeSubprojects,
     syncedAt,
     projects,
+    tasks: [],
+    completionEvents: [],
   };
 };
 
@@ -399,26 +392,6 @@ const readCatalogProject = (value: unknown): ProjectCatalogProject | null => {
   return { id, name, parentId, childOrder };
 };
 
-const readCompletionEvents = (value: unknown): ProjectCompletionEvent[] => {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return deduplicateEvents(
-    value.flatMap((entry): ProjectCompletionEvent[] => {
-      if (!isRecord(entry)) {
-        return [];
-      }
-      const id = readNonEmptyString(entry.id);
-      const taskId = readNonEmptyString(entry.task_id);
-      const projectId = readNonEmptyString(entry.project_id);
-      const completedAt = readTimestamp(entry.completed_at);
-      return id === null || taskId === null || projectId === null || completedAt === null
-        ? []
-        : [{ id, taskId, projectId, completedAt }];
-    }),
-  );
-};
-
 const buildStatisticsScope = (
   mapping: ProjectSyncMapping,
   catalog: ProjectCatalog,
@@ -430,17 +403,18 @@ const buildStatisticsScope = (
   );
   const taskStates = new Map<string, { projectId: string; status: "active" | "completed" }>();
   const conflictedTaskIds = new Set<string>();
-  const taskEvents: ProjectCompletionEvent[] = [];
+  const catalogTasks = new Map(catalog.tasks.map((task) => [task.id, task]));
+  const roots = mappingRoots(mapping);
 
   for (const task of tasks) {
+    const catalogTask = catalogTasks.get(task.taskId);
     if (
-      task.mappingId !== mapping.id ||
-      task.rootProjectId !== catalog.rootProjectId ||
-      !projectIds.has(task.projectId)
+      catalogTask === undefined ||
+      !projectIds.has(catalogTask.projectId) ||
+      !roots.some((root) => isPathInside(root, task.filePath))
     ) {
       continue;
     }
-    taskEvents.push(...task.completionEvents.filter((event) => projectIds.has(event.projectId)));
     if (task.status !== "active" && task.status !== "completed") {
       continue;
     }
@@ -449,8 +423,8 @@ const buildStatisticsScope = (
     }
     const current = taskStates.get(task.taskId);
     if (current === undefined) {
-      taskStates.set(task.taskId, { projectId: task.projectId, status: task.status });
-    } else if (current.projectId !== task.projectId || current.status !== task.status) {
+      taskStates.set(task.taskId, { projectId: catalogTask.projectId, status: task.status });
+    } else if (current.projectId !== catalogTask.projectId || current.status !== task.status) {
       // Conflicting copies share one immutable ID. Count neither state until Project sync resolves
       // the conflict instead of selecting an arbitrary file.
       taskStates.delete(task.taskId);
@@ -464,7 +438,9 @@ const buildStatisticsScope = (
     }
   }
 
-  const completionEvents = mergeLocalAndCanonicalEvents(taskEvents);
+  const completionEvents = mergeLocalAndCanonicalEvents(
+    catalog.completionEvents.filter((event) => projectIds.has(event.projectId)),
+  );
   const directCompletionEvents = new Map<string, ProjectCompletionEvent[]>(
     catalog.projects.map((project) => [project.id, []]),
   );
@@ -482,6 +458,7 @@ const buildStatisticsScope = (
     rootProjectId: catalog.rootProjectId,
     includeSubprojects: catalog.includeSubprojects,
     projects,
+    tasks: catalog.tasks.map((task) => ({ ...task })),
   };
 };
 

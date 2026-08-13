@@ -511,6 +511,13 @@ const makeStatisticsSnapshot = (
       mappingId: mapping.id,
       rootProjectId: snapshot.rootProjectId,
       includeSubprojects: mapping.includeSubprojects,
+      tasks: snapshot.tasks.map(({ task }) => ({
+        id: task.id,
+        projectId: task.project.id,
+        ...(task.parentId === undefined ? {} : { parentId: task.parentId }),
+        ...(task.section === undefined ? {} : { sectionId: task.section.id }),
+        order: task.order,
+      })),
       projects: snapshot.projects.map((project) => {
         const counts = directCounts.get(project.id);
         if (counts === undefined) {

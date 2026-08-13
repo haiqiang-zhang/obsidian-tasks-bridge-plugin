@@ -45,3 +45,40 @@ body {
 
   --todoist-task-separator-color: var(--color-base-25);
 }
+
+// The task card supplies the task's title, so Obsidian's filename title would repeat the same
+// information on managed projection notes. This remains note-scoped and does not change the
+// user's global Inline title preference.
+.markdown-source-view:has(
+    .metadata-container
+      .metadata-property[data-property-key="todoist_task_id"]
+  )
+  .inline-title,
+.markdown-preview-view:has(
+    .metadata-container
+      .metadata-property[data-property-key="todoist_task_id"]
+  )
+  .inline-title {
+  display: none;
+}
+
+// Live Preview renders the generated boundary comments as dedicated comment lines around the
+// task card. Hide only those exact adjacent lines; Source mode intentionally remains transparent.
+.markdown-source-view.is-live-preview
+  .cm-line:has(> .cm-comment:first-child:last-child)
+  + .cm-embed-block:has(.tasks-bridge-note-card),
+.markdown-source-view.is-live-preview
+  .cm-embed-block:has(.tasks-bridge-note-card)
+  + .cm-line:has(> .cm-comment:first-child:last-child) {
+  // Anchor selectors for the adjacent managed boundary lines.
+}
+
+.markdown-source-view.is-live-preview
+  .cm-line:has(> .cm-comment:first-child:last-child):has(
+    + .cm-embed-block .tasks-bridge-note-card
+  ),
+.markdown-source-view.is-live-preview
+  .cm-embed-block:has(.tasks-bridge-note-card)
+  + .cm-line:has(> .cm-comment:first-child:last-child) {
+  display: none;
+}
