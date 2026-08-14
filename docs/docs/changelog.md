@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v2.9.12 (2026-08-15)
+
 ### 🐛 Bug Fixes
 
 - Fixed the Tasks List completion heatmap when a Base is embedded in a Markdown note on mobile. Markdown table styling no longer enlarges or misaligns the calendar, and horizontal scrolling stays inside the heatmap.
