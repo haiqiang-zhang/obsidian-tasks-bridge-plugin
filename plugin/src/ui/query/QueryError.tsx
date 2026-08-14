@@ -12,12 +12,17 @@ export const QueryError: React.FC<Props> = ({ error }) => {
   const i18n = t().query.displays.parsingError;
 
   return (
-    <Callout
-      className="todoist-query-error"
-      title={i18n.header}
-      iconId="lucide-alert-triangle"
-      contents={getErrorMessages(error) ?? [i18n.unknownErrorMessage]}
-    />
+    <div className="todoist-query is-untitled is-parse-error">
+      <div className="todoist-query-content">
+        <Callout
+          className="todoist-query-error"
+          title={i18n.header}
+          iconId="lucide-alert-triangle"
+          variant="error"
+          contents={getErrorMessages(error) ?? [i18n.unknownErrorMessage]}
+        />
+      </div>
+    </div>
   );
 };
 

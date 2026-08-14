@@ -112,7 +112,7 @@ const HeaderButton: React.FC<ButtonProps> = ({ iconId, action, className, label,
       onPress={() => void handler()}
       ref={setButtonEl}
     >
-      <ObsidianIcon id={iconId} size="s" />
+      <ObsidianIcon id={iconId} size="m" />
     </Button>
   );
 };

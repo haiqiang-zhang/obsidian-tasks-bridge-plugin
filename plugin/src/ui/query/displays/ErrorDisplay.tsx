@@ -36,6 +36,7 @@ export const ErrorDisplay: React.FC<Props> = ({ kind }) => {
       className="todoist-query-error"
       title={i18n.header}
       iconId="lucide-alert-triangle"
+      variant="error"
       contents={[errorMessage]}
     />
   );

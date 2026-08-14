@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### 🔁 Changes
+
+- Refined query empty, warning, and error states to use Obsidian's native callout appearance. Empty results now use the native green success style and check icon.
+
 ## v2.9.10 (2026-08-14)
 
 ### 🐛 Bug Fixes

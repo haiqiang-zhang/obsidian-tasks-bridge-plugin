@@ -20,6 +20,7 @@ export const QueryWarnings: React.FC<Props> = ({ warnings }) => {
       className="todoist-query-warnings"
       title={i18n.header}
       iconId="lucide-alert-triangle"
+      variant="warning"
       contents={warnings}
     />
   );

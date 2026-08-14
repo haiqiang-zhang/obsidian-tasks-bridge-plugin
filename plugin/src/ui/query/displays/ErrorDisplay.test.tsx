@@ -37,8 +37,14 @@ describe("ErrorDisplay", () => {
   });
 
   it("should render error header", () => {
-    render(<ErrorDisplay kind={QueryErrorKind.BadRequest} />);
+    const { container } = render(<ErrorDisplay kind={QueryErrorKind.BadRequest} />);
 
     expect(screen.getByText("Error")).toBeInTheDocument();
+    expect(container.querySelector(".callout.todoist-callout.todoist-query-error")).toHaveAttribute(
+      "data-callout",
+      "error",
+    );
+    expect(container.querySelector(".todoist-query-error .callout-content")).toBeInTheDocument();
+    expect(container.querySelector(".todoist-no-tasks")).not.toBeInTheDocument();
   });
 });

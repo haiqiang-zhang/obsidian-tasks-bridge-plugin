@@ -9,11 +9,20 @@ describe("QueryError", () => {
   it("should render ParsingError messages", () => {
     const error = new ParsingError(["Invalid filter", "Missing field"]);
 
-    render(<QueryError error={error} />);
+    const { container } = render(<QueryError error={error} />);
 
     expect(screen.getByText("Error: Query parsing failed")).toBeInTheDocument();
     expect(screen.getByText("Invalid filter")).toBeInTheDocument();
     expect(screen.getByText("Missing field")).toBeInTheDocument();
+    const shell = container.querySelector(".todoist-query.is-untitled.is-parse-error");
+    expect(shell).toBeInTheDocument();
+    expect(
+      shell?.querySelector(
+        ":scope > .todoist-query-content > .callout.todoist-callout.todoist-query-error",
+      ),
+    ).toHaveAttribute("data-callout", "error");
+    expect(shell?.querySelector(".todoist-query-error .callout-content")).toBeInTheDocument();
+    expect(shell?.querySelector(".todoist-no-tasks")).not.toBeInTheDocument();
   });
 
   it("should render generic Error message", () => {

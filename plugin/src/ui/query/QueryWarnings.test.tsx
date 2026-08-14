@@ -13,10 +13,15 @@ describe("QueryWarnings", () => {
   it("should render callout with warnings when non-empty", () => {
     const warnings = ["Warning 1", "Warning 2"];
 
-    render(<QueryWarnings warnings={warnings} />);
+    const { container } = render(<QueryWarnings warnings={warnings} />);
 
     expect(screen.getByText("Warnings")).toBeInTheDocument();
     expect(screen.getByText("Warning 1")).toBeInTheDocument();
     expect(screen.getByText("Warning 2")).toBeInTheDocument();
+    expect(
+      container.querySelector(".callout.todoist-callout.todoist-query-warnings"),
+    ).toHaveAttribute("data-callout", "warning");
+    expect(container.querySelector(".todoist-query-warnings .callout-content")).toBeInTheDocument();
+    expect(container.querySelector(".todoist-no-tasks")).not.toBeInTheDocument();
   });
 });

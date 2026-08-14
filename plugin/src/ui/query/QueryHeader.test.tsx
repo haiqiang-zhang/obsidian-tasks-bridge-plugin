@@ -65,11 +65,21 @@ describe("QueryHeader", () => {
     expect(container.querySelector(".todoist-query-controls")).toHaveClass("interactive-child");
     expect(screen.getByRole("button", { name: "Add task" })).toHaveClass("clickable-icon");
     expect(screen.getByRole("button", { name: "Refresh tasks" })).toHaveClass("clickable-icon");
+    expect(
+      screen.getByRole("button", { name: "Add task" }).querySelector(".obsidian-icon"),
+    ).toHaveAttribute("data-icon-size", "m");
+    expect(
+      screen.getByRole("button", { name: "Refresh tasks" }).querySelector(".obsidian-icon"),
+    ).toHaveAttribute("data-icon-size", "m");
   });
 
   it("should not render an empty title header when native block actions are available", () => {
     const embedActions = document.createElement("div");
     embedActions.className = "embed-actions";
+    const nativeEdit = document.createElement("button");
+    nativeEdit.className = "embed-action clickable-icon edit-block-button";
+    nativeEdit.setAttribute("aria-label", "Edit this block");
+    embedActions.append(nativeEdit);
     const { container } = render(
       <QueryHeader title="" isFetching={false} refresh={vi.fn()} refreshedTimestamp={undefined} />,
       { wrapper: makeWrapper(embedActions) },
@@ -82,6 +92,9 @@ describe("QueryHeader", () => {
     expect(within(embedActions).getByRole("button", { name: "Refresh tasks" })).toHaveClass(
       "todoist-query-control-button",
     );
+    expect(within(embedActions).getByRole("button", { name: "Edit this block" })).toBe(nativeEdit);
+    expect(embedActions.querySelectorAll(":scope > .todoist-query-controls")).toHaveLength(1);
+    expect(embedActions.children).toHaveLength(2);
   });
 
   it("should use an out-of-flow fallback toolbar without an empty title header", () => {

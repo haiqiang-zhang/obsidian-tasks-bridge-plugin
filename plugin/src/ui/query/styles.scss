@@ -11,8 +11,11 @@
 
   position: relative;
 
+  &.is-parse-error {
+    --todoist-query-actions-width: calc(var(--size-4-8) + var(--size-2-2));
+  }
+
   &.is-untitled .todoist-query-content > .todoist-tasks-list:first-child,
-  &.is-untitled .todoist-query-content > .todoist-callout:first-child,
   &.is-untitled
     .todoist-query-content
     > .todoist-group:first-child
@@ -32,7 +35,11 @@
   }
 
   &.is-untitled .todoist-query-content > .todoist-callout:first-child {
-    margin-inline-end: var(--todoist-query-actions-width);
+    margin: var(--size-2-2);
+  }
+
+  &.is-untitled .todoist-query-content > .todoist-callout:first-child > .callout-title {
+    padding-inline-end: var(--todoist-query-actions-width);
   }
 }
 
@@ -90,10 +97,13 @@
   order: -1;
 }
 
+.cm-lang-todoist:has(.todoist-query.is-untitled .todoist-no-tasks:first-child) > .embed-actions {
+  inset-block-start: 50%;
+  transform: translateY(-50%);
+}
+
 .todoist-query-control-button {
   flex: none;
-  border: 0;
-  box-shadow: none;
 
   &.refresh-query.is-refreshing > .obsidian-icon {
     animation: todoist-query-spin 1s linear infinite reverse;
@@ -143,10 +153,6 @@
 
 .cm-lang-todoist .embed-actions:focus-within {
   opacity: 1;
-}
-
-.todoist-query-warnings {
-  --todoist-callout-color: rgba(var(--color-yellow-rgb), 0.2);
 }
 
 .todoist-tasks-list {
@@ -327,12 +333,4 @@
   &:hover .todoist-group-collapse-icon {
     background-color: var(--interactive-hover);
   }
-}
-
-.todoist-no-tasks {
-  --todoist-callout-color: rgba(var(--color-green-rgb), 0.2);
-}
-
-.todoist-query-error {
-  --todoist-callout-color: rgba(var(--color-red-rgb), 0.2);
 }
