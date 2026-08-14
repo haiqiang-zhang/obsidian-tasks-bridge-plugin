@@ -2,6 +2,7 @@
   "name": "obsidian-tasks-bridge-plugin",
   "version": "2.9.11",
   "private": true,
+  "license": "MIT",
   "workspaces": [
     "plugin",
     "scripts",

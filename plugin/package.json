@@ -12,7 +12,7 @@
     "lint:fix": "biome check --write ./src"
   },
   "author": "Haiqiang Zhang and Jamie Brynes",
-  "license": "ISC",
+  "license": "MIT",
   "dependencies": {
     "@internationalized/date": "3.12.3",
     "camelize-ts": "3.0.0",

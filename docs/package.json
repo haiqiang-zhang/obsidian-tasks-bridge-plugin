@@ -2,6 +2,7 @@
   "name": "@tasks-bridge/docs",
   "version": "2.9.11",
   "private": true,
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "start": "rspress dev",
