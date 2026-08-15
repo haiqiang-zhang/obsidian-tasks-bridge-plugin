@@ -10,7 +10,7 @@
   ],
   "scripts": {
     "prebuild": "npm run check --workspace=plugin",
-    "build": "npm run build --workspace=plugin",
+    "build": "npm run build --workspace=plugin -- --outDir ../dist --emptyOutDir",
     "gen": "npm run gen --workspace=scripts",
     "release": "npm run release --workspace=scripts --"
   },

@@ -2,6 +2,7 @@
 .devenv/
 .DS_Store
 node_modules
+/dist/
 *.tsbuildinfo
 
 TASK.md
