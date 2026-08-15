@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v2.9.15 (2026-08-15)
+
 ### 🐛 Bug Fixes
 
 - Fixed production builds from clean source archives where Git metadata is unavailable.
