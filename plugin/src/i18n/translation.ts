@@ -7,7 +7,7 @@ export type Translations = {
       created: number,
       updated: number,
       moved: number,
-      stale: number,
+      deleted: number,
       conflicts: number,
     ) => string;
     projectSyncFailed: (message: string) => string;

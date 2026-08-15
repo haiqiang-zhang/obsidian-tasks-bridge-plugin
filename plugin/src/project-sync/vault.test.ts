@@ -1364,7 +1364,7 @@ describe("ObsidianProjectSyncVault", () => {
     expect(vault.files.get(newPath)?.content).toContain("User-authored notes stay here.");
   });
 
-  it("resumes a multi-root migration and moves missing notes with their relative folders", async () => {
+  it("trashes a remotely deleted task directly from a registered historical root", async () => {
     const project = makeProject("root", { name: "Root" });
     const task = makeTask("missing-task", { content: "Missing task", project });
     const movedMapping: ProjectSyncMapping = {
@@ -1393,14 +1393,11 @@ describe("ObsidianProjectSyncVault", () => {
 
     const result = await adapter.reconcile(emptySnapshot(project), movedMapping);
 
-    const newPath = "Newest/Archived child/Missing task.md";
-    expect(result).toMatchObject({ moved: 1, settledMappingIds: [mapping.id], updated: 0 });
+    expect(result).toMatchObject({ moved: 0, deleted: 1, settledMappingIds: [mapping.id] });
     expect(vault.files.has(oldPath)).toBe(false);
-    expect(vault.files.has(newPath)).toBe(true);
-    expect(vault.folders.has("Newest/Archived child")).toBe(true);
-    expect(catalogStorage.getCatalog(mapping.id)?.tasks).toEqual([
-      expect.objectContaining({ id: task.id, missingCount: 1 }),
-    ]);
+    expect(vault.folders.has("Newest/Archived child")).toBe(false);
+    expect(fileManager.trashFile).toHaveBeenCalledOnce();
+    expect(catalogStorage.getCatalog(mapping.id)?.tasks).toEqual([]);
   });
 
   it("keeps a previous root registered while an open historical note is deferred", async () => {
@@ -1514,9 +1511,11 @@ describe("ObsidianProjectSyncVault", () => {
 
     // Match service ordering where the old mapping is reconciled before the destination mapping.
     const scanToken = {};
+    const allSnapshotTaskIds = new Set([originalTask.id]);
     await adapter.reconcile(emptySnapshot(first), firstMapping, {
       assertValid: () => undefined,
       mappingRoots,
+      allSnapshotTaskIds,
       scanToken,
     });
     const movedTask = makeTask("moving-task", { content: "Moving task", project: second });
@@ -1528,7 +1527,7 @@ describe("ObsidianProjectSyncVault", () => {
         syncedAt: "2026-08-10T01:00:00.000Z",
       },
       secondMapping,
-      { assertValid: () => undefined, mappingRoots, scanToken },
+      { assertValid: () => undefined, mappingRoots, allSnapshotTaskIds, scanToken },
     );
 
     const destinationPath = "Archive/Moving task.md";
@@ -2285,7 +2284,7 @@ describe("ObsidianProjectSyncVault", () => {
     expect(vault.files.has(sourcePath)).toBe(true);
   });
 
-  it("does not mark a missing note after its identity changes externally", async () => {
+  it("does not trash a missing note after its identity changes externally", async () => {
     const project = makeProject("root", { name: "Root" });
     const task = makeTask("missing-race", { content: "Missing", project });
     const path = "Sync/Missing.md";
@@ -2302,31 +2301,35 @@ describe("ObsidianProjectSyncVault", () => {
         makeManagedBody(task),
       ),
     );
-    await adapter.reconcile(emptySnapshot(project), mapping);
-    vault.beforeProcess = () => {
-      const entry = vault.files.get(path);
-      if (entry !== undefined) {
-        entry.content = entry.content.replace(
-          "todoist_task_id: missing-race",
-          "todoist_task_id: externally-changed",
-        );
-      }
-    };
+    adapter = new ObsidianProjectSyncVault(
+      vault as unknown as Vault,
+      fileManager as unknown as FileManager,
+      () => new Set(),
+      async (_paths, operation) => {
+        const entry = vault.files.get(path);
+        if (entry !== undefined) {
+          entry.content = entry.content.replace(
+            "todoist_task_id: missing-race",
+            "todoist_task_id: externally-changed",
+          );
+        }
+        return await operation();
+      },
+      catalogStorage,
+    );
 
     const result = await adapter.reconcile(emptySnapshot(project), mapping);
 
-    expect(result).toMatchObject({ updated: 0, stale: 0 });
+    expect(result).toMatchObject({ updated: 0, deleted: 0 });
     expect(result.conflicts).toEqual([
       expect.objectContaining({ taskId: task.id, path, projectionBlocked: true }),
     ]);
     const frontmatter = parseFrontmatter(vault.files.get(path)?.content ?? "");
     expect(frontmatter.todoist_task_id).toBe("externally-changed");
-    expect(catalogStorage.getCatalog(mapping.id)?.tasks).toEqual([
-      expect.objectContaining({ id: task.id, missingCount: 1 }),
-    ]);
+    expect(fileManager.trashFile).not.toHaveBeenCalled();
   });
 
-  it("does not mark a task missing when the live note comes from a newer snapshot", async () => {
+  it("does not trash a task when the live note comes from a newer snapshot", async () => {
     const project = makeProject("root", { name: "Root" });
     const task = makeTask("newer-missing", { content: "Newer missing", project });
     const path = "Sync/Newer missing.md";
@@ -2352,20 +2355,20 @@ describe("ObsidianProjectSyncVault", () => {
       mapping,
     );
 
-    expect(result).toMatchObject({ updated: 0, stale: 0 });
+    expect(result).toMatchObject({ updated: 0, deleted: 0 });
     expect(result.conflicts).toEqual([
       expect.objectContaining({
         taskId: task.id,
         path,
         projectionBlocked: true,
-        message: expect.stringContaining("stale missing result"),
+        message: expect.stringContaining("remote deletion was not applied"),
       }),
     ]);
     expect(vault.files.get(path)?.content).toBe(original);
-    expect(vault.process).not.toHaveBeenCalled();
+    expect(fileManager.trashFile).not.toHaveBeenCalled();
   });
 
-  it("rechecks the missing snapshot fence inside the atomic Vault process callback", async () => {
+  it("rechecks the remote-deletion snapshot fence immediately before trashing", async () => {
     const project = makeProject("root", { name: "Root" });
     const task = {
       ...makeTask("missing-revision-race", { content: "Missing race", project }),
@@ -2383,24 +2386,22 @@ describe("ObsidianProjectSyncVault", () => {
       makeManagedBody(task),
     );
     vault.addFile(path, original);
-    await adapter.reconcile(
-      {
-        rootProjectId: project.id,
-        projects: [project],
-        tasks: [],
-        syncedAt: "2026-08-10T00:30:00.000Z",
+    adapter = new ObsidianProjectSyncVault(
+      vault as unknown as Vault,
+      fileManager as unknown as FileManager,
+      () => new Set(),
+      async (_paths, operation) => {
+        const entry = vault.files.get(path);
+        if (entry !== undefined) {
+          entry.content = entry.content.replace(
+            "todoist_updated_at: '2026-08-10T00:00:00.000Z'",
+            "todoist_updated_at: '2026-08-10T02:00:00.000Z'",
+          );
+        }
+        return await operation();
       },
-      mapping,
+      catalogStorage,
     );
-    vault.beforeProcess = () => {
-      const entry = vault.files.get(path);
-      if (entry !== undefined) {
-        entry.content = entry.content.replace(
-          "todoist_updated_at: '2026-08-10T00:00:00.000Z'",
-          "todoist_updated_at: '2026-08-10T02:00:00.000Z'",
-        );
-      }
-    };
 
     const result = await adapter.reconcile(
       {
@@ -2412,20 +2413,20 @@ describe("ObsidianProjectSyncVault", () => {
       mapping,
     );
 
-    expect(result).toMatchObject({ updated: 0, stale: 0 });
+    expect(result).toMatchObject({ updated: 0, deleted: 0 });
     expect(result.conflicts).toEqual([
       expect.objectContaining({
         taskId: task.id,
         path,
         projectionBlocked: true,
-        message: expect.stringContaining("stale missing result"),
+        message: expect.stringContaining("remote deletion was not applied"),
       }),
     ]);
     expect(parseFrontmatter(vault.files.get(path)?.content ?? "")).toMatchObject({
       todoist_updated_at: "2026-08-10T02:00:00.000Z",
       todoist_synced_at: "2026-08-10T00:00:00.000Z",
     });
-    expect(vault.process).toHaveBeenCalledTimes(1);
+    expect(fileManager.trashFile).not.toHaveBeenCalled();
   });
 
   it("does not write when the run is invalidated before the atomic Vault process callback", async () => {
@@ -2520,7 +2521,7 @@ describe("ObsidianProjectSyncVault", () => {
     expect(fileManager.renameFile).not.toHaveBeenCalled();
   });
 
-  it("marks a missing task stale on the second full miss and stops rewriting it", async () => {
+  it("moves a remotely deleted task note to the user's configured trash immediately", async () => {
     const project = makeProject("root", { name: "Root" });
     const task = makeTask("missing", { content: "Missing", project });
     const frontmatter = makeTaskFrontmatter(
@@ -2530,26 +2531,15 @@ describe("ObsidianProjectSyncVault", () => {
       "2026-08-09T00:00:00.000Z",
     );
     const legacyPath = "Sync/Missing -- missing.md";
-    const canonicalPath = "Sync/Missing.md";
     vault.addFile(legacyPath, renderNewTaskDocument(frontmatter, makeManagedBody(task)));
 
-    const first = await adapter.reconcile(emptySnapshot(project), mapping);
-    const second = await adapter.reconcile(emptySnapshot(project), mapping);
-    const third = await adapter.reconcile(emptySnapshot(project), mapping);
+    const result = await adapter.reconcile(emptySnapshot(project), mapping);
 
-    expect(first).toMatchObject({ moved: 1, stale: 0 });
-    expect(second.stale).toBe(1);
-    expect(third).toMatchObject({ moved: 0, updated: 0 });
+    expect(result).toMatchObject({ moved: 0, deleted: 1, updated: 0 });
     expect(vault.files.has(legacyPath)).toBe(false);
-    const parsed = parseFrontmatter(vault.files.get(canonicalPath)?.content ?? "");
-    expect(parsed).toMatchObject({
-      todoist_status: "stale",
-    });
-    expect(parsed).not.toHaveProperty("todoist_sync_missing_count");
-    expect(parsed).not.toHaveProperty("todoist_stale_since");
-    expect(catalogStorage.getCatalog(mapping.id)?.tasks).toEqual([
-      expect.objectContaining({ id: task.id, missingCount: 2 }),
-    ]);
+    expect(vault.files.has("Sync/Missing.md")).toBe(false);
+    expect(fileManager.trashFile).toHaveBeenCalledOnce();
+    expect(catalogStorage.getCatalog(mapping.id)?.tasks).toEqual([]);
   });
 
   it("marks former child-project notes out of scope and does not rewrite them again", async () => {
@@ -2573,8 +2563,8 @@ describe("ObsidianProjectSyncVault", () => {
     const first = await adapter.reconcile(emptySnapshot(root), rootOnlyMapping);
     const second = await adapter.reconcile(emptySnapshot(root), rootOnlyMapping);
 
-    expect(first).toMatchObject({ moved: 1, outOfScope: 1, updated: 1, unchanged: 0, stale: 0 });
-    expect(second).toMatchObject({ moved: 0, outOfScope: 1, updated: 0, unchanged: 1, stale: 0 });
+    expect(first).toMatchObject({ moved: 1, outOfScope: 1, updated: 1, unchanged: 0, deleted: 0 });
+    expect(second).toMatchObject({ moved: 0, outOfScope: 1, updated: 0, unchanged: 1, deleted: 0 });
     expect(vault.files.has(legacyPath)).toBe(false);
     expect(parseFrontmatter(vault.files.get(canonicalPath)?.content ?? "")).toMatchObject({
       todoist_status: "out_of_scope",

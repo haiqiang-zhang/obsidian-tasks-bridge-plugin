@@ -51,7 +51,7 @@ const successResult = (): ProjectSyncResult => ({
   updated: 1,
   moved: 0,
   unchanged: 0,
-  stale: 0,
+  deleted: 0,
   outOfScope: 0,
   deferred: 0,
   conflicts: [],

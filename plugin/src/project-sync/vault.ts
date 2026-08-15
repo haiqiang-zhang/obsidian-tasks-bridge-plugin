@@ -143,7 +143,7 @@ const emptyResult = (): ProjectSyncResult => ({
   updated: 0,
   moved: 0,
   unchanged: 0,
-  stale: 0,
+  deleted: 0,
   outOfScope: 0,
   deferred: 0,
   conflicts: [],
@@ -210,7 +210,6 @@ export class ObsidianProjectSyncVault {
   private readonly openFilePaths: OpenFilePathsProvider;
   private readonly runInternalMutation: ProjectSyncInternalMutationRunner;
   private readonly catalogStorage?: ProjectCatalogStorage;
-  private readonly missingCounts = new Map<string, number>();
   private readonly managedFileIndexes = new WeakMap<object, Promise<IndexedVaultFile[]>>();
 
   constructor(
@@ -332,11 +331,6 @@ export class ObsidianProjectSyncVault {
     const projectedFilesByTaskId = new Map<string, ProjectedTaskFile>();
     const conflictedIds = new Set<string>();
     const desiredIds = new Set(snapshot.tasks.map(({ task }) => task.id));
-    for (const taskId of desiredIds) {
-      // A task that reappears starts a new missing-task sequence. Do not let an in-memory count
-      // from an earlier disappearance make a later first miss stale immediately.
-      this.missingCounts.delete(`${mapping.id}\u0000${taskId}`);
-    }
     const desiredTaskFolders = new Set(
       [...taskFilePlans.values()].flatMap((plan) =>
         plan.folderCollision === undefined ? [] : [portablePathKey(plan.folder)],
@@ -584,6 +578,43 @@ export class ObsidianProjectSyncVault {
         previousCatalog?.tasks.find((task) => task.id === taskId) ?? readLegacyCatalogTask(managed);
       const outOfScopeProjectId =
         catalogTask?.projectId ?? readLegacyProjectIdFromPath(managed, snapshot.projects);
+      const remainsOutOfScope =
+        !mapping.includeSubprojects &&
+        outOfScopeProjectId !== undefined &&
+        outOfScopeProjectId !== snapshot.rootProjectId;
+      // A task can move between configured mappings in one complete multi-project snapshot.
+      // Let the destination mapping move its existing file instead of treating it as deleted.
+      const existsInAnotherSnapshot = runContext.allSnapshotTaskIds?.has(taskId) === true;
+
+      if (!remainsOutOfScope && !existsInAnotherSnapshot) {
+        try {
+          await this.trashMissingManagedFile(managed, snapshot.syncedAt, runContext);
+        } catch (error: unknown) {
+          if (error instanceof ActiveManagedNoteError) {
+            this.recordDeferred(result, taskId, managed.file.path, error.message);
+            continue;
+          }
+          if (
+            error instanceof ManagedNoteIdentityConflictError ||
+            error instanceof ManagedPathRaceError
+          ) {
+            result.conflicts.push({
+              taskId,
+              path: managed.file.path,
+              message: error.message,
+              projectionBlocked: true,
+            });
+            continue;
+          }
+          throw error;
+        }
+        pathIndex.remove(managed.file);
+        managedFiles.delete(managed.file);
+        managedById.delete(taskId);
+        result.deleted++;
+        continue;
+      }
+
       try {
         const migration = await this.moveHistoricalManagedFile(
           managed,
@@ -631,11 +662,7 @@ export class ObsidianProjectSyncVault {
         throw error;
       }
 
-      if (
-        !mapping.includeSubprojects &&
-        outOfScopeProjectId !== undefined &&
-        outOfScopeProjectId !== snapshot.rootProjectId
-      ) {
+      if (remainsOutOfScope) {
         try {
           const updated = await this.markOutOfScope(managed, runContext);
           result.outOfScope++;
@@ -660,49 +687,6 @@ export class ObsidianProjectSyncVault {
           }
           throw error;
         }
-        continue;
-      }
-
-      const missingKey = `${mapping.id}\u0000${taskId}`;
-      const legacyMissingCount = readNonNegativeInteger(
-        managed.frontmatter.todoist_sync_missing_count,
-      );
-      const currentMissingCount =
-        catalogTask?.missingCount ?? this.missingCounts.get(missingKey) ?? legacyMissingCount;
-      const nextMissingCount = Math.min(2, currentMissingCount + 1);
-      this.missingCounts.set(missingKey, nextMissingCount);
-      let missingUpdate: { updated: boolean; becameStale: boolean };
-      try {
-        missingUpdate = await this.markMissing(
-          managed,
-          snapshot.syncedAt,
-          nextMissingCount,
-          runContext,
-        );
-      } catch (error: unknown) {
-        if (error instanceof ActiveManagedNoteError) {
-          this.recordDeferred(result, taskId, managed.file.path, error.message);
-          continue;
-        }
-        if (error instanceof ManagedNoteIdentityConflictError) {
-          this.missingCounts.set(missingKey, currentMissingCount);
-          result.conflicts.push({
-            taskId,
-            path: managed.file.path,
-            message: error.message,
-            projectionBlocked: true,
-          });
-          continue;
-        }
-        throw error;
-      }
-      if (missingUpdate.updated) {
-        result.updated++;
-      } else {
-        result.unchanged++;
-      }
-      if (missingUpdate.becameStale) {
-        result.stale++;
       }
     }
 
@@ -1800,55 +1784,34 @@ export class ObsidianProjectSyncVault {
     return { moved, updated: documentUpdated || moved };
   }
 
-  private async markMissing(
+  private async trashMissingManagedFile(
     managed: ManagedFile,
     syncedAt: string,
-    missingCount: number,
     runContext: ProjectSyncRunContext,
-  ): Promise<{ updated: boolean; becameStale: boolean }> {
-    runContext.assertValid();
-    const live = await this.readLiveManagedNote(managed.file);
-    runContext.assertValid();
-    this.assertSameManagedIdentity(managed.identity, live.identity, managed.file.path);
-    this.assertMissingSnapshotNotOlder(live.frontmatter, syncedAt, managed.file.path);
-    if (!this.needsMissingUpdate(live.frontmatter, missingCount)) {
-      return { updated: false, becameStale: false };
-    }
-
-    let updated = false;
-    let becameStale = false;
-
+  ): Promise<void> {
     runContext.assertValid();
     this.assertBackgroundFile(managed.file);
-    try {
-      await this.processFileInternally(managed.file, (content) => {
-        runContext.assertValid();
-        const current = this.parseLiveManagedNote(content, managed.file.path);
-        this.assertSameManagedIdentity(managed.identity, current.identity, managed.file.path);
-        this.assertMissingSnapshotNotOlder(current.frontmatter, syncedAt, managed.file.path);
-        if (!this.needsMissingUpdate(current.frontmatter, missingCount)) {
-          throw new NoManagedDocumentChangeError();
-        }
-
-        const nextFrontmatter = { ...current.frontmatter };
-        updated = removeLegacyImplementationFrontmatter(nextFrontmatter);
-        becameStale = nextFrontmatter.todoist_status !== "stale";
-        if (becameStale) {
-          nextFrontmatter.todoist_status = "stale";
-          updated = true;
-        }
-
-        const yaml = dumpYaml(nextFrontmatter, { lineWidth: -1, noRefs: true });
-        return `---\n${yaml}---\n${content.slice(current.contentStart)}`;
-      });
-    } catch (error: unknown) {
-      if (!(error instanceof NoManagedDocumentChangeError)) {
-        throw error;
+    const path = managed.file.path;
+    await this.runInternalMutation([path], async () => {
+      runContext.assertValid();
+      const currentFile = this.vault.getAbstractFileByPath(path);
+      if (currentFile === null) {
+        return;
       }
-    }
-    runContext.assertValid();
+      if (!(currentFile instanceof TFile) || currentFile !== managed.file) {
+        throw new ManagedPathRaceError(
+          `Managed note '${path}' changed while synchronization was confirming its remote deletion`,
+        );
+      }
 
-    return { updated, becameStale };
+      const live = await this.readLiveManagedNote(managed.file);
+      this.assertSameManagedIdentity(managed.identity, live.identity, path);
+      this.assertMissingSnapshotNotOlder(live.frontmatter, syncedAt, path);
+      this.assertBackgroundFile(managed.file);
+      runContext.assertValid();
+      await this.fileManager.trashFile(managed.file);
+    });
+    runContext.assertValid();
   }
 
   private async createManagedFile(
@@ -2080,16 +2043,9 @@ export class ObsidianProjectSyncVault {
       (sourceRevision !== undefined && sourceRevision > snapshotTimestamp)
     ) {
       throw new ManagedNoteIdentityConflictError(
-        `Managed note '${path}' contains a newer or unreadable Todoist snapshot revision; the stale missing result was not applied`,
+        `Managed note '${path}' contains a newer or unreadable Todoist snapshot revision; the remote deletion was not applied`,
       );
     }
-  }
-
-  private needsMissingUpdate(frontmatter: ManagedFrontmatter, missingCount: number): boolean {
-    return (
-      hasLegacyImplementationFrontmatter(frontmatter) ||
-      (missingCount >= 2 && frontmatter.todoist_status !== "stale")
-    );
   }
 
   private async persistCatalogState(
@@ -2115,11 +2071,9 @@ export class ObsidianProjectSyncVault {
       if (task === undefined) {
         continue;
       }
-      const missingCount = this.missingCounts.get(`${mapping.id}\u0000${task.id}`);
-      next.tasks.push({
-        ...task,
-        ...(missingCount === undefined ? {} : { missingCount }),
-      });
+      const currentTask = { ...task };
+      delete currentTask.missingCount;
+      next.tasks.push(currentTask);
     }
     next.completionEvents = mergeProjectCompletionEvents(
       previous?.completionEvents ?? [],
@@ -2406,9 +2360,6 @@ export class ObsidianProjectSyncVault {
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
-const readNonNegativeInteger = (value: unknown): number =>
-  typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0;
-
 const readLegacyCatalogTask = (
   managed: ManagedFile | undefined,
 ): import("./catalog").ProjectCatalogTask | undefined => {
@@ -2426,14 +2377,12 @@ const readLegacyCatalogTask = (
     typeof frontmatter.todoist_order === "number" && Number.isFinite(frontmatter.todoist_order)
       ? frontmatter.todoist_order
       : 0;
-  const missingCount = readNonNegativeInteger(frontmatter.todoist_sync_missing_count);
   return {
     id: managed.identity.taskId,
     projectId,
     ...(parentId === null ? {} : { parentId }),
     ...(sectionId === null ? {} : { sectionId }),
     order,
-    ...(missingCount === 0 ? {} : { missingCount }),
   };
 };
 

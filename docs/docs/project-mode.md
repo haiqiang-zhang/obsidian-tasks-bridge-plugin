@@ -87,7 +87,7 @@ Most synchronized values remain a one-way projection. Changes made to plugin-man
 | `todoist_task_id` | Stable Todoist task ID |
 | `todoist_content` | Task name |
 | `todoist_description` | Task description |
-| `todoist_status` | `active`, `completed`, `stale`, or `out_of_scope` |
+| `todoist_status` | `active`, `completed`, or `out_of_scope` |
 | `todoist_completed` | Whether the task is completed; this user-editable checkbox is synchronized back to Todoist |
 | `todoist_project` | Project name |
 | `todoist_project_path` | Project hierarchy as a list of names |
@@ -204,7 +204,7 @@ Select a task title to open its Markdown note. Task actions always operate on To
 - **Reopen** reopens a completed task in Todoist.
 - **Edit** uses the same native-styled controls as the plugin's task editor for the task name, description, labels, priority, due date and time, duration, and deadline.
 
-The project and section are shown as context in the editor but cannot be moved by this first Tasks List view. Recurring due rules are kept unchanged unless you explicitly replace the due date. A completed task must be reopened before it can be edited. Stale and out-of-scope tasks remain read-only until a later synchronization restores an actionable status; actions are also unavailable while Todoist is not ready.
+The project and section are shown as context in the editor but cannot be moved by this first Tasks List view. Recurring due rules are kept unchanged unless you explicitly replace the due date. A completed task must be reopened before it can be edited. Out-of-scope tasks remain read-only until a later synchronization restores an actionable status; actions are also unavailable while Todoist is not ready.
 
 Do not edit plugin-managed `todoist_*` fields as a substitute for these actions. Project sync remains the authoritative projection and replaces local changes to managed fields during synchronization. If Todoist accepts an action but immediate projection is skipped, deferred, or fails, the remote change is still saved. Do not repeat the remote action; use **Sync Todoist projects** to refresh its note later.
 
@@ -227,7 +227,7 @@ Manual synchronization does not depend on global **Auto-refresh**.
 
 Overlapping requests on one device are combined, so repeatedly starting a sync does not create concurrent local runs. Todoist data is fetched before any mapping is reconciled with the Vault, so a failed or incomplete fetch cannot apply a partial multi-project snapshot.
 
-## Safety and stale tasks
+## Safety and remote deletions
 
 Each mapped Vault folder is an independent projection boundary, but the plugin does not assume ownership of every file inside it. The settings prevent mapped boundaries from being equal, nested, case variants, or Unicode-normalization variants of one another.
 
@@ -237,10 +237,12 @@ Each mapped Vault folder is an independent projection boundary, but the plugin d
 - Managed frontmatter and the managed body are revalidated against the live file and written together with one atomic `Vault.process()` operation. If Obsidian Sync changes the note's task ID or newer Todoist revision between scan and write, the older projection is rejected instead of overwriting it.
 - File creation and rename destinations are checked again immediately before the operation. A path that appears during synchronization becomes a reported conflict and is never overwritten.
 - A damaged or structurally unreadable likely-managed YAML document fences new file creation for that mapping during the run, preventing an unsafe `Task (2).md` replacement.
-- If a live note has `todoist_updated_at` but Todoist returns a revisionless snapshot, semantic changes are blocked. Missing-task bookkeeping also compares the live source and sync revisions inside the atomic write, so an older empty snapshot cannot mark a newer note as missing.
+- If a live note has `todoist_updated_at` but Todoist returns a revisionless snapshot, semantic changes are blocked. Remote deletion revalidates the live task identity and source revision immediately before the official trash operation, so an older snapshot cannot remove a newer projection.
 - A failed or incomplete Todoist fetch is not applied as a successful snapshot.
-- A task missing from one complete successful snapshot is retained. If it is absent from the next complete snapshot as well, its `todoist_status` becomes `stale`. The internal missing counter lives in `data.json`; stale notes are never automatically trashed or deleted.
-- If a stale task reappears, its current Todoist data is restored and the internal missing counter returns to zero.
+- A task absent from a complete successful Todoist snapshot is removed from its Project sync folder with Obsidian's official trash operation. Obsidian follows the user's configured trash preference, so the Markdown remains recoverable from the Vault or system trash.
+- Remote deletion is applied only after every paginated active-task and completed-task request needed by the selected Project hierarchy succeeds. A failed, interrupted, or incomplete fetch never deletes a local note.
+- If the same task appears in another configured Project mapping during the same complete snapshot, its existing Markdown is moved to that mapping instead of being deleted.
+- Notes carrying the legacy `stale` status from an earlier Tasks Bridge version are moved to trash the next time a complete snapshot confirms that the Todoist task is absent.
 - If **Include child projects** is turned off, previously synchronized descendant tasks are retained and marked `out_of_scope`. They are not deleted. Re-enabling descendants restores their current Todoist state on the next sync.
 - If a task moves from one currently configured project mapping to another, its existing managed note is moved to the destination mapping so user-authored content is retained and a duplicate note is not created.
 - If you change a mapping's **Vault folder**, the plugin remembers every previous projection root and moves its managed notes into the new root. Interrupted or deferred moves resume on a later sync. Historical roots remain registered so a note delivered late by Obsidian Sync can still be recognized and moved instead of becoming an orphan or duplicate; the mapping's Settings card lists these monitored roots.

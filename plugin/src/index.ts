@@ -401,7 +401,7 @@ export default class TodoistPlugin extends Plugin {
           result.created,
           result.updated,
           result.moved,
-          result.stale,
+          result.deleted,
           result.conflicts.length,
         ),
       );
@@ -930,7 +930,7 @@ export default class TodoistPlugin extends Plugin {
         result.created,
         result.updated,
         result.moved,
-        result.stale,
+        result.deleted,
         actionableConflictCount,
       ),
     );

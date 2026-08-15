@@ -95,7 +95,7 @@ export type ProjectSyncResult = {
   updated: number;
   moved: number;
   unchanged: number;
-  stale: number;
+  deleted: number;
   outOfScope: number;
   deferred: number;
   conflicts: ProjectSyncConflict[];
@@ -115,6 +115,8 @@ export type ProjectSyncMappingRoot = {
 export type ProjectSyncRunContext = {
   assertValid(): void;
   mappingRoots?: readonly ProjectSyncMappingRoot[];
+  /** Every task ID present in the complete multi-mapping Todoist snapshot for this run. */
+  allSnapshotTaskIds?: ReadonlySet<string>;
   scanToken?: object;
 };
 

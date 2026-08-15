@@ -279,6 +279,9 @@ export class ProjectFolderSyncService {
         ];
       });
       const scanToken = {};
+      const allSnapshotTaskIds = new Set(
+        snapshots.flatMap(({ snapshot }) => snapshot.tasks.map(({ task }) => task.id)),
+      );
       const result = emptyResult();
       for (const mapping of unavailableMappings) {
         result.pausedMappingIds.push(mapping.id);
@@ -288,6 +291,7 @@ export class ProjectFolderSyncService {
         const mappingResult = await this.vault.reconcile(snapshot, mapping, {
           assertValid: () => this.assertCurrent(generation),
           mappingRoots,
+          allSnapshotTaskIds,
           scanToken,
         });
         addResult(result, mappingResult);
@@ -300,6 +304,7 @@ export class ProjectFolderSyncService {
           await this.statisticsRepository.persistProjectCatalog(snapshot, mapping, {
             assertValid: () => this.assertCurrent(generation),
             mappingRoots,
+            allSnapshotTaskIds,
             scanToken,
           });
         }
@@ -666,7 +671,7 @@ const emptyResult = (): ProjectSyncResult => ({
   updated: 0,
   moved: 0,
   unchanged: 0,
-  stale: 0,
+  deleted: 0,
   outOfScope: 0,
   deferred: 0,
   conflicts: [],
@@ -679,7 +684,7 @@ const addResult = (target: ProjectSyncResult, source: ProjectSyncResult): void =
   target.updated += source.updated;
   target.moved += source.moved;
   target.unchanged += source.unchanged;
-  target.stale += source.stale;
+  target.deleted += source.deleted;
   target.outOfScope += source.outOfScope;
   target.deferred += source.deferred;
   target.conflicts.push(...source.conflicts);

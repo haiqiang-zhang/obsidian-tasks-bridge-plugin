@@ -6,8 +6,8 @@ export const en: Translations = {
     projectSyncDisabled: "Project sync is disabled or is not fully configured.",
     projectSyncInterrupted:
       "Project sync paused because the mapped Vault folders changed. Wait for Obsidian Sync to settle, then try again.",
-    projectSyncComplete: (created, updated, moved, stale, conflicts) =>
-      `Project sync complete: ${created} created, ${updated} updated, ${moved} moved, ${stale} stale, ${conflicts} conflicts.`,
+    projectSyncComplete: (created, updated, moved, deleted, conflicts) =>
+      `Project sync complete: ${created} created, ${updated} updated, ${moved} moved, ${deleted} deleted, ${conflicts} conflicts.`,
     projectSyncFailed: (message) => `Project sync failed: ${message}`,
   },
   settings: {

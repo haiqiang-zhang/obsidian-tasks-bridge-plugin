@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### 🐛 Bug Fixes
+
+- Project sync now mirrors Todoist task deletion by moving the corresponding Markdown note to the user's configured Obsidian trash after one complete successful snapshot. Failed or incomplete fetches, cross-mapping moves, out-of-scope child projects, open notes, and newer local projections remain protected.
+
 ## v2.9.12 (2026-08-15)
 
 ### 🐛 Bug Fixes

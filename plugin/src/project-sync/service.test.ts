@@ -18,7 +18,7 @@ const successResult = (overrides: Partial<ProjectSyncResult> = {}): ProjectSyncR
   updated: 0,
   moved: 0,
   unchanged: 0,
-  stale: 0,
+  deleted: 0,
   outOfScope: 0,
   deferred: 0,
   conflicts: [],
@@ -128,6 +128,7 @@ describe("ProjectFolderSyncService", () => {
         .mockResolvedValueOnce(
           successResult({
             created: 2,
+            deleted: 2,
             unchanged: 1,
             conflicts: [{ message: "first" }],
             settledMappingIds: ["mapping-first"],
@@ -137,6 +138,7 @@ describe("ProjectFolderSyncService", () => {
           successResult({
             updated: 3,
             moved: 1,
+            deleted: 1,
             deferred: 1,
             conflicts: [{ message: "second" }],
             settledMappingIds: ["mapping-second"],
@@ -157,6 +159,7 @@ describe("ProjectFolderSyncService", () => {
         created: 2,
         updated: 3,
         moved: 1,
+        deleted: 3,
         unchanged: 1,
         deferred: 1,
         conflicts: [{ message: "first" }, { message: "second" }],
