@@ -1,6 +1,6 @@
 {
   "name": "obsidian-tasks-bridge-plugin",
-  "version": "2.9.15",
+  "version": "2.9.16",
   "private": true,
   "license": "MIT",
   "workspaces": [
