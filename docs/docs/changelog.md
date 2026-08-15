@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v2.9.14 (2026-08-15)
+
 ### 🔁 Changes
 
 - Updated query checkboxes and selector DOM construction to supported UI APIs, tightened callback typing, and added a reproducible root plugin build command for community review tooling.

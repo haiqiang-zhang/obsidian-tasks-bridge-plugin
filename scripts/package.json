@@ -1,6 +1,6 @@
 {
   "name": "@tasks-bridge/scripts",
-  "version": "2.9.13",
+  "version": "2.9.14",
   "private": true,
   "license": "MIT",
   "type": "module",
