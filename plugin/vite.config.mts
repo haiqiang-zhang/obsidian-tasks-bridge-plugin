@@ -6,7 +6,7 @@ import { viteStaticCopy } from "vite-plugin-static-copy";
 import tsConfigPaths from "vite-tsconfig-paths";
 import { configDefaults, defineConfig } from "vitest/config";
 
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import path, { resolve } from "node:path";
 
 const { version } = require("./package.json");
@@ -29,12 +29,29 @@ function getOutDir(): string | undefined {
 }
 
 function getBuildStamp(): string {
-  const commitSha = execSync("git rev-parse --short HEAD").toString().trim();
+  if (loadEnv("prod", process.cwd()).VITE_ENV !== "dev") {
+    return `v${version}`;
+  }
+
+  const commitSha = getDevelopmentCommitSha();
   const timestamp = new Date()
     .toISOString()
     .slice(BUILD_TIMESTAMP_START, BUILD_TIMESTAMP_END)
     .replace(/[-:]/g, "");
   return `v${version}-${commitSha}-${timestamp}`;
+}
+
+function getDevelopmentCommitSha(): string {
+  try {
+    return (
+      execFileSync("git", ["rev-parse", "--short", "HEAD"], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      }).trim() || "nogit"
+    );
+  } catch {
+    return "nogit";
+  }
 }
 
 function getShouldMinify(): boolean {

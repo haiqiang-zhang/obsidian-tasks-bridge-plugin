@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### 🐛 Bug Fixes
+
+- Fixed production builds from clean source archives where Git metadata is unavailable.
+- Completed the Settings tab migration to Obsidian's declarative API and removed the deprecated imperative fallback.
+
 ## v2.9.14 (2026-08-15)
 
 ### 🔁 Changes

@@ -6,15 +6,14 @@ import {
 } from "obsidian";
 import type React from "react";
 import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
-import { createRoot, type Root } from "react-dom/client";
+import { createRoot } from "react-dom/client";
 
 import { t } from "@/i18n";
 import { PluginContext } from "@/ui/context";
 
 import type TodoistPlugin from "../..";
-import { type Settings, type TokenStorageSetting, useSettingsStore } from "../../settings";
+import { useSettingsStore } from "../../settings";
 import { TokenValidation } from "../../token";
-import { AutoRefreshIntervalControl } from "./AutoRefreshIntervalControl";
 import { LabelsControl } from "./LabelsControl";
 import { ProjectDropdownControl } from "./ProjectDropdownControl";
 import { ProjectSyncMappingsControl } from "./ProjectSyncMappingsControl";
@@ -28,7 +27,6 @@ import { BuildStamp } from "@/stamp";
 export class SettingsTab extends PluginSettingTab {
   private readonly plugin: TodoistPlugin;
   private readonly projectSyncValidation = new ProjectSyncValidationState();
-  private reactRoot: Root | undefined;
 
   constructor(app: App, plugin: TodoistPlugin) {
     super(app, plugin);
@@ -265,21 +263,7 @@ export class SettingsTab extends PluginSettingTab {
       await this.plugin.writeOptions({ defaultAddTaskAction: value });
     }
   }
-
-  display() {
-    this.containerEl.empty();
-    this.reactRoot = createRoot(this.containerEl);
-    this.reactRoot.render(<SettingsRoot plugin={this.plugin} />);
-  }
-
-  hide() {
-    this.reactRoot?.unmount();
-  }
 }
-
-type Props = {
-  plugin: TodoistPlugin;
-};
 
 type ProjectSyncValidation = {
   ready: boolean;
@@ -498,288 +482,3 @@ const isDeclarativeSettingKey = (key: string): key is DeclarativeSettingKey =>
   key === "addTaskButtonAddsPageLink" ||
   key === "taskCreationDefaultDueDate" ||
   key === "defaultAddTaskAction";
-
-type SettingsKeys<V> = {
-  [K in keyof Settings]: Settings[K] extends V ? K : never;
-}[keyof Settings];
-
-const SettingsRoot: React.FC<Props> = ({ plugin }) => {
-  const settings = useSettingsStore();
-  const [projectSyncValidation, setProjectSyncValidation] = useState({
-    ready: false,
-    valid: false,
-  });
-  const onProjectSyncValidityChange = useCallback((valid: boolean, ready: boolean) => {
-    setProjectSyncValidation((current) =>
-      current.valid === valid && current.ready === ready ? current : { ready, valid },
-    );
-  }, []);
-
-  useEffect(() => {
-    if (
-      projectSyncValidation.ready &&
-      !projectSyncValidation.valid &&
-      settings.projectSyncEnabled
-    ) {
-      void plugin.writeOptions({ projectSyncEnabled: false });
-    }
-  }, [plugin, projectSyncValidation, settings.projectSyncEnabled]);
-
-  const mkOptionUpdate = <K extends keyof Settings>(key: K) => {
-    return async (val: Settings[K]) => {
-      await plugin.writeOptions({
-        [key]: val,
-      });
-    };
-  };
-
-  const toggleProps = (key: SettingsKeys<boolean>) => {
-    const onClick = mkOptionUpdate(key);
-    const value = settings[key];
-
-    return {
-      value,
-      onClick,
-    };
-  };
-
-  const i18n = t().settings;
-
-  return (
-    <PluginContext.Provider value={plugin}>
-      <h2>{i18n.general.header}</h2>
-      <Setting.Root name={i18n.general.links.label} description="">
-        <SettingsLinks />
-      </Setting.Root>
-      <Setting.Root
-        name={i18n.general.apiToken.label}
-        description={i18n.general.apiToken.description}
-      >
-        <TokenChecker tester={TokenValidation.DefaultTester} />
-      </Setting.Root>
-      <Setting.Root
-        name={i18n.general.tokenStorage.label}
-        description={i18n.general.tokenStorage.description}
-      >
-        <Setting.DropdownControl
-          value={settings.tokenStorage}
-          options={[
-            {
-              label: i18n.general.tokenStorage.options.secrets,
-              value: "secrets",
-            },
-            {
-              label: i18n.general.tokenStorage.options.file,
-              value: "file",
-            },
-          ]}
-          onClick={async (val: TokenStorageSetting) => {
-            const oldStorage = settings.tokenStorage;
-            await plugin.services.token.migrateStorage(oldStorage, val);
-            await plugin.writeOptions({ tokenStorage: val });
-          }}
-        />
-      </Setting.Root>
-
-      <h2>{i18n.projectSync.header}</h2>
-      <Setting.Root
-        name={i18n.projectSync.enabled.label}
-        description={i18n.projectSync.enabled.description}
-      >
-        <Setting.ToggleControl
-          {...toggleProps("projectSyncEnabled")}
-          ariaLabel={i18n.projectSync.enabled.label}
-          disabled={!projectSyncValidation.valid && !settings.projectSyncEnabled}
-        />
-      </Setting.Root>
-      <Setting.Root
-        name={i18n.projectSync.mappings.label}
-        description={i18n.projectSync.mappings.description}
-      >
-        <ProjectSyncMappingsControl
-          mappings={settings.projectSyncMappings}
-          onChange={async (mappings, valid) => {
-            await plugin.writeOptions({
-              projectSyncMappings: mappings,
-              ...(settings.projectSyncEnabled && !valid ? { projectSyncEnabled: false } : {}),
-            });
-          }}
-          onValidityChange={onProjectSyncValidityChange}
-        />
-      </Setting.Root>
-      <Setting.Root
-        name={i18n.projectSync.syncNow.label}
-        description={i18n.projectSync.syncNow.description}
-      >
-        <ProjectSyncNowControl
-          disabled={!settings.projectSyncEnabled || !projectSyncValidation.valid}
-        />
-      </Setting.Root>
-
-      <h2>{i18n.autoRefresh.header}</h2>
-      <Setting.Root
-        name={i18n.autoRefresh.toggle.label}
-        description={i18n.autoRefresh.toggle.description}
-      >
-        <Setting.ToggleControl {...toggleProps("autoRefreshToggle")} />
-      </Setting.Root>
-      <Setting.Root
-        name={i18n.autoRefresh.interval.label}
-        description={i18n.autoRefresh.interval.description}
-      >
-        <AutoRefreshIntervalControl
-          initialValue={settings.autoRefreshInterval}
-          onChange={mkOptionUpdate("autoRefreshInterval")}
-        />
-      </Setting.Root>
-
-      <h2>{i18n.rendering.header}</h2>
-      <Setting.Root
-        name={i18n.rendering.taskFadeAnimation.label}
-        description={i18n.rendering.taskFadeAnimation.description}
-      >
-        <Setting.ToggleControl {...toggleProps("fadeToggle")} />
-      </Setting.Root>
-
-      <Setting.Root
-        name={i18n.rendering.dateIcon.label}
-        description={i18n.rendering.dateIcon.description}
-      >
-        <Setting.ToggleControl {...toggleProps("renderDateIcon")} />
-      </Setting.Root>
-      <Setting.Root
-        name={i18n.rendering.projectIcon.label}
-        description={i18n.rendering.projectIcon.description}
-      >
-        <Setting.ToggleControl {...toggleProps("renderProjectIcon")} />
-      </Setting.Root>
-      <Setting.Root
-        name={i18n.rendering.labelsIcon.label}
-        description={i18n.rendering.labelsIcon.description}
-      >
-        <Setting.ToggleControl {...toggleProps("renderLabelsIcon")} />
-      </Setting.Root>
-
-      <h2>{i18n.taskCreation.header}</h2>
-      <Setting.Root
-        name={i18n.taskCreation.wrapLinksInParens.label}
-        description={i18n.taskCreation.wrapLinksInParens.description}
-      >
-        <Setting.ToggleControl {...toggleProps("shouldWrapLinksInParens")} />
-      </Setting.Root>
-      <Setting.Root
-        name={i18n.taskCreation.addTaskButtonAddsPageLink.label}
-        description={i18n.taskCreation.addTaskButtonAddsPageLink.description}
-      >
-        <Setting.DropdownControl
-          value={settings.addTaskButtonAddsPageLink}
-          options={[
-            {
-              label: i18n.taskCreation.addTaskButtonAddsPageLink.options.off,
-              value: "off",
-            },
-            {
-              label: i18n.taskCreation.addTaskButtonAddsPageLink.options.description,
-              value: "description",
-            },
-            {
-              label: i18n.taskCreation.addTaskButtonAddsPageLink.options.content,
-              value: "content",
-            },
-          ]}
-          onClick={async (val) => {
-            await plugin.writeOptions({
-              addTaskButtonAddsPageLink: val,
-            });
-          }}
-        />
-      </Setting.Root>
-      <Setting.Root
-        name={i18n.taskCreation.defaultDueDate.label}
-        description={i18n.taskCreation.defaultDueDate.description}
-      >
-        <Setting.DropdownControl
-          value={settings.taskCreationDefaultDueDate}
-          options={[
-            {
-              label: i18n.taskCreation.defaultDueDate.options.none,
-              value: "none",
-            },
-            {
-              label: t().dates.today,
-              value: "today",
-            },
-            {
-              label: t().dates.tomorrow,
-              value: "tomorrow",
-            },
-          ]}
-          onClick={async (val) => {
-            await plugin.writeOptions({
-              taskCreationDefaultDueDate: val,
-            });
-          }}
-        />
-      </Setting.Root>
-      <Setting.Root
-        name={i18n.taskCreation.defaultProject.label}
-        description={i18n.taskCreation.defaultProject.description}
-      >
-        <ProjectDropdownControl
-          value={settings.taskCreationDefaultProject}
-          onChange={mkOptionUpdate("taskCreationDefaultProject")}
-        />
-      </Setting.Root>
-      <Setting.Root
-        name={i18n.taskCreation.defaultLabels.label}
-        description={i18n.taskCreation.defaultLabels.description}
-      >
-        <LabelsControl
-          value={settings.taskCreationDefaultLabels}
-          onChange={mkOptionUpdate("taskCreationDefaultLabels")}
-        />
-      </Setting.Root>
-      <Setting.Root
-        name={i18n.taskCreation.defaultAddTaskAction.label}
-        description={i18n.taskCreation.defaultAddTaskAction.description}
-      >
-        <Setting.DropdownControl
-          value={settings.defaultAddTaskAction}
-          options={[
-            {
-              label: i18n.taskCreation.defaultAddTaskAction.options.add,
-              value: "add",
-            },
-            {
-              label: i18n.taskCreation.defaultAddTaskAction.options.addCopyApp,
-              value: "add-copy-app",
-            },
-            {
-              label: i18n.taskCreation.defaultAddTaskAction.options.addCopyWeb,
-              value: "add-copy-web",
-            },
-          ]}
-          onClick={async (val) => {
-            await plugin.writeOptions({
-              defaultAddTaskAction: val,
-            });
-          }}
-        />
-      </Setting.Root>
-
-      <h2>{i18n.advanced.header}</h2>
-      <Setting.Root
-        name={i18n.advanced.debugLogging.label}
-        description={i18n.advanced.debugLogging.description}
-      >
-        <Setting.ToggleControl {...toggleProps("debugLogging")} />
-      </Setting.Root>
-      <Setting.Root
-        name={i18n.advanced.buildStamp.label}
-        description={i18n.advanced.buildStamp.description}
-      >
-        <span className="setting-item-build-stamp">{BuildStamp}</span>
-      </Setting.Root>
-    </PluginContext.Provider>
-  );
-};
