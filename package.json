@@ -9,6 +9,8 @@
     "docs"
   ],
   "scripts": {
+    "prebuild": "npm run check --workspace=plugin",
+    "build": "npm run build --workspace=plugin",
     "gen": "npm run gen --workspace=scripts",
     "release": "npm run release --workspace=scripts --"
   },

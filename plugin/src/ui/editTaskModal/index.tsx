@@ -27,7 +27,7 @@ export type EditTaskModalProps = {
   task: Task;
   projectPath: string;
   sectionName?: string;
-  onSubmit(params: UpdateTaskParams): Promise<void>;
+  onSubmit: (params: UpdateTaskParams) => Promise<void>;
 };
 
 export const EditTaskModal: React.FC<EditTaskModalProps> = ({

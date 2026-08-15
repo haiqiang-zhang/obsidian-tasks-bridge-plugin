@@ -202,9 +202,11 @@
     --todoist-checkbox-background: var(--todoist-p1-background);
   }
 
-  .todoist-task-checkbox {
+  .todoist-task-checkbox-field {
     margin-top: 3px;
+  }
 
+  .todoist-task-checkbox {
     > div {
       height: 16px;
       width: 16px;

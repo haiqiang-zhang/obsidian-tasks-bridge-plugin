@@ -410,7 +410,7 @@ const SubtaskRow: React.FC<{
 
 const SubtaskDisclosure: React.FC<{
   collapsed: boolean;
-  onCollapse(): void;
+  onCollapse: () => void;
   taskName: string;
 }> = ({ collapsed, onCollapse, taskName }) => (
   <button

@@ -1,7 +1,7 @@
 import * as motion from "motion/react-m";
 import { Notice } from "obsidian";
 import React, { type MouseEvent } from "react";
-import { Checkbox } from "react-aria-components";
+import { CheckboxButton, CheckboxField } from "react-aria-components";
 
 import { DueDate } from "@/data/dueDate";
 import type { TaskTree } from "@/data/transformations/relationships";
@@ -81,24 +81,26 @@ export const Task: React.FC<Props> = ({ tree }) => {
           duration: 0.4,
         }}
       >
-        <Checkbox
+        <CheckboxField
           aria-label={checkboxLabel}
-          className="todoist-task-checkbox"
+          className="todoist-task-checkbox-field"
           isDisabled={isDisabled}
           isSelected={isCompleted}
           onChange={() => void onClickTask()}
         >
-          <div>
-            {isCompleted && (
-              <ObsidianIcon
-                aria-hidden="true"
-                size="xs"
-                id="check-small"
-                className="todoist-task-check-icon"
-              />
-            )}
-          </div>
-        </Checkbox>
+          <CheckboxButton className="todoist-task-checkbox">
+            <div>
+              {isCompleted && (
+                <ObsidianIcon
+                  aria-hidden="true"
+                  size="xs"
+                  id="check-small"
+                  className="todoist-task-check-icon"
+                />
+              )}
+            </div>
+          </CheckboxButton>
+        </CheckboxField>
         <div className="todoist-task">
           <Markdown
             className="todoist-task-content"

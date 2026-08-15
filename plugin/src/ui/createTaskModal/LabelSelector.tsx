@@ -76,9 +76,7 @@ class LabelSelectionModal extends Modal {
         search.onChange((query) => this.renderOptions(query));
       });
 
-    this.resultsEl = this.contentEl.ownerDocument.createElement("div");
-    this.resultsEl.className = "tasks-bridge-label-selector-results";
-    this.contentEl.append(this.resultsEl);
+    this.resultsEl = this.contentEl.createDiv("tasks-bridge-label-selector-results");
     this.renderOptions("");
 
     new Setting(this.contentEl)
@@ -138,14 +136,12 @@ class LabelSelectionModal extends Modal {
   }
 
   private makeLabelName(label: Label): DocumentFragment {
-    const ownerDocument = this.contentEl.ownerDocument;
-    const fragment = ownerDocument.createDocumentFragment();
-    const iconEl = ownerDocument.createElement("span");
-    iconEl.className = "tasks-bridge-label-selector-icon";
+    const fragment = createFragment();
+    const iconEl = fragment.createSpan({ cls: "tasks-bridge-label-selector-icon" });
     iconEl.dataset.labelColor = label.color;
     iconEl.setAttribute("aria-hidden", "true");
     setIcon(iconEl, "tag");
-    fragment.append(iconEl, ownerDocument.createTextNode(label.name));
+    fragment.append(label.name);
     return fragment;
   }
 }

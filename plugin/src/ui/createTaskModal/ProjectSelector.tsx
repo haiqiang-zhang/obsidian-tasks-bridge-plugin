@@ -95,7 +95,6 @@ class ProjectSuggestModal extends FuzzySuggestModal<ProjectSelectionOption> {
   ): void {
     const { item } = match;
     const current = identifiersEqual(item.identifier, this.selected);
-    const ownerDocument = el.ownerDocument;
     el.classList.add("tasks-bridge-project-suggestion");
     el.dataset.kind = item.section === undefined ? "project" : "section";
     el.setAttribute(
@@ -103,8 +102,7 @@ class ProjectSuggestModal extends FuzzySuggestModal<ProjectSelectionOption> {
       `${this.getItemText(item)}${current ? ", current selection" : ""}`,
     );
 
-    const iconEl = ownerDocument.createElement("span");
-    iconEl.className = "tasks-bridge-project-suggestion-icon";
+    const iconEl = el.createSpan({ cls: "tasks-bridge-project-suggestion-icon" });
     iconEl.setAttribute("aria-hidden", "true");
     if (item.section === undefined) {
       iconEl.dataset.projectColor = item.project.color;
@@ -113,22 +111,16 @@ class ProjectSuggestModal extends FuzzySuggestModal<ProjectSelectionOption> {
       setIcon(iconEl, "gallery-vertical");
     }
 
-    const copyEl = ownerDocument.createElement("span");
-    copyEl.className = "tasks-bridge-project-suggestion-copy";
-    const pathEl = ownerDocument.createElement("span");
-    pathEl.className = "tasks-bridge-project-suggestion-path";
+    const copyEl = el.createSpan({ cls: "tasks-bridge-project-suggestion-copy" });
+    const pathEl = copyEl.createSpan({ cls: "tasks-bridge-project-suggestion-path" });
     renderResults(pathEl, this.getItemText(item), match.match);
-    const kindEl = ownerDocument.createElement("span");
-    kindEl.className = "tasks-bridge-project-suggestion-kind";
-    kindEl.textContent = item.section === undefined ? "Project" : "Section";
-    copyEl.append(pathEl, kindEl);
-    el.append(iconEl, copyEl);
+    copyEl.createSpan({
+      cls: "tasks-bridge-project-suggestion-kind",
+      text: item.section === undefined ? "Project" : "Section",
+    });
 
     if (current) {
-      const currentEl = ownerDocument.createElement("span");
-      currentEl.className = "tasks-bridge-project-suggestion-current";
-      currentEl.textContent = "Current";
-      el.append(currentEl);
+      el.createSpan({ cls: "tasks-bridge-project-suggestion-current", text: "Current" });
     }
   }
 }

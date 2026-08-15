@@ -59,6 +59,12 @@ describe("official Obsidian popup API guard", () => {
     expect(allSources).toContain("openObsidianReactModal");
   });
 
+  it("uses Obsidian DOM creation helpers in runtime UI code", () => {
+    for (const source of runtimeSources) {
+      expect(source).not.toMatch(/\.(?:createElement|createDocumentFragment)\s*\(/);
+    }
+  });
+
   it("routes both date shortcut menus through the anchored Obsidian Menu helper", () => {
     for (const source of [deadlineSource, dueDateSource]) {
       expect(source).toContain("useObsidianMenu");
