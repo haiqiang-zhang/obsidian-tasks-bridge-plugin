@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v2.9.17 (2026-08-16)
+
 ### 🐛 Bug Fixes
 
 - Filter blocks now recursively include every active descendant of matched tasks, while completed subtasks remain opt-in through `completedTasks: true` and grouped views preserve the task hierarchy.
