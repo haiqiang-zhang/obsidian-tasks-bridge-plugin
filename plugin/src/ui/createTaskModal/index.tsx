@@ -296,7 +296,7 @@ const CreateTaskModalContent: React.FC<CreateTaskProps> = ({
   const {
     anchorRef: addTaskMenuAnchorRef,
     isOpen: isAddTaskMenuOpen,
-    openMenu: openAddTaskMenu,
+    toggleMenu: toggleAddTaskMenu,
   } = useObsidianMenu((menu) => {
     for (const item of addTaskActions) {
       menu.addItem((menuItem) =>
@@ -363,7 +363,7 @@ const CreateTaskModalContent: React.FC<CreateTaskProps> = ({
               aria-label={i18n.actionMenuLabel}
               className="mod-cta add-task-dropdown"
               isDisabled={isSubmitButtonDisabled}
-              onPress={openAddTaskMenu}
+              onPress={toggleAddTaskMenu}
             >
               <ObsidianIcon id="chevron-down" size="s" />
             </Button>

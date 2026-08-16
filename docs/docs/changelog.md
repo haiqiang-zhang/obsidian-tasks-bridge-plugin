@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### 🐛 Bug Fixes
+
+- Anchored Obsidian menus now open beneath their trigger, automatically avoid viewport overflow, and close when the same trigger is pressed again, including the completion heatmap range selector.
+
 ## v2.9.17 (2026-08-16)
 
 ### 🐛 Bug Fixes

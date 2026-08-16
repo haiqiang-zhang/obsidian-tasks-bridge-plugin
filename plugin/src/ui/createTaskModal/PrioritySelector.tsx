@@ -18,7 +18,7 @@ const options: Priority[] = [Priorities.P1, Priorities.P2, Priorities.P3, Priori
 
 export const PrioritySelector: React.FC<Props> = ({ selected, setSelected }) => {
   const i18n = t().createTaskModal.prioritySelector;
-  const { anchorRef, isOpen, openMenu } = useObsidianMenu((menu) => {
+  const { anchorRef, isOpen, toggleMenu } = useObsidianMenu((menu) => {
     for (const priority of options) {
       menu.addItem((item) =>
         item
@@ -37,7 +37,7 @@ export const PrioritySelector: React.FC<Props> = ({ selected, setSelected }) => 
       aria-haspopup="menu"
       aria-label={i18n.buttonLabel}
       className="priority-selector"
-      onPress={openMenu}
+      onPress={toggleMenu}
     >
       <ObsidianIcon size="m" id="flag" />
       <span>{label}</span>

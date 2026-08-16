@@ -35,7 +35,7 @@ export const OptionsSelector: React.FC<Props> = ({ selected, setSelected }) => {
       onSelect: () => setSelected({ ...selected, appendLinkTo: undefined }),
     },
   ];
-  const { anchorRef, isOpen, openMenu } = useObsidianMenu((menu) => {
+  const { anchorRef, isOpen, toggleMenu } = useObsidianMenu((menu) => {
     for (const item of items) {
       menu.addItem((menuItem) =>
         menuItem.setTitle(item.label).setChecked(item.isSelected).onClick(item.onSelect),
@@ -50,7 +50,7 @@ export const OptionsSelector: React.FC<Props> = ({ selected, setSelected }) => {
       aria-haspopup="menu"
       aria-label={i18n.buttonLabel}
       className="options-selector"
-      onPress={openMenu}
+      onPress={toggleMenu}
     >
       <ObsidianIcon size="m" id="ellipsis-vertical" />
     </Button>

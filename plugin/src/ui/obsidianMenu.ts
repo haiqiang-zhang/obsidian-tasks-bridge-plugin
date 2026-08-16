@@ -9,13 +9,17 @@ export const useObsidianMenu = (configure: (menu: Menu) => void) => {
   const [isOpen, setIsOpen] = useState(false);
   configureRef.current = configure;
 
-  const openMenu = useCallback(() => {
+  const toggleMenu = useCallback(() => {
     const anchor = anchorRef.current;
     if (anchor === null) {
       return;
     }
 
-    menuRef.current?.close();
+    const openMenu = menuRef.current;
+    if (openMenu !== null) {
+      openMenu.close();
+      return;
+    }
 
     const menu = new Menu().setParentElement(anchor);
     configureRef.current(menu);
@@ -29,7 +33,10 @@ export const useObsidianMenu = (configure: (menu: Menu) => void) => {
     setIsOpen(true);
 
     const rect = anchor.getBoundingClientRect();
-    menu.showAtPosition({ x: rect.left, y: rect.bottom, width: rect.width }, anchor.ownerDocument);
+    menu.showAtPosition(
+      { x: rect.left, y: rect.bottom, width: rect.width, overlap: true },
+      anchor.ownerDocument,
+    );
   }, []);
 
   useEffect(
@@ -41,5 +48,5 @@ export const useObsidianMenu = (configure: (menu: Menu) => void) => {
     [],
   );
 
-  return { anchorRef, isOpen, openMenu };
+  return { anchorRef, isOpen, toggleMenu };
 };

@@ -443,6 +443,8 @@ export class MarkdownRenderChild {
 export class Notice {}
 
 export class Menu {
+  private hideCallback: (() => unknown) | undefined;
+
   setUseNativeMenu(_useNativeMenu: boolean): this {
     return this;
   }
@@ -456,6 +458,16 @@ export class Menu {
   // biome-ignore lint/correctness/noUnusedFunctionParameters: mocks with empty impl
   showAtPosition(position: { x: number; y: number }, _doc?: Document): this {
     return this;
+  }
+  hide(): this {
+    this.hideCallback?.();
+    return this;
+  }
+  close(): void {
+    this.hide();
+  }
+  onHide(callback: () => unknown): void {
+    this.hideCallback = callback;
   }
 }
 

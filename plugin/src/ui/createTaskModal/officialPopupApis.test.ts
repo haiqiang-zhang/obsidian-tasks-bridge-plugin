@@ -75,6 +75,7 @@ describe("official Obsidian popup API guard", () => {
 
     expect(menuHookSource).toContain("new Menu()");
     expect(menuHookSource).toContain(".setParentElement(anchor)");
+    expect(menuHookSource).toContain("overlap: true");
     expect(menuHookSource).toContain("anchor.ownerDocument");
   });
 });

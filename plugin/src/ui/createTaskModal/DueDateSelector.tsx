@@ -73,7 +73,7 @@ export const DueDateSelector: React.FC<Props> = ({
     });
   };
 
-  const { anchorRef, isOpen, openMenu } = useObsidianMenu((menu) => {
+  const { anchorRef, isOpen, toggleMenu } = useObsidianMenu((menu) => {
     for (const suggestion of suggestions) {
       menu.addItem((item) =>
         item
@@ -105,7 +105,7 @@ export const DueDateSelector: React.FC<Props> = ({
       aria-haspopup="menu"
       aria-label={i18n.buttonLabel}
       className="due-date-selector"
-      onPress={openMenu}
+      onPress={toggleMenu}
     >
       <ObsidianIcon size="s" id="calendar" />
       <span>{getLabel(selected)}</span>
@@ -151,7 +151,7 @@ const DueDateEditor: React.FC<DueDateEditorProps> = ({
   const {
     anchorRef: durationAnchorRef,
     isOpen: durationMenuOpen,
-    openMenu: openDurationMenu,
+    toggleMenu: toggleDurationMenu,
   } = useObsidianMenu((menu) => {
     for (const [index, option] of durationOptions.entries()) {
       menu.addItem((item) =>
@@ -215,7 +215,7 @@ const DueDateEditor: React.FC<DueDateEditorProps> = ({
             aria-expanded={durationMenuOpen}
             aria-haspopup="menu"
             className="task-duration-button"
-            onPress={openDurationMenu}
+            onPress={toggleDurationMenu}
           >
             <span>{durationOptions[durationIndex]?.label}</span>
             <ObsidianIcon id="chevron-down" size="xs" />

@@ -49,7 +49,7 @@ export const DeadlineSelector: React.FC<Props> = ({
     });
   };
 
-  const { anchorRef, isOpen, openMenu } = useObsidianMenu((menu) => {
+  const { anchorRef, isOpen, toggleMenu } = useObsidianMenu((menu) => {
     for (const suggestion of suggestions) {
       menu.addItem((item) =>
         item
@@ -77,7 +77,7 @@ export const DeadlineSelector: React.FC<Props> = ({
       aria-haspopup="menu"
       aria-label={i18n.buttonLabel}
       className="deadline-selector"
-      onPress={openMenu}
+      onPress={toggleMenu}
     >
       <ObsidianIcon size="s" id="target" />
       <span>{getLabel(selected)}</span>

@@ -23,7 +23,7 @@ type MenuRecord = {
   items: MenuItemRecord[];
   native: boolean | null;
   parent: HTMLElement | null;
-  position: { x: number; y: number; width?: number } | null;
+  position: { x: number; y: number; width?: number; overlap?: boolean } | null;
 };
 
 vi.mock("obsidian", () => ({
@@ -77,7 +77,10 @@ vi.mock("obsidian", () => ({
       this.record.hide = hide;
     }
 
-    showAtPosition(position: { x: number; y: number; width?: number }, document: Document): this {
+    showAtPosition(
+      position: { x: number; y: number; width?: number; overlap?: boolean },
+      document: Document,
+    ): this {
       this.record.position = position;
       this.record.document = document;
       return this;
@@ -110,7 +113,7 @@ describe("official create-task menus", () => {
     expect(menu.document).toBe(trigger.ownerDocument);
     expect(menu.native).toBeNull();
     expect(menu.parent).toBe(trigger);
-    expect(menu.position).toEqual({ width: 120, x: 12, y: 48 });
+    expect(menu.position).toEqual({ overlap: true, width: 120, x: 12, y: 48 });
     expect(menu.items.map(({ checked, title }) => ({ checked, title }))).toEqual([
       { checked: false, title: "Priority 1" },
       { checked: true, title: "Priority 2" },
@@ -153,5 +156,23 @@ describe("official create-task menus", () => {
     view.unmount();
 
     expect(menu.closed).toBe(true);
+  });
+
+  it("toggles the same anchored menu closed without opening a replacement", () => {
+    render(<PrioritySelector selected={Priorities.P4} setSelected={vi.fn()} />);
+    const trigger = screen.getByRole("button", { name: "Set priority" });
+
+    fireEvent.click(trigger);
+    const menu = menuInstances[0];
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+
+    fireEvent.click(trigger);
+    expect(menu.closed).toBe(true);
+    expect(menuInstances).toHaveLength(1);
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+
+    fireEvent.click(trigger);
+    expect(menuInstances).toHaveLength(2);
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
   });
 });

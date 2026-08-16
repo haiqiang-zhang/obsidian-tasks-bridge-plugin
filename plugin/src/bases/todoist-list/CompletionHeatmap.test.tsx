@@ -4,7 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CompletionHeatmap } from "./CompletionHeatmap";
 import type { CompletionHeatmapEvent } from "./completionHeatmapModel";
 
-const { menuItems, setTooltipMock, showAtPositionMock } = vi.hoisted(() => ({
+const { closeMenuMock, menuItems, setTooltipMock, showAtPositionMock } = vi.hoisted(() => ({
+  closeMenuMock: vi.fn(),
   menuItems: [] as Array<{
     checked: boolean | null;
     click: (() => void) | null;
@@ -17,6 +18,8 @@ const { menuItems, setTooltipMock, showAtPositionMock } = vi.hoisted(() => ({
 
 vi.mock("obsidian", () => ({
   Menu: class {
+    private hideCallback: (() => void) | null = null;
+
     setParentElement(): this {
       return this;
     }
@@ -53,6 +56,13 @@ vi.mock("obsidian", () => ({
       showAtPositionMock(...args);
       return this;
     }
+    onHide(callback: () => void): void {
+      this.hideCallback = callback;
+    }
+    close(): void {
+      closeMenuMock();
+      this.hideCallback?.();
+    }
   },
   setIcon: (parent: HTMLElement, iconId: string) => {
     parent.dataset.icon = iconId;
@@ -65,6 +75,7 @@ const NOW = new Date("2026-08-12T12:00:00.000Z");
 const event = (id: string, completedAt: string): CompletionHeatmapEvent => ({ id, completedAt });
 
 beforeEach(() => {
+  closeMenuMock.mockClear();
   menuItems.length = 0;
   setTooltipMock.mockClear();
   showAtPositionMock.mockClear();
@@ -130,9 +141,13 @@ describe("CompletionHeatmap", () => {
     const picker = within(heatmap).getByRole("button", {
       name: "Activity range: Last 4 weeks",
     });
+    Object.defineProperty(picker, "getBoundingClientRect", {
+      value: () => ({ bottom: 58, left: 12, width: 120 }),
+    });
     expect(picker).toHaveClass("tasks-bridge-completion-heatmap-range-button");
     expect(picker).not.toHaveClass("dropdown");
     expect(picker.querySelectorAll('[data-icon="chevron-down"]')).toHaveLength(1);
+    expect(picker).toHaveAttribute("aria-expanded", "false");
     fireEvent.click(picker);
     expect(menuItems.map(({ title }) => title)).toEqual([
       "Last 4 weeks",
@@ -150,10 +165,18 @@ describe("CompletionHeatmap", () => {
       checked: false,
       section: "calendar-years",
     });
-    expect(showAtPositionMock).toHaveBeenCalledOnce();
+    expect(showAtPositionMock).toHaveBeenCalledWith(
+      { overlap: true, width: 120, x: 12, y: 58 },
+      picker.ownerDocument,
+    );
+    expect(picker).toHaveAttribute("aria-expanded", "true");
 
     menuItems.find(({ title }) => title === "Last 3 months")?.click?.();
     expect(onRangeChange).toHaveBeenCalledWith("last-3-months");
+    fireEvent.click(picker);
+    expect(closeMenuMock).toHaveBeenCalledOnce();
+    expect(showAtPositionMock).toHaveBeenCalledOnce();
+    expect(picker).toHaveAttribute("aria-expanded", "false");
     expect(within(heatmap).getByText("Less")).toBeInTheDocument();
     expect(within(heatmap).getByText("More")).toBeInTheDocument();
   });

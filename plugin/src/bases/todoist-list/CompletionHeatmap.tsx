@@ -1,4 +1,3 @@
-import { Menu } from "obsidian";
 import type React from "react";
 import {
   type KeyboardEvent as ReactKeyboardEvent,
@@ -14,6 +13,7 @@ import {
 
 import { ObsidianIcon } from "@/ui/components/obsidian-icon";
 import { useObsidianTooltip } from "@/ui/hooks";
+import { useObsidianMenu } from "@/ui/obsidianMenu";
 
 import "./CompletionHeatmap.scss";
 
@@ -148,6 +148,31 @@ export const CompletionHeatmap: React.FC<CompletionHeatmapProps> = ({
       }),
     [events, nowTimestamp, range, timeZone],
   );
+  const {
+    anchorRef: rangeMenuAnchorRef,
+    isOpen: isRangeMenuOpen,
+    toggleMenu: toggleRangeMenu,
+  } = useObsidianMenu((menu) => {
+    for (const option of COMPLETION_HEATMAP_RELATIVE_RANGE_OPTIONS) {
+      menu.addItem((item) =>
+        item
+          .setTitle(option.label)
+          .setChecked(range === option.value)
+          .setSection("recent-ranges")
+          .onClick(() => onRangeChange(option.value)),
+      );
+    }
+    for (const year of model.availableYears) {
+      const value = completionHeatmapCalendarYearRange(year);
+      menu.addItem((item) =>
+        item
+          .setTitle(String(year))
+          .setChecked(range === value)
+          .setSection("calendar-years")
+          .onClick(() => onRangeChange(value)),
+      );
+    }
+  });
   const [focusedKey, setFocusedKey] = useState(model.endKey);
   const [selectionAnchor, setSelectionAnchor] = useState<string | null>(null);
   const [selectedDates, setSelectedDates] = useState<SelectedDates | null>(null);
@@ -268,32 +293,6 @@ export const CompletionHeatmap: React.FC<CompletionHeatmapProps> = ({
   const selectedSummary = selectionSummary(model, selectedDates);
   const hasSelection = selectedDates !== null;
 
-  const showRangeMenu = (event: ReactMouseEvent<HTMLButtonElement>) => {
-    const button = event.currentTarget;
-    const menu = new Menu().setParentElement(button);
-    for (const option of COMPLETION_HEATMAP_RELATIVE_RANGE_OPTIONS) {
-      menu.addItem((item) =>
-        item
-          .setTitle(option.label)
-          .setChecked(range === option.value)
-          .setSection("recent-ranges")
-          .onClick(() => onRangeChange(option.value)),
-      );
-    }
-    for (const year of model.availableYears) {
-      const value = completionHeatmapCalendarYearRange(year);
-      menu.addItem((item) =>
-        item
-          .setTitle(String(year))
-          .setChecked(range === value)
-          .setSection("calendar-years")
-          .onClick(() => onRangeChange(value)),
-      );
-    }
-    const rect = button.getBoundingClientRect();
-    menu.showAtPosition({ x: rect.left, y: rect.bottom, width: rect.width }, button.ownerDocument);
-  };
-
   return (
     <section aria-labelledby={headingId} className="tasks-bridge-completion-heatmap">
       <header className="tasks-bridge-completion-heatmap-header">
@@ -306,10 +305,12 @@ export const CompletionHeatmap: React.FC<CompletionHeatmapProps> = ({
         </div>
         <div className="tasks-bridge-completion-heatmap-range">
           <button
+            ref={rangeMenuAnchorRef}
+            aria-expanded={isRangeMenuOpen}
             aria-haspopup="menu"
             aria-label={`Activity range: ${model.rangeLabel}`}
             className="tasks-bridge-completion-heatmap-range-button"
-            onClick={showRangeMenu}
+            onClick={toggleRangeMenu}
             type="button"
           >
             <span>{model.rangeLabel}</span>
