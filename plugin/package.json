@@ -1,6 +1,6 @@
 {
   "name": "@tasks-bridge/plugin",
-  "version": "2.9.17",
+  "version": "2.9.18",
   "description": "Synchronize Todoist tasks with Obsidian.",
   "scripts": {
     "check": "tsgo --noEmit",
