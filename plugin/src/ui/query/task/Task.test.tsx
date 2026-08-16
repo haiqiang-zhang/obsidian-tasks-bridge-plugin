@@ -217,6 +217,34 @@ describe("Task", () => {
       expect(mockCloseTask).not.toHaveBeenCalled();
     });
 
+    it("should treat a null completion timestamp as active", async () => {
+      mockCloseTask.mockClear();
+      mockCloseTask.mockResolvedValueOnce(undefined);
+      const tree = makeTree("active-task", {
+        content: "Active task",
+        completedAt: null,
+      });
+
+      const { container } = render(
+        <TaskWrapper>
+          <Task tree={tree} />
+        </TaskWrapper>,
+      );
+
+      const checkbox = container.querySelector("input[type='checkbox']");
+      expect(checkbox).not.toBeChecked();
+      expect(checkbox).not.toBeDisabled();
+      expect(checkbox).toHaveAccessibleName("Complete task: Active task");
+      expect(container.querySelector(".todoist-task-container")).not.toHaveAttribute(
+        "data-completed",
+      );
+
+      fireEvent.click(checkbox as HTMLElement);
+      await waitFor(() => {
+        expect(mockCloseTask).toHaveBeenCalledWith("active-task");
+      });
+    });
+
     it("should show notice on closeTask failure", async () => {
       vi.spyOn(console, "error").mockImplementation(() => {});
       mockCloseTask.mockRejectedValueOnce(new Error("network error"));
@@ -257,6 +285,25 @@ describe("Task", () => {
       fireEvent.contextMenu(container.querySelector(".todoist-task-container") as HTMLElement);
 
       expect(addItem).toHaveBeenCalledTimes(2);
+      addItem.mockRestore();
+    });
+
+    it("should include the complete action for a null completion timestamp", () => {
+      const addItem = vi.spyOn(Menu.prototype, "addItem");
+      const tree = makeTree("active-task", {
+        content: "Active task",
+        completedAt: null,
+      });
+
+      const { container } = render(
+        <TaskWrapper>
+          <Task tree={tree} />
+        </TaskWrapper>,
+      );
+
+      fireEvent.contextMenu(container.querySelector(".todoist-task-container") as HTMLElement);
+
+      expect(addItem).toHaveBeenCalledTimes(3);
       addItem.mockRestore();
     });
   });

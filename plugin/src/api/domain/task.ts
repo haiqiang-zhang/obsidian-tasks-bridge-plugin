@@ -82,6 +82,10 @@ export const completedTaskSchema = taskSchema
   .transform((task) => ({
     ...task,
     addedAt: task.addedAt ?? task.completedAt ?? UNKNOWN_ADDED_AT,
+    // A completion-history record can describe a task that has since been
+    // reopened. In that case `checked` is the current source of truth and the
+    // historical timestamp must not make the current task look completed.
+    completedAt: task.checked === false ? null : task.completedAt,
   }));
 
 export const completedTaskEntrySchema = z

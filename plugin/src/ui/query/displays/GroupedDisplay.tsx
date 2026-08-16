@@ -2,10 +2,10 @@ import type React from "react";
 import { useState } from "react";
 
 import type { Task } from "@/data/task";
-import { groupBy } from "@/data/transformations/grouping";
 import { ObsidianIcon } from "@/ui/components/obsidian-icon";
 import { QueryContext } from "@/ui/context";
-import { ListDisplay } from "@/ui/query/displays/ListDisplay";
+import { getGroupedTaskTrees } from "@/ui/query/displays/taskTrees";
+import { TaskList } from "@/ui/query/task/TaskList";
 
 type Props = {
   tasks: Task[];
@@ -21,7 +21,7 @@ export const GroupedDisplay: React.FC<Props> = ({ tasks }) => {
     return null;
   }
 
-  const groups = groupBy(tasks, query.groupBy);
+  const groups = getGroupedTaskTrees(tasks, query.groupBy, query.sorting);
 
   const toggleGroup = (groupId: string) => {
     setCollapsedGroups((prev) => {
@@ -61,7 +61,7 @@ export const GroupedDisplay: React.FC<Props> = ({ tasks }) => {
                 className="todoist-group-collapse-icon"
               />
             </div>
-            {!isCollapsed && <ListDisplay tasks={group.tasks} />}
+            {!isCollapsed && <TaskList trees={group.trees} />}
           </div>
         );
       })}

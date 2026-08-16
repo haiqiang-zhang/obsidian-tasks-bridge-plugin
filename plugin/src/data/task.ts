@@ -25,3 +25,7 @@ export type Task = {
   deadline?: Deadline;
   order: number;
 };
+
+export function isTaskCompleted(task: Pick<Task, "completedAt">): boolean {
+  return task.completedAt != null;
+}

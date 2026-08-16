@@ -12,7 +12,7 @@ import {
   taskIdSchema,
 } from "@/api/domain/task";
 import type { CompletedTasksProgress } from "@/data/subscriptions";
-import type { Task } from "@/data/task";
+import { isTaskCompleted, type Task } from "@/data/task";
 
 const cacheVersion = 2;
 const maxCacheEntries = 100;
@@ -100,7 +100,10 @@ export class QueryCache {
     for (const [key, entry] of Object.entries(cache.data.entries)) {
       const parsedEntry = cachedQuerySchema.safeParse(entry);
       if (parsedEntry.success) {
-        this.entries.set(key, parsedEntry.data);
+        this.entries.set(key, {
+          ...parsedEntry.data,
+          tasks: normalizeTasksForCacheMode(parsedEntry.data.tasks, isCompletedTasksCacheKey(key)),
+        });
       }
     }
 
@@ -108,15 +111,22 @@ export class QueryCache {
   }
 
   public get(filter: string, completedTasks = false): CachedQuery | undefined {
-    const entry = this.entries.get(makeCacheKey(filter, completedTasks));
+    const key = makeCacheKey(filter, completedTasks);
+    let entry = this.entries.get(key);
     if (entry === undefined) {
       return undefined;
+    }
+
+    const tasks = normalizeTasksForCacheMode(entry.tasks, completedTasks);
+    if (tasks.length !== entry.tasks.length) {
+      entry = { ...entry, tasks };
+      this.entries.set(key, entry);
     }
 
     const completedTasksProgress = getCompletedTasksProgress(entry);
 
     return {
-      tasks: entry.tasks,
+      tasks,
       updatedAt: new Date(entry.updatedAt),
       ...(completedTasksProgress !== undefined ? { completedTasksProgress } : {}),
     };
@@ -136,7 +146,7 @@ export class QueryCache {
     }
 
     this.entries.set(key, {
-      tasks,
+      tasks: normalizeTasksForCacheMode(tasks, completedTasks),
       updatedAt: updatedAt.toISOString(),
       ...(completedTasksProgress !== undefined ? { completedTasksProgress } : {}),
     });
@@ -248,6 +258,9 @@ export class QueryCache {
 
 const makeCacheKey = (filter: string, completedTasks: boolean): string =>
   completedTasks ? JSON.stringify({ filter, completedTasks: true }) : JSON.stringify({ filter });
+
+const normalizeTasksForCacheMode = (tasks: Task[], completedTasks: boolean): Task[] =>
+  completedTasks ? tasks : tasks.filter((task) => !isTaskCompleted(task));
 
 const getCompletedTasksProgress = (entry: SerializedQuery): CompletedTasksProgress | undefined => {
   if (entry.completedTasksProgress !== undefined) {

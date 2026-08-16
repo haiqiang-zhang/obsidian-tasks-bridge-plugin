@@ -97,33 +97,141 @@ describe("TodoistApiClient", () => {
       expect(tasks[0].id).toBe("123");
 
       const call = fetcher.fetch.mock.calls[0][0];
-      const { pathname } = parseUrl(call.url);
+      const { pathname, params } = parseUrl(call.url);
       expect(pathname).toBe("/api/v1/tasks");
+      expect(params.get("limit")).toBe("200");
+      expect(fetcher.fetch).toHaveBeenCalledTimes(1);
     });
 
-    it("calls /tasks/filter with query param when filter is provided", async () => {
+    it("expands a filtered parent through unmatched active descendants", async () => {
       const fetcher = makeFetcher();
-      fetcher.fetch.mockResolvedValueOnce(makePaginatedResponse([makeTask()]));
+      fetcher.fetch
+        .mockResolvedValueOnce(
+          makePaginatedResponse([makeTask({ id: "parent", content: "Filtered parent" })]),
+        )
+        .mockResolvedValueOnce(makePaginatedResponse([]))
+        .mockResolvedValueOnce(
+          makePaginatedResponse([
+            makeTask({ id: "parent", content: "Current parent" }),
+            makeTask({ id: "child", content: "Unmatched child", parent_id: "parent" }),
+            makeTask({
+              id: "grandchild",
+              content: "Unmatched grandchild",
+              parent_id: "child",
+            }),
+            makeTask({ id: "unrelated", content: "Unrelated active task" }),
+          ]),
+        );
 
       const client = new TodoistApiClient("test-token", fetcher);
-      await client.getTasks("today");
+      const tasks = await client.getTasks("today");
 
-      const call = fetcher.fetch.mock.calls[0][0];
-      const { pathname, params } = parseUrl(call.url);
-      expect(pathname).toBe("/api/v1/tasks/filter");
-      expect(params.get("query")).toBe("today");
-      expect(fetcher.fetch).toHaveBeenCalledTimes(1);
+      const primary = parseUrl(fetcher.fetch.mock.calls[0][0].url);
+      const subtasks = parseUrl(fetcher.fetch.mock.calls[1][0].url);
+      const snapshot = parseUrl(fetcher.fetch.mock.calls[2][0].url);
+      expect(primary.pathname).toBe("/api/v1/tasks/filter");
+      expect(primary.params.get("query")).toBe("today");
+      expect(primary.params.get("limit")).toBe("200");
+      expect(subtasks.pathname).toBe("/api/v1/tasks/filter");
+      expect(subtasks.params.get("query")).toBe("(today) & subtask");
+      expect(subtasks.params.get("limit")).toBe("200");
+      expect(snapshot.pathname).toBe("/api/v1/tasks");
+      expect(snapshot.params.get("limit")).toBe("200");
+      expect(tasks.map((task) => task.id)).toEqual(["parent", "child", "grandchild"]);
+      expect(tasks[0].content).toBe("Current parent");
+      expect(fetcher.fetch).toHaveBeenCalledTimes(3);
+    });
+
+    it("preserves independently matching subtask seeds and expands their descendants", async () => {
+      const fetcher = makeFetcher();
+      fetcher.fetch
+        .mockResolvedValueOnce(makePaginatedResponse([]))
+        .mockResolvedValueOnce(
+          makePaginatedResponse([
+            makeTask({ id: "matching-subtask", parent_id: "unmatched-parent" }),
+          ]),
+        )
+        .mockResolvedValueOnce(
+          makePaginatedResponse([
+            makeTask({ id: "unmatched-parent" }),
+            makeTask({ id: "matching-subtask", parent_id: "unmatched-parent" }),
+            makeTask({ id: "subtask-child", parent_id: "matching-subtask" }),
+          ]),
+        );
+
+      const client = new TodoistApiClient("test-token", fetcher);
+
+      await expect(client.getTasks("today")).resolves.toMatchObject([
+        { id: "matching-subtask" },
+        { id: "subtask-child" },
+      ]);
+    });
+
+    it("does not scan the active account when neither seed filter matches", async () => {
+      const fetcher = makeFetcher();
+      fetcher.fetch
+        .mockResolvedValueOnce(makePaginatedResponse([]))
+        .mockResolvedValueOnce(makePaginatedResponse([]));
+      const client = new TodoistApiClient("test-token", fetcher);
+
+      await expect(client.getTasks("today")).resolves.toEqual([]);
+      expect(fetcher.fetch).toHaveBeenCalledTimes(2);
+    });
+
+    it("drops a filtered seed that is missing from the later active snapshot", async () => {
+      const fetcher = makeFetcher();
+      fetcher.fetch
+        .mockResolvedValueOnce(makePaginatedResponse([makeTask({ id: "stale-seed" })]))
+        .mockResolvedValueOnce(makePaginatedResponse([]))
+        .mockResolvedValueOnce(makePaginatedResponse([makeTask({ id: "unrelated-active" })]));
+      const client = new TodoistApiClient("test-token", fetcher);
+
+      await expect(client.getTasks("today")).resolves.toEqual([]);
+    });
+
+    it("paginates and deduplicates the authoritative active snapshot", async () => {
+      const fetcher = makeFetcher();
+      fetcher.fetch
+        .mockResolvedValueOnce(makePaginatedResponse([makeTask({ id: "parent" })]))
+        .mockResolvedValueOnce(makePaginatedResponse([]))
+        .mockResolvedValueOnce(
+          makePaginatedResponse(
+            [
+              makeTask({ id: "parent" }),
+              makeTask({ id: "child", parent_id: "parent", content: "Older child state" }),
+            ],
+            "active-snapshot-cursor",
+          ),
+        )
+        .mockResolvedValueOnce(
+          makePaginatedResponse([
+            makeTask({ id: "child", parent_id: "parent", content: "Current child state" }),
+            makeTask({ id: "grandchild", parent_id: "child" }),
+          ]),
+        );
+      const client = new TodoistApiClient("test-token", fetcher);
+
+      const tasks = await client.getTasks("today");
+
+      expect(tasks.map((task) => task.id)).toEqual(["parent", "child", "grandchild"]);
+      expect(tasks[1].content).toBe("Current child state");
+      expect(parseUrl(fetcher.fetch.mock.calls[3][0].url).params.get("cursor")).toBe(
+        "active-snapshot-cursor",
+      );
     });
 
     it("coalesces identical active task queries while a refresh is in flight", async () => {
       const fetcher = makeFetcher();
       let resolveActive: (response: WebResponse) => void = () => {};
-      fetcher.fetch.mockImplementation(
-        () =>
-          new Promise((resolve) => {
-            resolveActive = resolve;
-          }),
-      );
+      fetcher.fetch
+        .mockImplementationOnce(
+          () =>
+            new Promise((resolve) => {
+              resolveActive = resolve;
+            }),
+        )
+        .mockResolvedValueOnce(makePaginatedResponse([]))
+        .mockResolvedValueOnce(makePaginatedResponse([makeTask({ id: "active" })]));
 
       const client = new TodoistApiClient("test-token", fetcher);
       const first = client.getTasks("today");
@@ -136,19 +244,95 @@ describe("TodoistApiClient", () => {
         [{ id: "active" }],
         [{ id: "active" }],
       ]);
-      expect(fetcher.fetch).toHaveBeenCalledTimes(1);
+      expect(fetcher.fetch).toHaveBeenCalledTimes(3);
     });
 
     it("clears a failed active request so it can be retried", async () => {
       const fetcher = makeFetcher();
       fetcher.fetch
         .mockRejectedValueOnce(new Error("network error"))
+        .mockResolvedValueOnce(makePaginatedResponse([makeTask({ id: "retried" })]))
+        .mockResolvedValueOnce(makePaginatedResponse([]))
         .mockResolvedValueOnce(makePaginatedResponse([makeTask({ id: "retried" })]));
       const client = new TodoistApiClient("test-token", fetcher);
 
       await expect(client.getTasks("today")).rejects.toThrow("network error");
       await expect(client.getTasks("today")).resolves.toMatchObject([{ id: "retried" }]);
+      expect(fetcher.fetch).toHaveBeenCalledTimes(4);
+    });
+
+    it("propagates a subtask-seed request failure", async () => {
+      const fetcher = makeFetcher();
+      const error = new Error("subtask query failed");
+      fetcher.fetch
+        .mockResolvedValueOnce(makePaginatedResponse([makeTask({ id: "primary" })]))
+        .mockRejectedValueOnce(error);
+      const client = new TodoistApiClient("test-token", fetcher);
+
+      await expect(client.getTasks("today")).rejects.toBe(error);
       expect(fetcher.fetch).toHaveBeenCalledTimes(2);
+    });
+
+    it("propagates an all-active snapshot failure", async () => {
+      const fetcher = makeFetcher();
+      const error = new Error("active snapshot failed");
+      fetcher.fetch
+        .mockResolvedValueOnce(makePaginatedResponse([makeTask({ id: "primary" })]))
+        .mockResolvedValueOnce(makePaginatedResponse([]))
+        .mockRejectedValueOnce(error);
+      const client = new TodoistApiClient("test-token", fetcher);
+
+      await expect(client.getTasks("today")).rejects.toBe(error);
+      expect(fetcher.fetch).toHaveBeenCalledTimes(3);
+    });
+
+    it("does not reuse an active snapshot that started before another filter seed finished", async () => {
+      const fetcher = makeFetcher();
+      let resolveTomorrowSeed: (response: WebResponse) => void = () => {};
+      let resolveFirstSnapshot: (response: WebResponse) => void = () => {};
+      let snapshotCalls = 0;
+      fetcher.fetch.mockImplementation((request) => {
+        const { pathname, params } = parseUrl(request.url);
+        if (pathname === "/api/v1/tasks") {
+          snapshotCalls += 1;
+          if (snapshotCalls === 1) {
+            return new Promise((resolve) => {
+              resolveFirstSnapshot = resolve;
+            });
+          }
+          return Promise.resolve(makePaginatedResponse([makeTask({ id: "tomorrow" })]));
+        }
+
+        const query = params.get("query");
+        if (query === "today") {
+          return Promise.resolve(makePaginatedResponse([makeTask({ id: "today" })]));
+        }
+        if (query === "tomorrow") {
+          return new Promise((resolve) => {
+            resolveTomorrowSeed = resolve;
+          });
+        }
+        return Promise.resolve(makePaginatedResponse([]));
+      });
+      const client = new TodoistApiClient("test-token", fetcher);
+
+      const today = client.getTasks("today");
+      const tomorrow = client.getTasks("tomorrow");
+
+      await vi.waitFor(() => {
+        expect(snapshotCalls).toBe(1);
+      });
+      resolveTomorrowSeed(makePaginatedResponse([makeTask({ id: "tomorrow" })]));
+      await vi.waitFor(() => {
+        expect(snapshotCalls).toBe(2);
+      });
+      resolveFirstSnapshot(makePaginatedResponse([makeTask({ id: "today" })]));
+
+      await expect(Promise.all([today, tomorrow])).resolves.toMatchObject([
+        [{ id: "today" }],
+        [{ id: "tomorrow" }],
+      ]);
+      expect(fetcher.fetch).toHaveBeenCalledTimes(6);
     });
   });
 
@@ -962,6 +1146,35 @@ describe("TodoistApiClient", () => {
       expect(page.tasks[0].addedAt).toBe("1970-01-01T00:00:00.000Z");
     });
 
+    it("uses the current unchecked state instead of a stale completion timestamp", async () => {
+      const fetcher = makeFetcher();
+      fetcher.fetch.mockResolvedValueOnce(
+        makeCompletedPaginatedResponse([
+          makeTask({
+            id: "reopened-history-item",
+            checked: false,
+            completed_at: "2026-08-08T12:00:00.000Z",
+          }),
+        ]),
+      );
+      const client = new TodoistApiClient("test-token", fetcher);
+      const request = {
+        since: "2026-08-01T00:00:00.000Z",
+        until: "2026-08-09T00:00:00.000Z",
+        historyStart: "2026-08-01T00:00:00.000Z",
+      };
+
+      const page = await client.getCompletedTasksPage(undefined, request);
+
+      expect(page.tasks).toEqual([
+        expect.objectContaining({
+          id: "reopened-history-item",
+          checked: false,
+          completedAt: null,
+        }),
+      ]);
+    });
+
     it("rejects completed responses that omit completed_at", async () => {
       const fetcher = makeFetcher();
       const completedTask = makeTask();
@@ -997,14 +1210,22 @@ describe("TodoistApiClient", () => {
     it("follows pagination cursor across multiple pages", async () => {
       const fetcher = makeFetcher();
       fetcher.fetch
-        .mockResolvedValueOnce(makePaginatedResponse([makeTask({ id: "1" })], "cursor-abc"))
-        .mockResolvedValueOnce(makePaginatedResponse([makeTask({ id: "2" })]));
+        .mockResolvedValueOnce(
+          makePaginatedResponse([makeTask({ id: "1", content: "Older state" })], "cursor-abc"),
+        )
+        .mockResolvedValueOnce(
+          makePaginatedResponse([
+            makeTask({ id: "1", content: "Current state" }),
+            makeTask({ id: "2" }),
+          ]),
+        );
 
       const client = new TodoistApiClient("test-token", fetcher);
       const tasks = await client.getTasks();
 
       expect(tasks).toHaveLength(2);
       expect(tasks[0].id).toBe("1");
+      expect(tasks[0].content).toBe("Current state");
       expect(tasks[1].id).toBe("2");
       expect(fetcher.fetch).toHaveBeenCalledTimes(2);
 
@@ -1013,23 +1234,69 @@ describe("TodoistApiClient", () => {
       expect(params.get("cursor")).toBe("cursor-abc");
     });
 
-    it("preserves filter query params across paginated requests", async () => {
+    it("paginates both filter queries and deduplicates in primary-then-subtask order", async () => {
       const fetcher = makeFetcher();
       fetcher.fetch
-        .mockResolvedValueOnce(makePaginatedResponse([makeTask({ id: "1" })], "cursor-1"))
-        .mockResolvedValueOnce(makePaginatedResponse([makeTask({ id: "2" })]));
+        .mockResolvedValueOnce(
+          makePaginatedResponse([makeTask({ id: "primary-1" })], "primary-cursor"),
+        )
+        .mockResolvedValueOnce(makePaginatedResponse([makeTask({ id: "shared" })]))
+        .mockResolvedValueOnce(
+          makePaginatedResponse(
+            [makeTask({ id: "shared" }), makeTask({ id: "subtask-1" })],
+            "subtask-cursor",
+          ),
+        )
+        .mockResolvedValueOnce(makePaginatedResponse([makeTask({ id: "subtask-2" })]))
+        .mockResolvedValueOnce(
+          makePaginatedResponse([
+            makeTask({ id: "primary-1" }),
+            makeTask({ id: "shared" }),
+            makeTask({ id: "subtask-1" }),
+            makeTask({ id: "subtask-2" }),
+          ]),
+        );
 
       const client = new TodoistApiClient("test-token", fetcher);
-      await client.getTasks("today");
+      const tasks = await client.getTasks("today");
 
-      const firstCall = fetcher.fetch.mock.calls[0][0];
-      const firstParams = parseUrl(firstCall.url).params;
-      expect(firstParams.get("query")).toBe("today");
+      expect(tasks.map((task) => task.id)).toEqual([
+        "primary-1",
+        "shared",
+        "subtask-1",
+        "subtask-2",
+      ]);
+      expect(fetcher.fetch).toHaveBeenCalledTimes(5);
 
-      const secondCall = fetcher.fetch.mock.calls[1][0];
-      const secondParams = parseUrl(secondCall.url).params;
-      expect(secondParams.get("query")).toBe("today");
-      expect(secondParams.get("cursor")).toBe("cursor-1");
+      const calls = fetcher.fetch.mock.calls.map(([request]) => parseUrl(request.url));
+      expect(calls.map(({ pathname }) => pathname)).toEqual([
+        "/api/v1/tasks/filter",
+        "/api/v1/tasks/filter",
+        "/api/v1/tasks/filter",
+        "/api/v1/tasks/filter",
+        "/api/v1/tasks",
+      ]);
+      expect(calls.map(({ params }) => params.get("query"))).toEqual([
+        "today",
+        "today",
+        "(today) & subtask",
+        "(today) & subtask",
+        null,
+      ]);
+      expect(calls.map(({ params }) => params.get("cursor"))).toEqual([
+        null,
+        "primary-cursor",
+        null,
+        "subtask-cursor",
+        null,
+      ]);
+      expect(calls.map(({ params }) => params.get("limit"))).toEqual([
+        "200",
+        "200",
+        "200",
+        "200",
+        "200",
+      ]);
     });
 
     it("returns empty array when results are empty", async () => {

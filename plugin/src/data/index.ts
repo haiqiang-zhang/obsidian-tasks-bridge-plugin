@@ -23,7 +23,7 @@ import {
   type SubscriptionResult,
   type UnsubscribeCallback,
 } from "@/data/subscriptions";
-import type { Task } from "@/data/task";
+import { isTaskCompleted, type Task } from "@/data/task";
 import { Maybe } from "@/utils/maybe";
 
 export { QueryErrorKind } from "@/data/errors";
@@ -721,7 +721,7 @@ class Subscription {
       } else {
         let tasks = data.activeTasks;
         if (this.completedTasks && data.completedTasksPage !== undefined) {
-          const cachedCompletedTasks = this.lastSuccessfulTasks.filter(isCompletedTask);
+          const cachedCompletedTasks = this.lastSuccessfulTasks.filter(isTaskCompleted);
           tasks = mergeActiveAndCompletedTasks(
             data.activeTasks,
             data.completedTasksPage.tasks,
@@ -842,9 +842,9 @@ class Subscription {
 
     this.completedTasksProgress = advanceCompletedTasksProgress(this.completedTasksProgress, page);
     this.lastSuccessfulTasks = mergeActiveAndCompletedTasks(
-      this.lastSuccessfulTasks.filter((task) => !isCompletedTask(task)),
+      this.lastSuccessfulTasks.filter((task) => !isTaskCompleted(task)),
       page.tasks,
-      this.lastSuccessfulTasks.filter(isCompletedTask),
+      this.lastSuccessfulTasks.filter(isTaskCompleted),
     );
     this.result = this.makeSuccessResult(this.lastSuccessfulTasks, {
       type: "replace",
@@ -1023,18 +1023,25 @@ const completedTasksRequestKey = (request: CompletedTasksPageRequest): string =>
 const laterTimestamp = (left: string, right: string): string =>
   Date.parse(left) >= Date.parse(right) ? left : right;
 
-const isCompletedTask = (task: Task): boolean => task.completedAt !== undefined;
-
 const mergeActiveAndCompletedTasks = (
   activeTasks: Task[],
   freshCompletedTasks: Task[],
   cachedCompletedTasks: Task[],
 ): Task[] => {
-  const activeIds = new Set(activeTasks.map((task) => task.id));
+  const suppressedCompletedIds = new Set(activeTasks.map((task) => task.id));
+  for (const task of freshCompletedTasks) {
+    if (!isTaskCompleted(task)) {
+      suppressedCompletedIds.add(task.id);
+    }
+  }
   const completedById = new Map<TaskId, Task>();
 
   for (const task of [...freshCompletedTasks, ...cachedCompletedTasks]) {
-    if (!activeIds.has(task.id) && !completedById.has(task.id)) {
+    if (
+      isTaskCompleted(task) &&
+      !suppressedCompletedIds.has(task.id) &&
+      !completedById.has(task.id)
+    ) {
       completedById.set(task.id, task);
     }
   }

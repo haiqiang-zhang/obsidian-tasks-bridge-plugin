@@ -4,6 +4,7 @@ import React, { type MouseEvent } from "react";
 import { CheckboxButton, CheckboxField } from "react-aria-components";
 
 import { DueDate } from "@/data/dueDate";
+import { isTaskCompleted } from "@/data/task";
 import type { TaskTree } from "@/data/transformations/relationships";
 import { t } from "@/i18n";
 import { useSettingsStore } from "@/settings";
@@ -24,7 +25,7 @@ export const Task: React.FC<Props> = ({ tree }) => {
   const plugin = PluginContext.use();
   const query = QueryContext.use();
   const settings = useSettingsStore();
-  const isCompleted = tree.completedAt !== undefined;
+  const isCompleted = isTaskCompleted(tree);
 
   const onContextMenu = (ev: MouseEvent) => {
     ev.preventDefault();

@@ -109,6 +109,74 @@ describe("QueryCache", () => {
     });
   });
 
+  it("removes completed tasks from serialized active-only entries on load", () => {
+    const cache = new QueryCache();
+    const activeTask = makeTask("active-task");
+    const nullCompletedAtTask = makeTask("null-completion-task", { completedAt: null });
+    const completedTask = makeTask("completed-task", {
+      completedAt: "2026-08-09T05:30:00.000Z",
+    });
+
+    cache.load({
+      version: 2,
+      credentialFingerprint: "credential-a",
+      entries: {
+        '{"filter":"today"}': {
+          tasks: [activeTask, nullCompletedAtTask, completedTask],
+          updatedAt: "2026-08-09T06:00:00.000Z",
+        },
+        '{"filter":"today","completedTasks":true}': {
+          tasks: [activeTask, nullCompletedAtTask, completedTask],
+          updatedAt: "2026-08-09T06:00:00.000Z",
+        },
+      },
+    });
+
+    expect(cache.get("today")?.tasks).toEqual([activeTask, nullCompletedAtTask]);
+    expect(cache.get("today", true)?.tasks).toEqual([
+      activeTask,
+      nullCompletedAtTask,
+      completedTask,
+    ]);
+    expect(cache.serialize().entries['{"filter":"today"}']?.tasks).toEqual([
+      activeTask,
+      nullCompletedAtTask,
+    ]);
+  });
+
+  it("normalizes active-only writes while retaining completed-enabled history", () => {
+    const cache = new QueryCache();
+    const updatedAt = new Date("2026-08-09T06:00:00.000Z");
+    const activeTask = makeTask("active-task");
+    const nullCompletedAtTask = makeTask("null-completion-task", { completedAt: null });
+    const completedTask = makeTask("completed-task", {
+      completedAt: "2026-08-09T05:30:00.000Z",
+    });
+    const tasks = [activeTask, nullCompletedAtTask, completedTask];
+
+    cache.set("today", tasks, updatedAt);
+    cache.set("today", tasks, updatedAt, true);
+
+    expect(cache.get("today")?.tasks).toEqual([activeTask, nullCompletedAtTask]);
+    expect(cache.get("today", true)?.tasks).toEqual(tasks);
+  });
+
+  it("defensively normalizes an active-only entry when it is read", () => {
+    const cache = new QueryCache();
+    const updatedAt = new Date("2026-08-09T06:00:00.000Z");
+    const activeTask = makeTask("active-task");
+    const completedTask = makeTask("completed-task", {
+      completedAt: "2026-08-09T05:30:00.000Z",
+    });
+    cache.set("today", [activeTask], updatedAt);
+
+    const serializedEntry = cache.serialize().entries['{"filter":"today"}'];
+    serializedEntry.tasks.push(completedTask);
+
+    expect(cache.get("today")?.tasks).toEqual([activeTask]);
+    expect(cache.serialize().entries['{"filter":"today"}']?.tasks).toEqual([activeTask]);
+  });
+
   it("loads nullable completion identity without changing cache version", () => {
     const cache = new QueryCache();
     const completedTask = makeTask("completed", { completedAt: null });

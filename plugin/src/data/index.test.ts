@@ -163,9 +163,8 @@ describe("TodoistAdapter", () => {
         expect(vi.mocked(mockApi.getActiveTasksByProject).mock.invocationCallOrder[0]).toBeLessThan(
           vi.mocked(mockApi.getCompletedTasksByProject).mock.invocationCallOrder[0],
         );
-        expect(snapshot.activeTasks).toEqual([
-          expect.objectContaining({ id: "active-only", project, completedAt: undefined }),
-        ]);
+        expect(snapshot.activeTasks).toMatchObject([{ id: "active-only", project }]);
+        expect(snapshot.activeTasks[0]).not.toHaveProperty("completedAt");
         expect(snapshot.completedTasks).toEqual(
           expect.arrayContaining([
             expect.objectContaining({
@@ -227,9 +226,8 @@ describe("TodoistAdapter", () => {
 
       const snapshot = await adapter.getProjectTasks(project.id);
 
-      expect(snapshot.activeTasks).toEqual([
-        expect.objectContaining({ id: "reopened", project, completedAt: null }),
-      ]);
+      expect(snapshot.activeTasks).toMatchObject([{ id: "reopened", project }]);
+      expect(snapshot.activeTasks[0]).not.toHaveProperty("completedAt");
       expect(snapshot.completedTasks).toEqual([]);
       expect(snapshot.completionEvents).toEqual([
         {
@@ -990,6 +988,92 @@ describe("TodoistAdapter", () => {
       expect(mockApi.getTasks).toHaveBeenCalledWith("#test");
       expect(mockApi.getCompletedTasksPage).toHaveBeenCalledOnce();
       expect(mockApi.getCompletedTasksPage).toHaveBeenCalledWith("#test", undefined, undefined);
+    });
+
+    it("never requests completed history for an active-only subscription", async () => {
+      vi.mocked(mockApi.getTasks).mockResolvedValueOnce([
+        makeApiTask({ id: "current-active-task" }),
+      ]);
+      await adapter.initialize(mockApi);
+
+      const { result } = await subscribeAndRefresh(adapter);
+
+      expect(result).toMatchObject({
+        type: "success",
+        tasks: [{ id: "current-active-task" }],
+      });
+      expect(mockApi.getCompletedTasksPage).not.toHaveBeenCalled();
+    });
+
+    it("lets the current active snapshot override a stale completion record", async () => {
+      vi.mocked(mockApi.getTasks).mockResolvedValueOnce([
+        makeApiTask({ id: "shared-task", content: "Current active state" }),
+      ]);
+      vi.mocked(mockApi.getCompletedTasksPage).mockResolvedValueOnce({
+        tasks: [
+          makeApiTask({
+            id: "shared-task",
+            content: "Historical completed state",
+            completedAt: "2026-08-08T12:00:00.000Z",
+          }),
+          makeApiTask({
+            id: "completed-history-task",
+            completedAt: "2026-08-08T13:00:00.000Z",
+          }),
+        ],
+        request: newestCompletedRequest,
+        nextPage: null,
+      });
+      await adapter.initialize(mockApi);
+
+      let captured: SubscriptionResult = { type: "not-ready" };
+      const [, refresh] = adapter.subscribe(
+        "#test",
+        (result) => {
+          captured = result;
+        },
+        [],
+        true,
+      );
+      await refresh();
+
+      const result = captured as SubscriptionResult;
+      expect(result.type).toBe("success");
+      if (result.type !== "success") {
+        return;
+      }
+      expect(result.tasks).toMatchObject([
+        { id: "shared-task", content: "Current active state" },
+        { id: "completed-history-task" },
+      ]);
+      expect(result.tasks[0]).not.toHaveProperty("completedAt");
+      expect(result.tasks[1]).toHaveProperty("completedAt", "2026-08-08T13:00:00.000Z");
+    });
+
+    it("lets an unchecked history item suppress stale completed cache", async () => {
+      vi.mocked(mockApi.getCompletedTasksPage).mockResolvedValueOnce({
+        tasks: [makeApiTask({ id: "unchecked-history-task", completedAt: null })],
+        request: newestCompletedRequest,
+        nextPage: null,
+      });
+      await adapter.initialize(mockApi);
+
+      let captured: SubscriptionResult = { type: "not-ready" };
+      const [, refresh] = adapter.subscribe(
+        "#test",
+        (result) => {
+          captured = result;
+        },
+        [
+          makeTask("unchecked-history-task", {
+            completedAt: "2026-08-07T12:00:00.000Z",
+          }),
+        ],
+        true,
+      );
+      await refresh();
+
+      expect(captured).toMatchObject({ type: "success", tasks: [] });
     });
 
     it("should bound completed-task history by the Todoist account join time", async () => {

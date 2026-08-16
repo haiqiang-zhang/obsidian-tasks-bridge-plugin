@@ -5,6 +5,7 @@ import type { Project } from "@/api/domain/project";
 import type { Section } from "@/api/domain/section";
 import { type DataAccessor, hydrate } from "@/data/hydrate";
 import { Repository } from "@/data/repository";
+import { isTaskCompleted } from "@/data/task";
 import { makeApiTask, makeLabel, makeProject, makeSection } from "@/factories/data";
 
 const makeDataAccessor = (opts?: {
@@ -60,6 +61,21 @@ describe("hydrate", () => {
     const task = hydrate(makeApiTask({ completedAt: "2024-06-16T11:45:00Z" }), makeDataAccessor());
 
     expect(task.completedAt).toBe("2024-06-16T11:45:00Z");
+    expect(isTaskCompleted(task)).toBe(true);
+  });
+
+  it.each([
+    null,
+    undefined,
+  ])("should omit a non-completion timestamp represented as %s", (completedAt) => {
+    const task = hydrate(makeApiTask({ completedAt }), makeDataAccessor());
+
+    expect(task).not.toHaveProperty("completedAt");
+    expect(isTaskCompleted(task)).toBe(false);
+  });
+
+  it("should treat a legacy null completion timestamp as active", () => {
+    expect(isTaskCompleted({ completedAt: null })).toBe(false);
   });
 
   it("should resolve project from repository by projectId", () => {

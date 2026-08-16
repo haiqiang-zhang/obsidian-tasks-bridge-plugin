@@ -26,11 +26,13 @@ import { debug } from "@/log";
 
 const COMPLETED_TASKS_LOOKBACK_DAYS = 90;
 const COMPLETED_TASKS_PAGE_LIMIT = "200";
-const PROJECT_TASKS_PAGE_LIMIT = "200";
+const TASKS_PAGE_LIMIT = "200";
 const MILLISECONDS_PER_DAY = 86_400_000;
 const TODOIST_SERVICE_LAUNCH_AT = Date.parse("2007-01-01T00:00:00.000Z");
 
 export const COMPLETED_TASKS_WINDOW_MONTHS = 3;
+
+const makeSubtaskFilter = (filter: string): string => `(${filter}) & subtask`;
 
 export type { ProjectCompletionEvent } from "@/api/domain/task";
 
@@ -95,7 +97,7 @@ export class TodoistApiClient {
 
     const request = this.doPaginated("/tasks", projectTaskSchema, {
       project_id: projectId,
-      limit: PROJECT_TASKS_PAGE_LIMIT,
+      limit: TASKS_PAGE_LIMIT,
     });
     this.activeProjectTasksInFlight.set(projectId, request);
 
@@ -217,10 +219,95 @@ export class TodoistApiClient {
 
   private async getActiveTasks(filter?: string): Promise<Task[]> {
     if (filter !== undefined) {
-      return await this.doPaginated("/tasks/filter", taskSchema, { query: filter });
+      const filteredTasks = await this.doPaginated("/tasks/filter", taskSchema, {
+        query: filter,
+        limit: TASKS_PAGE_LIMIT,
+      });
+      if (filter.length === 0) {
+        return filteredTasks;
+      }
+
+      const subtaskTasks = await this.doPaginated("/tasks/filter", taskSchema, {
+        query: makeSubtaskFilter(filter),
+        limit: TASKS_PAGE_LIMIT,
+      });
+      if (filteredTasks.length === 0 && subtaskTasks.length === 0) {
+        return [];
+      }
+      const activeTasks = await this.getAllActiveTasksSnapshot();
+
+      return this.expandTaskSeedsWithActiveDescendants(filteredTasks, subtaskTasks, activeTasks);
     }
 
-    return await this.doPaginated("/tasks", taskSchema);
+    return await this.getAllActiveTasksSnapshot();
+  }
+
+  private async getAllActiveTasksSnapshot(): Promise<Task[]> {
+    const tasks = await this.doPaginated("/tasks", taskSchema, { limit: TASKS_PAGE_LIMIT });
+    const tasksById = new Map<TaskId, Task>();
+    for (const task of tasks) {
+      tasksById.set(task.id, task);
+    }
+    return [...tasksById.values()];
+  }
+
+  private expandTaskSeedsWithActiveDescendants(
+    filteredTasks: readonly Task[],
+    subtaskTasks: readonly Task[],
+    activeTasks: readonly Task[],
+  ): Task[] {
+    const activeTasksById = new Map<TaskId, Task>();
+    for (const task of activeTasks) {
+      // A later occurrence in the authoritative snapshot wins if Todoist
+      // repeats an item across pages while its state is changing.
+      activeTasksById.set(task.id, task);
+    }
+
+    const childIdsByParentId = new Map<TaskId, TaskId[]>();
+    for (const task of activeTasksById.values()) {
+      if (task.parentId === null) {
+        continue;
+      }
+
+      const childIds = childIdsByParentId.get(task.parentId) ?? [];
+      childIds.push(task.id);
+      childIdsByParentId.set(task.parentId, childIds);
+    }
+
+    const includedTaskIds = new Set<TaskId>();
+    const taskIdsInResultOrder: TaskId[] = [];
+    const descendantQueue: TaskId[] = [];
+    for (const seeds of [filteredTasks, subtaskTasks]) {
+      for (const seed of seeds) {
+        if (!activeTasksById.has(seed.id) || includedTaskIds.has(seed.id)) {
+          continue;
+        }
+
+        includedTaskIds.add(seed.id);
+        taskIdsInResultOrder.push(seed.id);
+        descendantQueue.push(seed.id);
+      }
+    }
+
+    for (const parentId of descendantQueue) {
+      for (const childId of childIdsByParentId.get(parentId) ?? []) {
+        if (includedTaskIds.has(childId)) {
+          continue;
+        }
+
+        includedTaskIds.add(childId);
+        taskIdsInResultOrder.push(childId);
+        descendantQueue.push(childId);
+      }
+    }
+
+    return taskIdsInResultOrder.map((taskId) => {
+      const task = activeTasksById.get(taskId);
+      if (task === undefined) {
+        throw new Error(`Active task snapshot is missing included task '${taskId}'`);
+      }
+      return task;
+    });
   }
 
   private async fetchAllCompletedTasksByProject(
@@ -238,7 +325,7 @@ export class TodoistApiClient {
       const response = await this.do("/tasks/completed", "GET", {
         queryParams: {
           project_id: projectId,
-          limit: PROJECT_TASKS_PAGE_LIMIT,
+          limit: TASKS_PAGE_LIMIT,
           offset: offset.toString(),
           until,
           annotate_items: "true",
@@ -266,13 +353,13 @@ export class TodoistApiClient {
       }
 
       if (
-        page.items.length === Number(PROJECT_TASKS_PAGE_LIMIT) &&
+        page.items.length === Number(TASKS_PAGE_LIMIT) &&
         completionEventsById.size === eventCountBeforePage
       ) {
         throw new Error("Todoist completed-task pagination returned a repeated page");
       }
 
-      if (page.items.length < Number(PROJECT_TASKS_PAGE_LIMIT)) {
+      if (page.items.length < Number(TASKS_PAGE_LIMIT)) {
         return {
           tasks: Array.from(entriesByTaskId.values(), (entry) => ({
             ...entry.itemObject,

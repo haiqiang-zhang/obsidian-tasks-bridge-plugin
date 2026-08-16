@@ -1,7 +1,7 @@
 import type { Point } from "obsidian";
 import { Menu } from "obsidian";
 
-import type { Task } from "@/data/task";
+import { isTaskCompleted, type Task } from "@/data/task";
 import { t } from "@/i18n";
 import type TodoistPlugin from "@/index";
 import { todoistTaskAppUrl, todoistTaskWebUrl } from "@/todoist/taskLinks";
@@ -15,7 +15,7 @@ export function showTaskContext(ctx: TaskContext, position: Point) {
   const i18n = t().query.contextMenu;
   const menu = new Menu();
 
-  if (ctx.task.completedAt === undefined) {
+  if (!isTaskCompleted(ctx.task)) {
     menu.addItem((menuItem) =>
       menuItem
         .setTitle(i18n.completeTaskLabel)

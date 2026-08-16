@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### 🐛 Bug Fixes
+
+- Filter blocks now recursively include every active descendant of matched tasks, while completed subtasks remain opt-in through `completedTasks: true` and grouped views preserve the task hierarchy.
+- Query caches and completed-history merging now honor Todoist's current task state, so active or reopened tasks cannot appear completed because of nullable or stale completion records.
+
 ## v2.9.16 (2026-08-15)
 
 ### 🐛 Bug Fixes
