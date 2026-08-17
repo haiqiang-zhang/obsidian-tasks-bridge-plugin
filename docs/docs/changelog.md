@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v2.9.21 (2026-08-18)
+
 ### ✨ Improvements
 
 - Shortened the **Preserve unmanaged Vault content** setting description for faster scanning.
