@@ -117,11 +117,14 @@ export type ProjectSyncRunContext = {
   mappingRoots?: readonly ProjectSyncMappingRoot[];
   /** Every task ID present in the complete multi-mapping Todoist snapshot for this run. */
   allSnapshotTaskIds?: ReadonlySet<string>;
+  /** User-owned note regions staged while a task moves across canonical mapping boundaries. */
+  stagedUserDocumentsByTaskId?: Map<string, { frontmatter: Record<string, unknown>; body: string }>;
   scanToken?: object;
 };
 
 export interface ProjectSyncVault {
   validateConfig(config: ProjectSyncConfig): void;
+  validateSnapshot(snapshot: ProjectSyncSnapshot, mapping: ProjectSyncMapping): void;
   reconcile(
     snapshot: ProjectSyncSnapshot,
     mapping: ProjectSyncMapping,

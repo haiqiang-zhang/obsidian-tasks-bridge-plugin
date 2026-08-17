@@ -239,6 +239,69 @@ describe("TodoistAdapter", () => {
       ]);
     });
 
+    it("preserves authoritative creation times when later annotations omit addedAt", async () => {
+      const project = makeProject("project-1", { name: "Project One" });
+      const reopenedCreatedAt = "2026-07-01T08:00:00.000Z";
+      const completedCreatedAt = "2026-07-02T09:00:00.000Z";
+      vi.mocked(mockApi.sync).mockResolvedValue(makeSyncResponse({ projects: [project] }));
+      vi.mocked(mockApi.getActiveTasksByProject).mockResolvedValue([
+        makeApiTask({
+          id: "reopened",
+          projectId: project.id,
+          addedAt: reopenedCreatedAt,
+          addedAtIsAuthoritative: true,
+          checked: false,
+        }),
+        makeApiTask({
+          id: "completed-during-scan",
+          projectId: project.id,
+          addedAt: completedCreatedAt,
+          addedAtIsAuthoritative: true,
+          checked: false,
+        }),
+      ]);
+      vi.mocked(mockApi.getCompletedTasksByProject).mockResolvedValue({
+        tasks: [
+          makeApiTask({
+            id: "reopened",
+            projectId: project.id,
+            addedAt: "1970-01-01T00:00:00.000Z",
+            addedAtIsAuthoritative: false,
+            checked: false,
+            completedAt: null,
+          }),
+          makeApiTask({
+            id: "completed-during-scan",
+            projectId: project.id,
+            addedAt: "1970-01-01T00:00:00.000Z",
+            addedAtIsAuthoritative: false,
+            checked: true,
+            completedAt: "2026-08-10T04:30:00.000Z",
+          }),
+        ],
+        completionEvents: [],
+      });
+      await adapter.initialize(mockApi);
+
+      const snapshot = await adapter.getProjectTasks(project.id);
+
+      expect(snapshot.activeTasks).toEqual([
+        expect.objectContaining({
+          id: "reopened",
+          createdAt: reopenedCreatedAt,
+          authoritativeCreatedAt: reopenedCreatedAt,
+        }),
+      ]);
+      expect(snapshot.completedTasks).toEqual([
+        expect.objectContaining({
+          id: "completed-during-scan",
+          createdAt: completedCreatedAt,
+          authoritativeCreatedAt: completedCreatedAt,
+          completedAt: "2026-08-10T04:30:00.000Z",
+        }),
+      ]);
+    });
+
     it("rejects a project task snapshot if the Todoist account changes", async () => {
       const project = makeProject("project-1");
       vi.mocked(mockApi.sync).mockResolvedValue(makeSyncResponse({ projects: [project] }));

@@ -10,6 +10,7 @@ import {
   ManagedBodyConflictError,
   makeManagedBody,
   makeTaskFrontmatter,
+  readRecoverableManagedNoteIdentity,
   replaceManagedBody,
   replaceManagedTaskDocument,
 } from "./document";
@@ -79,6 +80,50 @@ describe("project task documents", () => {
     expect(frontmatter).not.toHaveProperty("todoist_section_id");
     expect(frontmatter).not.toHaveProperty("todoist_completion_events");
     expect(frontmatter).not.toHaveProperty("todoist_order");
+    expect(frontmatter).not.toHaveProperty("todoist_synced_at");
+  });
+
+  it("emits identical managed frontmatter on devices with different local clocks", () => {
+    const project = makeProject("project-1", { name: "Networking" });
+    const task = makeTask("task-1", { content: "Read RFC", project });
+    const path = { ids: [project.id], names: [project.name] };
+
+    expect(
+      makeTaskFrontmatter({ task, completed: false }, project.id, path, "2026-08-10T01:00:00.000Z"),
+    ).toEqual(
+      makeTaskFrontmatter({ task, completed: false }, project.id, path, "2026-08-10T09:00:00.000Z"),
+    );
+  });
+
+  it("emits only an authoritative Todoist creation time", () => {
+    const project = makeProject("project-1", { name: "Networking" });
+    const authoritative = makeTask("authoritative", {
+      content: "Read RFC",
+      createdAt: "2026-08-17T06:32:05.000Z",
+      project,
+    });
+    const fallbackOnly = {
+      ...makeTask("fallback", { content: "Read RFC", project }),
+      createdAt: "2026-08-17T07:00:00.000Z",
+    };
+    const path = { ids: [project.id], names: [project.name] };
+
+    expect(
+      makeTaskFrontmatter(
+        { task: authoritative, completed: false },
+        project.id,
+        path,
+        "2026-08-17T08:00:00.000Z",
+      ),
+    ).toMatchObject({ todoist_created_at: "2026-08-17T06:32:05.000Z" });
+    expect(
+      makeTaskFrontmatter(
+        { task: fallbackOnly, completed: false },
+        project.id,
+        path,
+        "2026-08-17T08:00:00.000Z",
+      ),
+    ).not.toHaveProperty("todoist_created_at");
   });
 
   it("retains legacy timed due dates encoded in the date field", () => {
@@ -205,5 +250,23 @@ describe("project task documents", () => {
     expect(() => replaceManagedBody(`${MANAGED_BODY_START}\nmissing end`, "new")).toThrow(
       ManagedBodyConflictError,
     );
+  });
+
+  it("recovers only one strict task ID from a malformed managed document", () => {
+    const body = `${MANAGED_BODY_START}\n\`\`\`tasks-bridge-task\n\`\`\`\n${MANAGED_BODY_END}`;
+    const malformedYaml = "todoist_task_id: 6hGr78cXw24jQC7W\ntodoist_created_at: ''broken'";
+
+    expect(
+      readRecoverableManagedNoteIdentity(`---\n${malformedYaml}\n---\n${body}\n`, malformedYaml),
+    ).toEqual({ taskId: "6hGr78cXw24jQC7W" });
+    expect(
+      readRecoverableManagedNoteIdentity(
+        `---\n${malformedYaml}\ntodoist_task_id: second\n---\n${body}\n`,
+        `${malformedYaml}\ntodoist_task_id: second`,
+      ),
+    ).toBeNull();
+    expect(
+      readRecoverableManagedNoteIdentity(`---\n${malformedYaml}\n---\nUser notes\n`, malformedYaml),
+    ).toBeNull();
   });
 });

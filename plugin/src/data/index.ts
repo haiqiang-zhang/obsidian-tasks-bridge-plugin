@@ -257,7 +257,8 @@ export class TodoistAdapter {
     // Annotated completion entries are fetched after the active snapshot and carry the current
     // `checked` state. Let that later observation win for both newly completed and reopened tasks.
     for (const task of completedProjectTasks.tasks) {
-      tasksById.set(task.id, task);
+      const activeTask = tasksById.get(task.id);
+      tasksById.set(task.id, preserveAuthoritativeCreationTime(task, activeTask));
     }
 
     const snapshot: ProjectTaskSnapshot = {
@@ -560,6 +561,20 @@ export class TodoistAdapter {
     }
   }
 }
+
+const preserveAuthoritativeCreationTime = (
+  newer: ApiTask,
+  earlier: ApiTask | undefined,
+): ApiTask => {
+  if (newer.addedAtIsAuthoritative || earlier?.addedAtIsAuthoritative !== true) {
+    return newer;
+  }
+  return {
+    ...newer,
+    addedAt: earlier.addedAt,
+    addedAtIsAuthoritative: true,
+  };
+};
 
 type CompletedTasksPage = {
   tasks: Task[];

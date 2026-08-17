@@ -46,6 +46,7 @@ const config = (...mappings: ProjectSyncMapping[]): ProjectSyncConfig => ({
 
 const makeVault = (overrides: Partial<ProjectSyncVault> = {}): ProjectSyncVault => ({
   validateConfig: vi.fn(() => undefined),
+  validateSnapshot: vi.fn(() => undefined),
   reconcile: vi.fn(async () => successResult()),
   ...overrides,
 });
@@ -81,6 +82,9 @@ describe("ProjectFolderSyncService", () => {
     };
     const vault = makeVault({
       validateConfig: vi.fn(() => events.push("validate")),
+      validateSnapshot: vi.fn((_snapshot, currentMapping) => {
+        events.push(`snapshot:${currentMapping.folder}`);
+      }),
       reconcile: vi.fn(async (_snapshot, currentMapping) => {
         events.push(`reconcile:${currentMapping.folder}`);
         return successResult();
@@ -99,6 +103,8 @@ describe("ProjectFolderSyncService", () => {
       "other:start",
       "other:end",
       "validate",
+      "snapshot:Todoist/root",
+      "snapshot:Todoist/other",
       "reconcile:Todoist/root",
       "reconcile:Todoist/other",
     ]);
@@ -696,6 +702,43 @@ describe("ProjectFolderSyncService", () => {
     expect(vault.reconcile).not.toHaveBeenCalled();
   });
 
+  it("preflights every fetched mapping before mutating the first mapping", async () => {
+    const first = makeProject("first", { name: "First" });
+    const second = makeProject("second", { name: "Second" });
+    const validateSnapshot = vi.fn<ProjectSyncVault["validateSnapshot"]>(
+      (_snapshot, currentMapping) => {
+        if (currentMapping.project?.projectId === second.id) {
+          throw new Error("Todoist cannot be mirrored without renaming");
+        }
+      },
+    );
+    const vault = makeVault({ validateSnapshot });
+    const service = new ProjectFolderSyncService(
+      {
+        listProjects: () => [first, second],
+        fetchProjectTasks: async (projectId) =>
+          projectTaskPage({
+            activeTasks: [
+              makeTask(`task-${projectId}`, {
+                content: "Same title",
+                project: projectId === first.id ? first : second,
+              }),
+            ],
+          }),
+      },
+      vault,
+      config(
+        mapping(first.id, { includeSubprojects: false }),
+        mapping(second.id, { includeSubprojects: false }),
+      ),
+    );
+
+    await expect(service.sync()).rejects.toThrow("cannot be mirrored without renaming");
+
+    expect(validateSnapshot).toHaveBeenCalledTimes(2);
+    expect(vault.reconcile).not.toHaveBeenCalled();
+  });
+
   it("rejects a task returned by two mappings before mutating either folder", async () => {
     const first = makeProject("first");
     const second = makeProject("second");
@@ -772,6 +815,36 @@ describe("ProjectFolderSyncService", () => {
 
     await expect(sync).resolves.toBeNull();
     expect(vault.reconcile).not.toHaveBeenCalled();
+    expect(service.getStatus()).toEqual({ state: "idle" });
+  });
+
+  it("finishes the complete Vault commit when external activity arrives between mappings", async () => {
+    const first = makeProject("first");
+    const second = makeProject("second");
+    let service: ProjectFolderSyncService;
+    const reconcile = vi.fn<ProjectSyncVault["reconcile"]>(
+      async (_snapshot, currentMapping, runContext) => {
+        if (currentMapping.project?.projectId === first.id) {
+          service.invalidate();
+          // The same generation remains valid until every mapping in this preflighted batch has
+          // committed. Before the fix this assertion aborted the run after the first mapping.
+          runContext.assertValid();
+        }
+        return successResult({ updated: 1 });
+      },
+    );
+    service = new ProjectFolderSyncService(
+      {
+        listProjects: () => [first, second],
+        fetchProjectTasks: async () => projectTaskPage(),
+      },
+      makeVault({ reconcile }),
+      config(mapping(first.id), mapping(second.id)),
+    );
+
+    await expect(service.sync()).resolves.toMatchObject({ updated: 2 });
+
+    expect(reconcile).toHaveBeenCalledTimes(2);
     expect(service.getStatus()).toEqual({ state: "idle" });
   });
 

@@ -47,6 +47,7 @@ describe("hydrate", () => {
 
     expect(task.id).toBe("task-42");
     expect(task.createdAt).toBe("2024-06-15T10:30:00Z");
+    expect(task.authoritativeCreatedAt).toBe("2024-06-15T10:30:00Z");
     expect(task.updatedAt).toBe("2024-06-16T12:00:00Z");
     expect(task.content).toBe("Buy groceries");
     expect(task.description).toBe("Milk, eggs, bread");
@@ -55,6 +56,23 @@ describe("hydrate", () => {
     expect(task.due).toEqual({ isRecurring: false, date: "2024-06-20" });
     expect(task.duration).toEqual({ amount: 30, unit: "minute" });
     expect(task.deadline).toEqual({ date: "2024-06-25" });
+  });
+
+  it("does not expose a completedAt fallback as an authoritative creation time", () => {
+    const completedAt = "2026-08-09T12:34:56.000Z";
+    const task = hydrate(
+      makeApiTask({
+        addedAt: "1970-01-01T00:00:00.000Z",
+        addedAtIsAuthoritative: false,
+        completedAt,
+      }),
+      makeDataAccessor(),
+    );
+
+    expect(task.createdAt).toBe("1970-01-01T00:00:00.000Z");
+    expect(task.createdAt).not.toBe(completedAt);
+    expect(task.completedAt).toBe(completedAt);
+    expect(task).not.toHaveProperty("authoritativeCreatedAt");
   });
 
   it("should preserve completed task identity", () => {

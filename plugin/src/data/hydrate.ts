@@ -22,6 +22,7 @@ export function hydrate(apiTask: ApiTask, data: DataAccessor): Task {
   return {
     id: apiTask.id,
     createdAt: apiTask.addedAt,
+    ...(apiTask.addedAtIsAuthoritative ? { authoritativeCreatedAt: apiTask.addedAt } : {}),
     ...(apiTask.updatedAt !== undefined ? { updatedAt: apiTask.updatedAt } : {}),
     ...(apiTask.completedAt != null ? { completedAt: apiTask.completedAt } : {}),
 

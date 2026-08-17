@@ -6,9 +6,12 @@ import type { Task as ApiTask } from "@/api/domain/task";
 import type { Task } from "@/data/task";
 
 export function makeTask(id: string, opts?: Partial<Task>): Task {
+  const authoritativeCreatedAt =
+    opts?.authoritativeCreatedAt ?? (opts?.createdAt === undefined ? undefined : opts.createdAt);
   return {
     id,
     createdAt: opts?.createdAt ?? "1970-01-01",
+    ...(authoritativeCreatedAt === undefined ? {} : { authoritativeCreatedAt }),
     ...(opts?.updatedAt !== undefined ? { updatedAt: opts.updatedAt } : {}),
     completedAt: opts?.completedAt,
     parentId: opts?.parentId,
@@ -39,6 +42,7 @@ export function makeTask(id: string, opts?: Partial<Task>): Task {
 export function makeProject(id: string, opts?: Partial<Project>): Project {
   return {
     id,
+    ...(opts?.createdAt !== undefined ? { createdAt: opts.createdAt } : {}),
     parentId: opts?.parentId ?? null,
     name: opts?.name ?? "Project",
     childOrder: opts?.childOrder ?? 1,
@@ -79,6 +83,7 @@ export function makeDueDate(date: string): DueDate {
 export const makeApiTask = (overrides?: Partial<ApiTask>): ApiTask => ({
   id: "task-1",
   addedAt: "2024-01-01T00:00:00Z",
+  addedAtIsAuthoritative: true,
   content: "Test task",
   description: "A test description",
   projectId: "project-1",

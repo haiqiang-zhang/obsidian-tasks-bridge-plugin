@@ -34,8 +34,6 @@ export {
 } from "./localStatistics";
 export {
   isPathInside,
-  makeDisambiguatedProjectSegment,
-  makeProjectSegments,
   makeTaskFilename,
   sanitizePathSegment,
 } from "./paths";

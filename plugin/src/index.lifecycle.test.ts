@@ -1486,9 +1486,15 @@ describe("TodoistPlugin async lifecycle", () => {
     expect(services.projectSync.invalidate).not.toHaveBeenCalled();
   });
 
-  it("skips automatic Project sync when the private Sync plugin is missing, disabled, or malformed", async () => {
-    const privateSurfaces: [string, unknown | null][] = [
-      ["missing", null],
+  it("runs automatic Project sync when official Sync is confidently absent or disabled", async () => {
+    const privateSurfaces: [string, unknown][] = [
+      [
+        "absent",
+        {
+          getEnabledPluginById: vi.fn(() => undefined),
+          getPluginById: vi.fn(() => undefined),
+        },
+      ],
       [
         "disabled",
         {
@@ -1499,12 +1505,6 @@ describe("TodoistPlugin async lifecycle", () => {
               newServerFiles: [{ path: "Tasks/Remote task.md" }],
             }).instance,
           })),
-        },
-      ],
-      [
-        "malformed",
-        {
-          getEnabledPluginById: vi.fn(() => ({ getStatus: () => "syncing" })),
         },
       ],
     ];
@@ -1521,8 +1521,25 @@ describe("TodoistPlugin async lifecycle", () => {
       await internals(plugin).runScheduledSync();
 
       expect(services.todoist.syncMetadata, surfaceName).toHaveBeenCalledOnce();
-      expect(services.projectSync.sync, surfaceName).not.toHaveBeenCalled();
+      expect(services.projectSync.sync, surfaceName).toHaveBeenCalledOnce();
     }
+  });
+
+  it("skips automatic Project sync for an enabled but malformed private Sync surface", async () => {
+    const services = makeServices();
+    services.projectSync.sync.mockResolvedValueOnce(emptyResult());
+    runtime.settings.current = defaultSettings({
+      autoRefreshToggle: true,
+      projectSyncEnabled: true,
+    });
+    const plugin = makePlugin(services, vi.fn(), {
+      getEnabledPluginById: vi.fn(() => ({ getStatus: () => "syncing" })),
+    });
+
+    await internals(plugin).runScheduledSync();
+
+    expect(services.todoist.syncMetadata).toHaveBeenCalledOnce();
+    expect(services.projectSync.sync).not.toHaveBeenCalled();
   });
 
   it("keeps one scheduled promise pending through incoming Sync and resumes after settling", async () => {
@@ -1627,7 +1644,8 @@ describe("TodoistPlugin async lifecycle", () => {
     expect(services.todoist.syncMetadata).toHaveBeenCalledOnce();
     expect(services.projectSync.sync).toHaveBeenCalledOnce();
 
-    await vi.advanceTimersByTimeAsync(1);
+    // The gate polls at 250 ms; this reaches the first poll after the restarted settle deadline.
+    await vi.advanceTimersByTimeAsync(2);
 
     expect(services.todoist.syncMetadata).toHaveBeenCalledTimes(2);
     // The new cycle sees the invalid permit and ends without another Project sync.
@@ -1659,7 +1677,9 @@ describe("TodoistPlugin async lifecycle", () => {
     expect(services.projectSync.sync).not.toHaveBeenCalled();
   });
 
-  it("does not impose a fixed quiet period after mapped Vault activity", async () => {
+  it("restarts the Sync settle window after late mapped Vault activity", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-12T00:00:00.000Z"));
     const services = makeServices();
     services.projectSync.sync.mockResolvedValueOnce(emptyResult());
     const stored = defaultSettings({
@@ -1677,13 +1697,23 @@ describe("TodoistPlugin async lifecycle", () => {
     });
     runtime.loadData.mockResolvedValueOnce(stored);
     runtime.settings.current = stored;
-    const plugin = makePlugin(services);
+    const sync = makeSyncHarness({ syncStatus: "Fully synced" });
+    const plugin = makePlugin(services, vi.fn(), sync.internalPlugins);
     await plugin.onload();
     services.projectSync.invalidate.mockClear();
 
-    vaultActivityListener("modify")({ path: "Tasks/Work/Remote task.md" });
+    const scheduled = internals(plugin).runScheduledSync();
+    await flushPromises();
+    await vi.advanceTimersByTimeAsync(OBSIDIAN_SYNC_SETTLE_MS - 1);
+    expect(services.projectSync.sync).not.toHaveBeenCalled();
 
-    await internals(plugin).runScheduledSync();
+    vaultActivityListener("modify")({ path: "Tasks/Work/Remote task.md" });
+    await vi.advanceTimersByTimeAsync(OBSIDIAN_SYNC_SETTLE_MS - 1);
+    expect(services.projectSync.sync).not.toHaveBeenCalled();
+
+    // The gate polls at 250 ms; this reaches the first poll after the restarted settle deadline.
+    await vi.advanceTimersByTimeAsync(2);
+    await scheduled;
 
     expect(services.projectSync.invalidate).toHaveBeenCalledOnce();
     expect(services.projectSync.sync).toHaveBeenCalledOnce();
@@ -1833,7 +1863,9 @@ describe("TodoistPlugin async lifecycle", () => {
     expect(services.projectSync.sync).not.toHaveBeenCalled();
   });
 
-  it("keeps manual Project sync independent of Auto-refresh and incoming Sync", async () => {
+  it("waits for incoming official Sync before a manual Project projection", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-12T00:00:00.000Z"));
     const services = makeServices();
     const result = emptyResult();
     services.projectSync.sync.mockResolvedValue(result);
@@ -1848,12 +1880,21 @@ describe("TodoistPlugin async lifecycle", () => {
     const plugin = makePlugin(services, vi.fn(), sync.internalPlugins);
 
     await plugin.updateApiToken("token");
-    await plugin.syncProjectFolderNow();
+    const manual = plugin.syncProjectFolderNow();
+    await flushPromises();
 
     expect(services.todoist.initialize).toHaveBeenCalledOnce();
     expect(services.todoist.sync).toHaveBeenCalledOnce();
-    expect(services.projectSync.sync).toHaveBeenCalledOnce();
+    expect(services.projectSync.sync).not.toHaveBeenCalled();
     expect(services.todoist.syncMetadata).not.toHaveBeenCalled();
+
+    sync.instance.newServerFiles = [];
+    sync.instance.syncStatus = "Fully synced";
+    sync.emitStatusChange();
+    await vi.advanceTimersByTimeAsync(OBSIDIAN_SYNC_SETTLE_MS);
+    await manual;
+
+    expect(services.projectSync.sync).toHaveBeenCalledOnce();
   });
 
   it("reports scheduled conflicts in both the console and a notice", async () => {

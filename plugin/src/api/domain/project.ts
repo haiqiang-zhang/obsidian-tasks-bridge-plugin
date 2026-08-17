@@ -5,6 +5,7 @@ export type ProjectId = z.infer<typeof projectIdSchema>;
 
 export const projectSchema = z.object({
   id: projectIdSchema,
+  createdAt: z.string().nullable().optional(),
   parentId: projectIdSchema.nullable(),
   name: z.string(),
   childOrder: z.number(),

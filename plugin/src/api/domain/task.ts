@@ -35,11 +35,11 @@ export const prioritySchema = z.union([
 
 export type Priority = z.infer<typeof prioritySchema>;
 
-const todoistTimestampSchema = z.iso.datetime({ offset: true });
+export const todoistTimestampSchema = z.iso.datetime({ offset: true });
 
-export const taskSchema = z.object({
+const rawTaskSchema = z.object({
   id: taskIdSchema,
-  addedAt: z.string(),
+  addedAt: todoistTimestampSchema,
   content: z.string(),
   description: z.string(),
   projectId: projectIdSchema,
@@ -55,33 +55,44 @@ export const taskSchema = z.object({
   updatedAt: todoistTimestampSchema.optional(),
 });
 
+export const taskSchema = rawTaskSchema.transform((task) => ({
+  ...task,
+  addedAtIsAuthoritative: task.addedAt.length > 0,
+}));
+
 const UNKNOWN_ADDED_AT = "1970-01-01T00:00:00.000Z";
 
-const itemSyncTaskSchema = taskSchema.extend({
-  addedAt: z.string().nullable(),
+const itemSyncTaskSchema = rawTaskSchema.extend({
+  addedAt: todoistTimestampSchema.nullable(),
   checked: z.boolean(),
   updatedAt: todoistTimestampSchema.nullable(),
 });
 
 export const projectTaskSchema = itemSyncTaskSchema.transform((task) => ({
   ...task,
+  addedAtIsAuthoritative: task.addedAt !== null,
   addedAt: task.addedAt ?? UNKNOWN_ADDED_AT,
   updatedAt: task.updatedAt ?? undefined,
 }));
 
 const annotatedCompletedTaskSchema = itemSyncTaskSchema.transform((task) => ({
   ...task,
+  addedAtIsAuthoritative: task.addedAt !== null,
+  addedAt: task.addedAt ?? UNKNOWN_ADDED_AT,
   updatedAt: task.updatedAt ?? undefined,
 }));
 
-export const completedTaskSchema = taskSchema
+export const completedTaskSchema = rawTaskSchema
   .extend({
-    addedAt: z.string().nullable(),
-    completedAt: z.string().nullable(),
+    addedAt: todoistTimestampSchema.nullable(),
+    completedAt: todoistTimestampSchema.nullable(),
   })
   .transform((task) => ({
     ...task,
-    addedAt: task.addedAt ?? task.completedAt ?? UNKNOWN_ADDED_AT,
+    addedAtIsAuthoritative: task.addedAt !== null,
+    // Keep an explicit non-authoritative sentinel for legacy sorting code, but never substitute
+    // `completedAt`: completion time is not task creation time.
+    addedAt: task.addedAt ?? UNKNOWN_ADDED_AT,
     // A completion-history record can describe a task that has since been
     // reopened. In that case `checked` is the current source of truth and the
     // historical timestamp must not make the current task look completed.

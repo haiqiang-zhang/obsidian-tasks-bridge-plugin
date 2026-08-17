@@ -8,6 +8,7 @@ export type ObsidianSyncPermit = Readonly<{
 }>;
 
 export type ObsidianSyncPhase =
+  | "absent"
   | "unavailable"
   | "inactive"
   | "idle"
@@ -45,6 +46,11 @@ type InternalApp = App & {
   internalPlugins?: InternalPlugins;
 };
 
+type ResolvedSyncSurface =
+  | { kind: "absent" }
+  | { kind: "available"; instance: InternalSyncInstance }
+  | { kind: "unknown" };
+
 type Waiter = {
   isCurrent: () => boolean;
   resolve: (permit: ObsidianSyncPermit | null) => void;
@@ -64,8 +70,8 @@ type GateOptions = {
  * Obsidian Sync session.
  *
  * Obsidian currently has no public Sync-direction API. All private access is isolated here and
- * feature-detected. If the private surface is missing or changes, automatic projection fails
- * closed; manual Project sync remains available through its separate, explicit command path.
+ * feature-detected. A confidently absent or disabled Sync plugin needs no coordination. If an
+ * enabled private surface is missing or changes, Project projection fails closed.
  */
 export class ObsidianSyncActivityGate {
   private readonly app: InternalApp;
@@ -165,6 +171,23 @@ export class ObsidianSyncActivityGate {
     return this.lastPhase;
   }
 
+  public recordExternalVaultActivity(): void {
+    this.refresh();
+    if (this.disposed || this.lastPhase === "absent") {
+      return;
+    }
+
+    const hadConfirmedBaseline = this.baselineConfirmed;
+    this.baselineConfirmed = false;
+    this.settleUntil =
+      this.lastPhase === "idle" ? this.now() + this.settleMs : Number.NEGATIVE_INFINITY;
+    if (hadConfirmedBaseline) {
+      this.permitGeneration++;
+    }
+    this.flushWaiters();
+    this.ensurePolling();
+  }
+
   public dispose(): void {
     if (this.disposed) {
       return;
@@ -183,10 +206,18 @@ export class ObsidianSyncActivityGate {
       return;
     }
 
-    const instance = resolveSyncInstance(this.app);
+    const surface = resolveSyncSurface(this.app);
+    const instance = surface.kind === "available" ? surface.instance : undefined;
     const instanceChanged = instance !== this.subscribedInstance;
     this.ensureSubscribed(instance);
-    const phase = observeSyncPhase(instance);
+    let phase: ObsidianSyncPhase;
+    if (surface.kind === "absent") {
+      phase = "absent";
+    } else if (surface.kind === "unknown") {
+      phase = "unavailable";
+    } else {
+      phase = observeSyncPhase(instance);
+    }
     const hadConfirmedBaseline = this.baselineConfirmed;
     const wasInboundLatched = this.inboundLatched;
     const now = this.now();
@@ -201,7 +232,11 @@ export class ObsidianSyncActivityGate {
       }
     }
 
-    if (phase === "inbound") {
+    if (phase === "absent") {
+      this.baselineConfirmed = true;
+      this.inboundLatched = false;
+      this.settleUntil = Number.NEGATIVE_INFINITY;
+    } else if (phase === "inbound") {
       this.baselineConfirmed = false;
       this.inboundLatched = true;
       this.settleUntil = Number.NEGATIVE_INFINITY;
@@ -428,13 +463,13 @@ const isInboundDetail = (detail: string): boolean =>
 
 const isOutboundDetail = (detail: string): boolean =>
   detail.startsWith("uploading ") ||
-  detail.startsWith("comparing ") ||
   detail.startsWith("deleting remote file ") ||
   detail.startsWith("deleting remote folder ");
 
 const isPreparingDetail = (detail: string): boolean => detail.includes("connecting to server");
 
 const isIndeterminateDetail = (detail: string): boolean =>
+  detail.startsWith("comparing ") ||
   detail.startsWith("indexing") ||
   detail.startsWith("initializing") ||
   detail.startsWith("computing hash ");
@@ -461,43 +496,67 @@ const collectionLength = (value: unknown): number | undefined => {
   return undefined;
 };
 
-const resolveSyncInstance = (app: InternalApp): InternalSyncInstance | undefined => {
+const resolveSyncSurface = (app: InternalApp): ResolvedSyncSurface => {
   const internalPlugins = app.internalPlugins;
   if (internalPlugins === undefined) {
-    return undefined;
+    return { kind: "unknown" };
   }
 
-  try {
-    const enabled = internalPlugins.getEnabledPluginById?.("sync");
-    if (isRecord(enabled) && enabled.enabled !== false) {
+  let registryObserved = false;
+  if (typeof internalPlugins.getEnabledPluginById === "function") {
+    registryObserved = true;
+    let enabled: unknown;
+    try {
+      enabled = internalPlugins.getEnabledPluginById("sync");
+    } catch {
+      return { kind: "unknown" };
+    }
+    if (enabled !== null && enabled !== undefined) {
+      if (!isRecord(enabled)) {
+        return { kind: "unknown" };
+      }
+      if (enabled.enabled === false) {
+        return { kind: "absent" };
+      }
       if (isSyncInstance(enabled.instance)) {
-        return enabled.instance;
+        return { kind: "available", instance: enabled.instance };
       }
       if (isSyncInstance(enabled)) {
-        return enabled;
+        return { kind: "available", instance: enabled };
       }
+      return { kind: "unknown" };
     }
-  } catch {
-    // Continue through the guarded compatibility fallbacks.
   }
 
   let descriptor: unknown;
-  try {
-    descriptor = internalPlugins.getPluginById?.("sync") ?? internalPlugins.plugins?.sync;
-  } catch {
-    return undefined;
+  if (typeof internalPlugins.getPluginById === "function") {
+    registryObserved = true;
+    try {
+      descriptor = internalPlugins.getPluginById("sync");
+    } catch {
+      return { kind: "unknown" };
+    }
+  }
+  if (descriptor === undefined && isRecord(internalPlugins.plugins)) {
+    registryObserved = true;
+    descriptor = internalPlugins.plugins.sync;
+  }
+  if (descriptor === null || descriptor === undefined) {
+    return registryObserved ? { kind: "absent" } : { kind: "unknown" };
   }
   if (!isRecord(descriptor)) {
-    return undefined;
+    return { kind: "unknown" };
   }
   const plugin = descriptor as InternalPluginDescriptor;
   if (plugin.enabled === false) {
-    return undefined;
+    return { kind: "absent" };
   }
   if (isSyncInstance(plugin.instance)) {
-    return plugin.instance;
+    return { kind: "available", instance: plugin.instance };
   }
-  return isSyncInstance(descriptor) ? descriptor : undefined;
+  return isSyncInstance(descriptor)
+    ? { kind: "available", instance: descriptor }
+    : { kind: "unknown" };
 };
 
 const isSyncInstance = (value: unknown): value is InternalSyncInstance =>

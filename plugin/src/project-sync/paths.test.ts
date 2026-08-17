@@ -1,9 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { makeProject } from "@/factories/data";
-
 import {
-  makeProjectSegments,
+  makeProjectFolderSegment,
   makeTaskFilename,
   makeTaskFolderSegment,
   sanitizePathSegment,
@@ -23,48 +21,41 @@ describe("project sync paths", () => {
     expect(new TextEncoder().encode(value).length).toBeLessThanOrEqual(7);
   });
 
-  it("uses the task title with Obsidian-style collision suffixes", () => {
+  it("uses only the canonical sanitized task title", () => {
     expect(makeTaskFilename("Read RFC")).toBe("Read RFC.md");
-    expect(makeTaskFilename("Read RFC", 2)).toBe("Read RFC (2).md");
     expect(makeTaskFilename("...")).toBe("Untitled task.md");
+    expect(makeTaskFilename("Hadoop")).toBe("Hadoop.md");
+    expect(makeTaskFolderSegment("Hadoop")).toBe("Hadoop");
+  });
+
+  it("keeps unmarked names canonical so the namespace allocator can detect collisions", () => {
+    expect(makeTaskFilename("Café")).toBe(makeTaskFilename("Cafe\u0301"));
+    expect(makeTaskFilename("A/B")).toBe(makeTaskFilename("A:B"));
+    expect(makeTaskFilename(`${"x".repeat(250)}A`)).toBe(makeTaskFilename(`${"x".repeat(250)}B`));
+    expect(makeTaskFilename("Same title")).toBe("Same title.md");
+    expect(makeTaskFilename("Same title")).not.toContain(" (2)");
+  });
+
+  it("uses typed identity markers without ordinal suffixes", () => {
+    expect(makeProjectFolderSegment("Algorithms", "p-6fwjvM")).toBe("Algorithms · p-6fwjvM");
+    expect(makeTaskFolderSegment("Problem set", "t-6g7v4J")).toBe("Problem set · t-6g7v4J");
+    expect(makeTaskFilename("Problem set", "t-6g7v4J")).toBe("Problem set · t-6g7v4J.md");
+    expect(makeTaskFilename("Problem set", "t-6g7v4J")).not.toMatch(/ \(\d+\)\.md$/u);
   });
 
   it("uses matching portable names for parent-task folders and their notes", () => {
     expect(makeTaskFolderSegment("Parent task")).toBe("Parent task");
-    expect(makeTaskFolderSegment("Parent task", 2)).toBe("Parent task (2)");
-    expect(makeTaskFilename(makeTaskFolderSegment("Parent task", 2))).toBe("Parent task (2).md");
+    expect(makeTaskFilename(makeTaskFolderSegment("Parent task"))).toBe("Parent task.md");
     expect(
       new TextEncoder().encode(makeTaskFolderSegment("网络任务".repeat(100))).length,
     ).toBeLessThanOrEqual(96);
   });
 
   it("keeps the complete Unicode filename within its UTF-8 byte budget", () => {
-    const canonical = makeTaskFilename("网络任务".repeat(100));
-    const collision = makeTaskFilename("网络任务".repeat(100), 237);
+    const canonical = makeTaskFilename("网络任务".repeat(100), "t-6g7v4J39V9jhMw2Q");
 
     expect(new TextEncoder().encode(canonical).length).toBeLessThanOrEqual(200);
-    expect(new TextEncoder().encode(collision).length).toBeLessThanOrEqual(200);
     expect(canonical.endsWith(".md")).toBe(true);
-    expect(collision.endsWith(" (237).md")).toBe(true);
-  });
-
-  it("disambiguates equal sibling project names with project IDs", () => {
-    const root = makeProject("root", { name: "Root" });
-    const first = makeProject("one", { name: "Same", parentId: root.id });
-    const second = makeProject("two", { name: "Same", parentId: root.id });
-    const segments = makeProjectSegments([root, first, second]);
-
-    expect(segments.get(first.id)).toBe("Same -- one");
-    expect(segments.get(second.id)).toBe("Same -- two");
-  });
-
-  it("disambiguates sibling names that collide on case-insensitive file systems", () => {
-    const root = makeProject("root", { name: "Root" });
-    const upper = makeProject("upper", { name: "Work", parentId: root.id });
-    const lower = makeProject("lower", { name: "work", parentId: root.id });
-    const segments = makeProjectSegments([root, upper, lower]);
-
-    expect(segments.get(upper.id)).toBe("Work -- upper");
-    expect(segments.get(lower.id)).toBe("work -- lower");
+    expect(canonical).toContain(" · t-6g7v4J39V9jhMw2Q.md");
   });
 });

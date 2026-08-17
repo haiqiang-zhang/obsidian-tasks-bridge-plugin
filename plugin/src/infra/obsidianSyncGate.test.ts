@@ -79,7 +79,6 @@ describe("observeSyncPhase", () => {
 
   it.each([
     "Uploading Tasks/Work.md",
-    "Comparing Tasks/Work.md",
     "Deleting remote file Tasks/Work.md",
     "Deleting remote folder Tasks/Work",
   ])("allows an upload-only phase: %s", (syncStatus) => {
@@ -118,6 +117,7 @@ describe("observeSyncPhase", () => {
   });
 
   it.each([
+    "Comparing Tasks/Work.md",
     "Indexing...",
     "Initializing...",
     "Computing hash Tasks/Work.md",
@@ -217,7 +217,15 @@ describe("ObsidianSyncActivityGate", () => {
   });
 
   it.each([
-    ["missing", {}],
+    [
+      "absent",
+      {
+        internalPlugins: {
+          getEnabledPluginById: (): undefined => undefined,
+          getPluginById: (): undefined => undefined,
+        },
+      },
+    ],
     [
       "disabled",
       {
@@ -241,12 +249,34 @@ describe("ObsidianSyncActivityGate", () => {
         },
       },
     ],
+  ])("allows immediately when official Sync is confidently %s", async (_label, appShape) => {
+    const gate = new ObsidianSyncActivityGate(appShape as unknown as App);
+    gate.start(vi.fn());
+
+    await expect(gate.waitForSafePermit()).resolves.toEqual({ generation: 0 });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each([
+    ["missing registry", {}],
     [
-      "malformed",
+      "malformed enabled instance",
       {
         internalPlugins: {
           getEnabledPluginById: (): { getStatus: () => string } => ({
             getStatus: () => "syncing",
+          }),
+        },
+      },
+    ],
+    [
+      "malformed enabled descriptor",
+      {
+        internalPlugins: {
+          getEnabledPluginById: (): undefined => undefined,
+          getPluginById: () => ({
+            enabled: true,
+            instance: {},
           }),
         },
       },
@@ -353,6 +383,74 @@ describe("ObsidianSyncActivityGate", () => {
     await vi.advanceTimersByTimeAsync(OBSIDIAN_SYNC_SETTLE_MS);
 
     expect(permit).toEqual({ generation: 1 });
+  });
+
+  it("invalidates a confirmed baseline while Sync is comparing", async () => {
+    const harness = makeSyncHarness({ syncStatus: "Fully synced" });
+    const gate = new ObsidianSyncActivityGate(harness.app);
+    gate.start(vi.fn());
+    const firstPending = gate.waitForSafePermit();
+    await vi.advanceTimersByTimeAsync(OBSIDIAN_SYNC_SETTLE_MS);
+    const firstPermit = await firstPending;
+    expect(firstPermit).toEqual({ generation: 0 });
+
+    harness.instance.syncStatus = "Comparing Tasks/Work.md";
+    harness.emitStatusChange();
+
+    expect(gate.isPermitCurrent(firstPermit as { generation: number })).toBe(false);
+    let nextPermit: unknown;
+    void gate.waitForSafePermit().then((value) => {
+      nextPermit = value;
+    });
+    await vi.advanceTimersByTimeAsync(OBSIDIAN_SYNC_SETTLE_MS);
+    expect(nextPermit).toBeUndefined();
+
+    harness.instance.syncStatus = "Fully synced";
+    harness.emitStatusChange();
+    await vi.advanceTimersByTimeAsync(OBSIDIAN_SYNC_SETTLE_MS);
+
+    expect(nextPermit).toEqual({ generation: 1 });
+  });
+
+  it("requires a fresh idle settle after external Vault activity", async () => {
+    const harness = makeSyncHarness({ syncStatus: "Fully synced" });
+    const gate = new ObsidianSyncActivityGate(harness.app);
+    gate.start(vi.fn());
+    const firstPending = gate.waitForSafePermit();
+    await vi.advanceTimersByTimeAsync(OBSIDIAN_SYNC_SETTLE_MS);
+    const firstPermit = await firstPending;
+    expect(firstPermit).toEqual({ generation: 0 });
+
+    gate.recordExternalVaultActivity();
+
+    expect(gate.isPermitCurrent(firstPermit as { generation: number })).toBe(false);
+    let nextPermit: unknown;
+    void gate.waitForSafePermit().then((value) => {
+      nextPermit = value;
+    });
+    await vi.advanceTimersByTimeAsync(OBSIDIAN_SYNC_SETTLE_MS - 1);
+    expect(nextPermit).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(nextPermit).toEqual({ generation: 1 });
+  });
+
+  it("ignores external Vault activity when official Sync is absent", async () => {
+    const app = {
+      internalPlugins: {
+        getEnabledPluginById: (): undefined => undefined,
+        getPluginById: (): undefined => undefined,
+      },
+    } as unknown as App;
+    const gate = new ObsidianSyncActivityGate(app);
+    gate.start(vi.fn());
+    const firstPermit = await gate.waitForSafePermit();
+    expect(firstPermit).toEqual({ generation: 0 });
+
+    gate.recordExternalVaultActivity();
+
+    expect(gate.isPermitCurrent(firstPermit as { generation: number })).toBe(true);
+    await expect(gate.waitForSafePermit()).resolves.toEqual({ generation: 0 });
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("polls the inbound queue while an automatic operation is active", async () => {

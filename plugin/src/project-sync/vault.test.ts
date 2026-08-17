@@ -21,9 +21,8 @@ vi.mock("obsidian", async () => {
       return (
         typeof value === "object" &&
         value !== null &&
-        "path" in value &&
-        typeof value.path === "string" &&
-        value.path.endsWith(".md")
+        "_fakeKind" in value &&
+        value._fakeKind === "file"
       );
     }
   }
@@ -55,8 +54,8 @@ vi.mock("obsidian", async () => {
   };
 });
 
-type FakeFile = TFile & { path: string; name: string };
-type FakeFolder = TAbstractFile & { path: string; name: string };
+type FakeFile = TFile & { path: string; name: string; _fakeKind: "file" };
+type FakeFolder = TAbstractFile & { path: string; name: string; _fakeKind: "folder" };
 
 class FakeVault {
   readonly files = new Map<string, { file: FakeFile; content: string }>();
@@ -64,6 +63,7 @@ class FakeVault {
   private readonly folderEntries = new Map<string, FakeFolder>();
   beforeProcess: (() => void) | undefined;
   beforeCreate: ((path: string) => void) | undefined;
+  beforeCreateFolder: ((path: string) => void) | undefined;
   afterProcess: (() => void) | undefined;
   readonly process = vi.fn(async (file: TFile, update: (content: string) => string) => {
     this.beforeProcess?.();
@@ -78,7 +78,11 @@ class FakeVault {
 
   addFile(path: string, content: string): FakeFile {
     const segments = path.split("/");
-    const file = { path, name: segments[segments.length - 1] ?? path } as FakeFile;
+    const file = {
+      path,
+      name: segments[segments.length - 1] ?? path,
+      _fakeKind: "file",
+    } as FakeFile;
     this.files.set(path, { file, content });
     return file;
   }
@@ -92,6 +96,10 @@ class FakeVault {
   }
 
   async createFolder(path: string) {
+    this.beforeCreateFolder?.(path);
+    if (this.getAbstractFileByPath(path) !== null) {
+      throw new Error(`Folder already exists: ${path}`);
+    }
     this.folders.add(path);
     return this.folderEntry(path);
   }
@@ -104,7 +112,9 @@ class FakeVault {
   }
 
   getMarkdownFiles(): TFile[] {
-    return [...this.files.values()].map(({ file }) => file);
+    return [...this.files.values()]
+      .map(({ file }) => file)
+      .filter((file) => file.path.endsWith(".md"));
   }
 
   async read(file: TFile): Promise<string> {
@@ -129,7 +139,11 @@ class FakeVault {
       return existing;
     }
     const segments = path.split("/");
-    const folder = { path, name: segments[segments.length - 1] ?? path } as FakeFolder;
+    const folder = {
+      path,
+      name: segments[segments.length - 1] ?? path,
+      _fakeKind: "folder",
+    } as FakeFolder;
     this.folderEntries.set(path, folder);
     return folder;
   }
@@ -141,7 +155,7 @@ class FakeFileManager {
   beforeRename: ((newPath: string) => void) | undefined;
   afterProcessFrontMatter: (() => void) | undefined;
   afterRename: (() => void) | undefined;
-  beforeTrash: ((file: TFile) => void) | undefined;
+  beforeTrash: ((file: TAbstractFile) => void) | undefined;
 
   readonly processFrontMatter = vi.fn(
     async (file: TFile, update: (frontmatter: Record<string, unknown>) => void) => {
@@ -176,7 +190,7 @@ class FakeFileManager {
     this.afterRename?.();
   });
 
-  readonly trashFile = vi.fn(async (file: TFile) => {
+  readonly trashFile = vi.fn(async (file: TAbstractFile) => {
     this.beforeTrash?.(file);
     if (this.vault.files.delete(file.path)) {
       return;
@@ -471,7 +485,7 @@ describe("ObsidianProjectSyncVault", () => {
     expect(vault.files.has("Sync/Chapter one.md")).toBe(false);
   });
 
-  it("uses stable numbered folders for same-title parent tasks", async () => {
+  it("uses stable Todoist-ID markers for same-title parent-task subtrees", async () => {
     const project = makeProject("root", { name: "Software engineering" });
     const firstParent = makeTask("parent-a", { content: "Problem sets", project });
     const secondParent = makeTask("parent-b", { content: "Problem sets", project });
@@ -489,33 +503,47 @@ describe("ObsidianProjectSyncVault", () => {
       task,
       completed: false,
     }));
+    const snapshot: ProjectSyncSnapshot = {
+      rootProjectId: project.id,
+      projects: [project],
+      tasks,
+      syncedAt: "2026-08-13T00:00:00.000Z",
+    };
 
-    const first = await adapter.reconcile(
-      {
-        rootProjectId: project.id,
-        projects: [project],
-        tasks,
-        syncedAt: "2026-08-13T00:00:00.000Z",
-      },
-      mapping,
-    );
-    const second = await adapter.reconcile(
-      {
-        rootProjectId: project.id,
-        projects: [project],
-        tasks: [...tasks].reverse(),
-        syncedAt: "2026-08-13T00:00:00.000Z",
-      },
-      mapping,
-    );
+    const first = await adapter.reconcile(snapshot, mapping);
+    const firstPaths = managedPathsByTaskId(vault);
+    const firstParentPath = firstPaths.get(firstParent.id);
+    const secondParentPath = firstPaths.get(secondParent.id);
+    const firstParentFolder = parentPathOf(firstParentPath);
+    const secondParentFolder = parentPathOf(secondParentPath);
 
+    expect(first).toMatchObject({ created: 4, moved: 0 });
     expect(first.conflicts).toEqual([]);
+    expect(firstParentFolder).toMatch(/^Sync\/Problem sets · t-/u);
+    expect(secondParentFolder).toMatch(/^Sync\/Problem sets · t-/u);
+    expect(firstParentFolder).not.toBe(secondParentFolder);
+    expect(firstParentPath).toBe(`${firstParentFolder}/${basename(firstParentFolder)}.md`);
+    expect(secondParentPath).toBe(`${secondParentFolder}/${basename(secondParentFolder)}.md`);
+    expect(firstPaths.get(firstChild.id)).toBe(`${firstParentFolder}/First child.md`);
+    expect(firstPaths.get(secondChild.id)).toBe(`${secondParentFolder}/Second child.md`);
+    expect(parseFrontmatter(vault.files.get(firstParentPath ?? "")?.content ?? "")).toMatchObject({
+      todoist_task_id: firstParent.id,
+      todoist_content: "Problem sets",
+    });
+    expect(parseFrontmatter(vault.files.get(secondParentPath ?? "")?.content ?? "")).toMatchObject({
+      todoist_task_id: secondParent.id,
+      todoist_content: "Problem sets",
+    });
+    expect([...vault.files.keys()].some(hasNumberedCollisionSuffix)).toBe(false);
+
+    const second = await adapter.reconcile(
+      { ...snapshot, tasks: [...snapshot.tasks].reverse() },
+      mapping,
+    );
+
     expect(second).toMatchObject({ created: 0, moved: 0, unchanged: 4 });
     expect(second.conflicts).toEqual([]);
-    expect(vault.files.has("Sync/Problem sets/Problem sets.md")).toBe(true);
-    expect(vault.files.has("Sync/Problem sets/First child.md")).toBe(true);
-    expect(vault.files.has("Sync/Problem sets (2)/Problem sets (2).md")).toBe(true);
-    expect(vault.files.has("Sync/Problem sets (2)/Second child.md")).toBe(true);
+    expect(managedPathsByTaskId(vault)).toEqual(firstPaths);
   });
 
   it("moves tasks back to the project folder when their parent relationship is removed", async () => {
@@ -598,12 +626,12 @@ describe("ObsidianProjectSyncVault", () => {
     );
   });
 
-  it("preserves an unrelated occupied parent-task folder and uses a numbered folder", async () => {
+  it("trashes an unmanaged parent-folder occupant and creates the canonical subtree in one run", async () => {
     const project = makeProject("root", { name: "Software engineering" });
     const parent = makeTask("parent", { content: "Parent", project });
     const child = makeTask("child", { content: "Child", parentId: parent.id, project });
     vault.folders.add("Sync/Parent");
-    const unrelated = vault.addFile("Sync/Parent/User note.md", "Keep me\n");
+    const unrelated = vault.addFile("Sync/Parent/User note.md", "Remove from exclusive root\n");
 
     const result = await adapter.reconcile(
       {
@@ -618,18 +646,284 @@ describe("ObsidianProjectSyncVault", () => {
       mapping,
     );
 
-    expect(result.created).toBe(2);
+    expect(result).toMatchObject({ created: 2, moved: 0, deleted: 1 });
+    expect(result.conflicts).toEqual([]);
+    expect(vault.files.has(unrelated.path)).toBe(false);
+    expect(vault.files.has("Sync/Parent/Parent.md")).toBe(true);
+    expect(vault.files.has("Sync/Parent/Child.md")).toBe(true);
+    expect([...vault.files.keys()].some((path) => path.includes("Parent (2)"))).toBe(false);
+    expect(fileManager.trashFile).toHaveBeenCalledWith(unrelated);
+  });
+
+  it("trashes arbitrary nested files and folders, then remains idempotent", async () => {
+    const project = makeProject("root", { name: "Software engineering" });
+    const parent = makeTask("parent", { content: "Parent", project });
+    const child = makeTask("child", { content: "Child", parentId: parent.id, project });
+    vault.folders.add("Sync/Junk");
+    vault.folders.add("Sync/Junk/Nested");
+    vault.addFile("Sync/Junk/Nested/User note.md", "Unmanaged Markdown\n");
+    vault.addFile("Sync/Junk/Nested/cache.bin", "Unmanaged binary placeholder\n");
+    const snapshot: ProjectSyncSnapshot = {
+      rootProjectId: project.id,
+      projects: [project],
+      tasks: [
+        { task: parent, completed: false },
+        { task: child, completed: false },
+      ],
+      syncedAt: "2026-08-13T00:00:00.000Z",
+    };
+
+    const first = await adapter.reconcile(snapshot, mapping);
+
+    expect(first).toMatchObject({ created: 2, moved: 0, deleted: 2 });
+    expect(first.conflicts).toEqual([]);
+    expect(vault.files.has("Sync/Parent/Parent.md")).toBe(true);
+    expect(vault.files.has("Sync/Parent/Child.md")).toBe(true);
+    expect(vault.files.has("Sync/Junk/Nested/User note.md")).toBe(false);
+    expect(vault.files.has("Sync/Junk/Nested/cache.bin")).toBe(false);
+    expect(vault.folders).toEqual(new Set(["Sync", "Sync/Parent"]));
+
+    vi.clearAllMocks();
+    const second = await adapter.reconcile(snapshot, mapping);
+
+    expect(second).toMatchObject({ created: 0, moved: 0, deleted: 0, unchanged: 2 });
+    expect(second.conflicts).toEqual([]);
+    expect(fileManager.trashFile).not.toHaveBeenCalled();
+    expect(fileManager.renameFile).not.toHaveBeenCalled();
+    expect(vault.process).not.toHaveBeenCalled();
+  });
+
+  it("stages a desired task misplaced inside another parent subtree and converges in one run", async () => {
+    const project = makeProject("root", { name: "Root" });
+    const parent = makeTask("parent", { content: "Parent", project });
+    const child = makeTask("child", {
+      content: "Child",
+      parentId: parent.id,
+      project,
+    });
+    const misplaced = makeTask("misplaced", { content: "Independent", project });
+    vault.folders.add("Sync/Parent");
+    const misplacedFile = vault.addFile(
+      "Sync/Parent/Independent.md",
+      `${renderNewTaskDocument(
+        makeTaskFrontmatter(
+          { task: misplaced, completed: false },
+          project.id,
+          testProjectPath(project),
+          "2026-08-12T00:00:00.000Z",
+          mapping.id,
+        ),
+        makeManagedBody(misplaced),
+      )}\nMisplaced task user body must survive convergence.\n`,
+    );
+
+    const result = await adapter.reconcile(
+      {
+        rootProjectId: project.id,
+        projects: [project],
+        tasks: [
+          { task: parent, completed: false },
+          { task: child, completed: false },
+          { task: misplaced, completed: false },
+        ],
+        syncedAt: "2026-08-12T01:00:00.000Z",
+      },
+      mapping,
+    );
+
+    expect(result).toMatchObject({ created: 3, moved: 0, deleted: 1 });
+    expect(result.conflicts).toEqual([]);
+    expect(fileManager.trashFile).toHaveBeenCalledWith(misplacedFile);
+    expect(vault.files.has("Sync/Parent/Independent.md")).toBe(false);
+    expect(vault.files.has("Sync/Parent/Parent.md")).toBe(true);
+    expect(vault.files.has("Sync/Parent/Child.md")).toBe(true);
+    expect(vault.files.get("Sync/Independent.md")?.content).toContain(
+      "Misplaced task user body must survive convergence.",
+    );
+    const convergedFrontmatter = parseFrontmatter(
+      vault.files.get("Sync/Independent.md")?.content ?? "",
+    );
+    expect(convergedFrontmatter.todoist_task_id).toBe(misplaced.id);
+    expect(convergedFrontmatter).not.toHaveProperty("todoist_parent_task_id");
+    expect([...vault.files.keys()].some((path) => / \(\d+\)(?:\/|\.md$)/u.test(path))).toBe(false);
+  });
+
+  it("defers an open misplaced task before exclusive cleanup mutates the mapping", async () => {
+    const project = makeProject("root", { name: "Root" });
+    const parent = makeTask("parent", { content: "Parent", project });
+    const child = makeTask("child", { content: "Child", parentId: parent.id, project });
+    const misplaced = makeTask("misplaced", { content: "Independent", project });
+    const misplacedPath = "Sync/Parent/Independent.md";
+    vault.folders.add("Sync/Parent");
+    const original = `${renderNewTaskDocument(
+      makeTaskFrontmatter(
+        { task: misplaced, completed: false },
+        project.id,
+        testProjectPath(project),
+        "2026-08-12T00:00:00.000Z",
+        mapping.id,
+      ),
+      makeManagedBody(misplaced),
+    )}\nOpen task user notes.\n`;
+    vault.addFile(misplacedPath, original);
+    adapter = new ObsidianProjectSyncVault(
+      vault as unknown as Vault,
+      fileManager as unknown as FileManager,
+      () => new Set([misplacedPath]),
+    );
+
+    const result = await adapter.reconcile(
+      {
+        rootProjectId: project.id,
+        projects: [project],
+        tasks: [
+          { task: parent, completed: false },
+          { task: child, completed: false },
+          { task: misplaced, completed: false },
+        ],
+        syncedAt: "2026-08-12T01:00:00.000Z",
+      },
+      mapping,
+    );
+
+    expect(result).toMatchObject({ created: 0, moved: 0, deleted: 0, deferred: 1 });
     expect(result.conflicts).toEqual([
       expect.objectContaining({
-        taskId: parent.id,
-        path: "Sync/Parent (2)",
-        message: expect.stringContaining("already in use"),
+        taskId: misplaced.id,
+        path: misplacedPath,
+        deferred: true,
       }),
     ]);
-    expect(vault.files.get("Sync/Parent/User note.md")?.file).toBe(unrelated);
-    expect(vault.files.get("Sync/Parent/User note.md")?.content).toBe("Keep me\n");
-    expect(vault.files.has("Sync/Parent (2)/Parent (2).md")).toBe(true);
-    expect(vault.files.has("Sync/Parent (2)/Child.md")).toBe(true);
+    expect(vault.files.get(misplacedPath)?.content).toBe(original);
+    expect(fileManager.trashFile).not.toHaveBeenCalled();
+    expect(fileManager.renameFile).not.toHaveBeenCalled();
+    expect(vault.process).not.toHaveBeenCalled();
+  });
+
+  it("restores an earlier staged task when a later cleanup candidate changes identity", async () => {
+    const project = makeProject("root", { name: "Root" });
+    const parent = makeTask("parent", { content: "Parent", project });
+    const child = makeTask("child", { content: "Child", parentId: parent.id, project });
+    const first = makeTask("first", { content: "First", project });
+    const second = makeTask("second", { content: "Second", project });
+    vault.folders.add("Sync/Parent");
+    const makeDocument = (task: typeof first, note: string): string =>
+      `${renderNewTaskDocument(
+        makeTaskFrontmatter(
+          { task, completed: false },
+          project.id,
+          testProjectPath(project),
+          "2026-08-12T00:00:00.000Z",
+          mapping.id,
+        ),
+        makeManagedBody(task),
+      )}\n${note}\n`;
+    const firstPath = "Sync/Parent/First.md";
+    const secondPath = "Sync/Parent/Second.md";
+    const firstContent = makeDocument(first, "First user notes must be restored.");
+    vault.addFile(firstPath, firstContent);
+    vault.addFile(secondPath, makeDocument(second, "Second user notes."));
+    fileManager.beforeTrash = (file) => {
+      if (file.path !== firstPath) {
+        return;
+      }
+      const secondEntry = vault.files.get(secondPath);
+      if (secondEntry !== undefined) {
+        secondEntry.content = secondEntry.content.replace(
+          "todoist_task_id: second",
+          "todoist_task_id: changed-during-cleanup",
+        );
+      }
+    };
+
+    const result = await adapter.reconcile(
+      {
+        rootProjectId: project.id,
+        projects: [project],
+        tasks: [
+          { task: parent, completed: false },
+          { task: child, completed: false },
+          { task: first, completed: false },
+          { task: second, completed: false },
+        ],
+        syncedAt: "2026-08-12T01:00:00.000Z",
+      },
+      mapping,
+    );
+
+    expect(result).toMatchObject({ created: 0, moved: 0, deleted: 0 });
+    expect(result.conflicts).toEqual([
+      expect.objectContaining({
+        taskId: second.id,
+        path: secondPath,
+        projectionBlocked: true,
+      }),
+    ]);
+    expect(vault.files.get(firstPath)?.content).toBe(firstContent);
+    expect(vault.files.get(secondPath)?.content).toContain("changed-during-cleanup");
+    expect(vault.files.has("Sync/First.md")).toBe(false);
+    expect(vault.files.has("Sync/Second.md")).toBe(false);
+  });
+
+  it("rejects a raced task folder that gains an unmanaged descendant", async () => {
+    const project = makeProject("root", { name: "Root" });
+    const parent = makeTask("parent", { content: "Parent", project });
+    const child = makeTask("child", { content: "Child", parentId: parent.id, project });
+    vault.beforeCreateFolder = (path) => {
+      vault.beforeCreateFolder = undefined;
+      vault.folders.add(path);
+      vault.addFile(`${path}/Arrived from Sync.md`, "Concurrent inbound file\n");
+    };
+
+    await expect(
+      adapter.reconcile(
+        {
+          rootProjectId: project.id,
+          projects: [project],
+          tasks: [
+            { task: parent, completed: false },
+            { task: child, completed: false },
+          ],
+          syncedAt: "2026-08-12T01:00:00.000Z",
+        },
+        mapping,
+      ),
+    ).rejects.toThrow("changed during synchronization");
+
+    expect(vault.files.get("Sync/Parent/Arrived from Sync.md")?.content).toBe(
+      "Concurrent inbound file\n",
+    );
+    expect(vault.files.has("Sync/Parent/Parent.md")).toBe(false);
+    expect(vault.files.has("Sync/Parent/Child.md")).toBe(false);
+  });
+
+  it("does not trash an empty obsolete folder after it gains a descendant", async () => {
+    const project = makeProject("root", { name: "Root" });
+    vault.folders.add("Sync/Obsolete");
+    let injected = false;
+    adapter = new ObsidianProjectSyncVault(
+      vault as unknown as Vault,
+      fileManager as unknown as FileManager,
+      () => new Set(),
+      async <T>(affectedPaths: readonly string[], operation: () => Promise<T>): Promise<T> => {
+        if (!injected && affectedPaths.length === 1 && affectedPaths[0] === "Sync/Obsolete") {
+          injected = true;
+          vault.addFile("Sync/Obsolete/Arrived from Sync.md", "Concurrent inbound file\n");
+        }
+        return await operation();
+      },
+    );
+
+    const result = await adapter.reconcile(emptySnapshot(project), mapping);
+
+    expect(result.conflicts).toEqual([]);
+    expect(vault.folders.has("Sync/Obsolete")).toBe(true);
+    expect(vault.files.get("Sync/Obsolete/Arrived from Sync.md")?.content).toBe(
+      "Concurrent inbound file\n",
+    );
+    expect(fileManager.trashFile).not.toHaveBeenCalledWith(
+      expect.objectContaining({ path: "Sync/Obsolete" }),
+    );
   });
 
   it("keeps cyclic and cross-project parent references at their project roots", async () => {
@@ -875,14 +1169,797 @@ describe("ObsidianProjectSyncVault", () => {
     expect(vault.files.get(newPath)?.file).toBe(oldFile);
   });
 
-  it("keeps duplicate task titles distinct and stable when snapshot order changes", async () => {
+  it.each([
+    ["exact", "Same title", "Same title"],
+    ["case-insensitive", "Same title", "same title"],
+    ["Unicode-normalized", "Café", "Cafe\u0301"],
+    ["sanitized", "A/B", "A:B"],
+    ["truncated", `${"x".repeat(250)}A`, `${"x".repeat(250)}B`],
+  ])("mirrors remote %s leaf-title collisions with deterministic Todoist-ID markers", async (_kind, firstTitle, secondTitle) => {
     const project = makeProject("root", { name: "Root" });
-    const firstTask = makeTask("task-a", { content: "Same title", project });
-    const secondTask = makeTask("task-b", { content: "Same title", project });
+    const firstTask = makeTask("6g7v4J39V9jhMw2Q", { content: firstTitle, project });
+    const secondTask = makeTask("6g7v4JPmg6Q8QXCQ", { content: secondTitle, project });
+    const snapshot: ProjectSyncSnapshot = {
+      rootProjectId: project.id,
+      projects: [project],
+      tasks: [
+        { task: firstTask, completed: false },
+        { task: secondTask, completed: true },
+      ],
+      syncedAt: "2026-08-10T00:00:00.000Z",
+    };
+
+    const first = await adapter.reconcile(snapshot, mapping);
+    const firstPaths = managedPathsByTaskId(vault);
+    const firstPath = firstPaths.get(firstTask.id);
+    const secondPath = firstPaths.get(secondTask.id);
+
+    expect(first).toMatchObject({ created: 2, moved: 0 });
+    expect(first.conflicts).toEqual([]);
+    expect(firstPath).toMatch(/^Sync\/.+ · t-[^/]+\.md$/u);
+    expect(secondPath).toMatch(/^Sync\/.+ · t-[^/]+\.md$/u);
+    expect(firstPath).not.toBe(secondPath);
+    expect(
+      new Set(
+        [firstPath, secondPath].map((path) => path?.normalize("NFC").toLocaleLowerCase("en-US")),
+      ).size,
+    ).toBe(2);
+    expect([...vault.files.keys()].some(hasNumberedCollisionSuffix)).toBe(false);
+    expect(parseFrontmatter(vault.files.get(firstPath ?? "")?.content ?? "")).toMatchObject({
+      todoist_task_id: firstTask.id,
+      todoist_content: firstTitle,
+      todoist_completed: false,
+    });
+    expect(parseFrontmatter(vault.files.get(secondPath ?? "")?.content ?? "")).toMatchObject({
+      todoist_task_id: secondTask.id,
+      todoist_content: secondTitle,
+      todoist_completed: true,
+    });
+
+    const second = await adapter.reconcile(
+      { ...snapshot, tasks: [...snapshot.tasks].reverse() },
+      mapping,
+    );
+
+    expect(second).toMatchObject({ created: 0, moved: 0, unchanged: 2 });
+    expect(second.conflicts).toEqual([]);
+    expect(managedPathsByTaskId(vault)).toEqual(firstPaths);
+  });
+
+  it("uses readable UTC creation times before task IDs for duplicate titles", async () => {
+    const project = makeProject("root", { name: "Root" });
+    const firstTask = makeTask("first-task", {
+      content: "Review",
+      createdAt: "2026-08-17T06:32:05.000Z",
+      project,
+    });
+    const secondTask = makeTask("second-task", {
+      content: "Review",
+      createdAt: "2026-08-17T14:33:06.123+08:00",
+      project,
+    });
+    const snapshot: ProjectSyncSnapshot = {
+      rootProjectId: project.id,
+      projects: [project],
+      tasks: [
+        { task: firstTask, completed: false },
+        { task: secondTask, completed: false },
+      ],
+      syncedAt: "2026-08-17T07:00:00.000Z",
+    };
+
+    const result = await adapter.reconcile(snapshot, mapping);
+
+    expect(result.conflicts).toEqual([]);
+    expect(managedPathsByTaskId(vault)).toEqual(
+      new Map([
+        [firstTask.id, "Sync/Review · 2026-08-17 06.32.05Z.md"],
+        [secondTask.id, "Sync/Review · 2026-08-17 06.33.06.123Z.md"],
+      ]),
+    );
+    expect([...vault.files.keys()].every((path) => !path.includes(" · t-"))).toBe(true);
+  });
+
+  it("adds a short task ID only when normalized creation times are still identical", async () => {
+    const project = makeProject("root", { name: "Root" });
+    const firstTask = makeTask("first-task", {
+      content: "Review",
+      createdAt: "2026-08-17T06:32:05.000Z",
+      project,
+    });
+    const secondTask = makeTask("second-task", {
+      content: "Review",
+      createdAt: "2026-08-17T14:32:05+08:00",
+      project,
+    });
+
+    const result = await adapter.reconcile(
+      {
+        rootProjectId: project.id,
+        projects: [project],
+        tasks: [
+          { task: firstTask, completed: false },
+          { task: secondTask, completed: false },
+        ],
+        syncedAt: "2026-08-17T07:00:00.000Z",
+      },
+      mapping,
+    );
+    const paths = managedPathsByTaskId(vault);
+
+    expect(result.conflicts).toEqual([]);
+    expect(paths.get(firstTask.id)).toMatch(
+      /^Sync\/Review · 2026-08-17 06\.32\.05Z · t-[^/]+\.md$/u,
+    );
+    expect(paths.get(secondTask.id)).toMatch(
+      /^Sync\/Review · 2026-08-17 06\.32\.05Z · t-[^/]+\.md$/u,
+    );
+    expect(paths.get(firstTask.id)).not.toBe(paths.get(secondTask.id));
+  });
+
+  it("keeps existing short-ID paths stable when a same-prefix same-time task joins", async () => {
+    const project = makeProject("root", { name: "Root" });
+    const createdAt = "2026-08-17T06:32:05.000Z";
+    const firstTask = makeTask("6g7v4JAaaaaaaaaa", {
+      content: "Review",
+      createdAt,
+      project,
+    });
+    const secondTask = makeTask("6g7v4JBbbbbbbbbb", {
+      content: "Review",
+      createdAt,
+      project,
+    });
+    const thirdTask = makeTask("6g7v4JAccccccccc", {
+      content: "Review",
+      createdAt,
+      project,
+    });
+    const initialSnapshot: ProjectSyncSnapshot = {
+      rootProjectId: project.id,
+      projects: [project],
+      tasks: [
+        { task: firstTask, completed: false },
+        { task: secondTask, completed: false },
+      ],
+      syncedAt: "2026-08-17T07:00:00.000Z",
+    };
+
+    await adapter.reconcile(initialSnapshot, mapping);
+    const initialPaths = managedPathsByTaskId(vault);
+    const firstFile = vault.files.get(initialPaths.get(firstTask.id) ?? "")?.file;
+    const secondFile = vault.files.get(initialPaths.get(secondTask.id) ?? "")?.file;
+
+    const joined = await adapter.reconcile(
+      {
+        ...initialSnapshot,
+        tasks: [{ task: thirdTask, completed: false }, ...initialSnapshot.tasks],
+      },
+      mapping,
+    );
+    const joinedPaths = managedPathsByTaskId(vault);
+
+    expect(joined).toMatchObject({ created: 1, moved: 0 });
+    expect(joined.conflicts).toEqual([]);
+    expect(joinedPaths.get(firstTask.id)).toBe(initialPaths.get(firstTask.id));
+    expect(joinedPaths.get(secondTask.id)).toBe(initialPaths.get(secondTask.id));
+    expect(vault.files.get(joinedPaths.get(firstTask.id) ?? "")?.file).toBe(firstFile);
+    expect(vault.files.get(joinedPaths.get(secondTask.id) ?? "")?.file).toBe(secondFile);
+    expect(joinedPaths.get(thirdTask.id)).toMatch(
+      /^Sync\/Review · 2026-08-17 06\.32\.05Z · t-[^/]+\.md$/u,
+    );
+    expect(new Set(joinedPaths.values()).size).toBe(3);
+  });
+
+  it("falls back to typed task IDs instead of displaying missing or invalid creation times", async () => {
+    const project = makeProject("root", { name: "Root" });
+    const missingTime = makeTask("missing-time", { content: "Review", project });
+    const invalidTime = makeTask("invalid-time", {
+      authoritativeCreatedAt: "not-a-timestamp",
+      content: "Review",
+      createdAt: "not-a-timestamp",
+      project,
+    });
+
+    const result = await adapter.reconcile(
+      {
+        rootProjectId: project.id,
+        projects: [project],
+        tasks: [
+          { task: missingTime, completed: false },
+          { task: invalidTime, completed: false },
+        ],
+        syncedAt: "2026-08-17T07:00:00.000Z",
+      },
+      mapping,
+    );
+    const paths = managedPathsByTaskId(vault);
+
+    expect(result.conflicts).toEqual([]);
+    expect(paths.get(missingTime.id)).toMatch(/^Sync\/Review · t-[^/]+\.md$/u);
+    expect(paths.get(invalidTime.id)).toMatch(/^Sync\/Review · t-[^/]+\.md$/u);
+    expect([...paths.values()].every((path) => !path.includes("1970"))).toBe(true);
+  });
+
+  it.each([
+    ["offset-less", "2026-08-17T06:32:05"],
+    ["date-only", "2026-08-17"],
+    ["impossible", "2026-02-30T06:32:05Z"],
+    ["whitespace-padded", " 2026-08-17T06:32:05Z "],
+    ["Unix-epoch", "1970-01-01T00:00:00.000Z"],
+  ])("uses a typed task ID for a remote %s creation timestamp", async (_kind, createdAt) => {
+    const project = makeProject("root", { name: "Root" });
+    const candidate = makeTask("candidate-time", {
+      authoritativeCreatedAt: createdAt,
+      content: "Review",
+      createdAt,
+      project,
+    });
+    const other = makeTask("other-time", { content: "Review", project });
+
+    const result = await adapter.reconcile(
+      {
+        rootProjectId: project.id,
+        projects: [project],
+        tasks: [
+          { task: other, completed: false },
+          { task: candidate, completed: false },
+        ],
+        syncedAt: "2026-08-17T07:00:00.000Z",
+      },
+      mapping,
+    );
+    const candidatePath = managedPathsByTaskId(vault).get(candidate.id);
+
+    expect(result.conflicts).toEqual([]);
+    expect(candidatePath).toMatch(/^Sync\/Review · t-[^/]+\.md$/u);
+    expect(candidatePath).not.toContain("2026-");
+    expect(candidatePath).not.toContain("1970-");
+  });
+
+  it("allocates creation-time paths identically in fresh Vaults regardless of snapshot order", async () => {
+    const project = makeProject("root", { name: "Root" });
+    const tasks = [
+      makeTask("first-task", {
+        content: "Review",
+        createdAt: "2026-08-17T06:32:05.000Z",
+        project,
+      }),
+      makeTask("second-task", {
+        content: "Review",
+        createdAt: "2026-08-17T06:33:05.000Z",
+        project,
+      }),
+    ];
+    const reconcileFresh = async (orderedTasks: typeof tasks): Promise<Map<string, string>> => {
+      const freshVault = new FakeVault();
+      const freshFileManager = new FakeFileManager(freshVault);
+      const freshAdapter = new ObsidianProjectSyncVault(
+        freshVault as unknown as Vault,
+        freshFileManager as unknown as FileManager,
+        () => new Set(),
+        undefined,
+        new FakeCatalogStorage(),
+      );
+      await freshAdapter.reconcile(
+        {
+          rootProjectId: project.id,
+          projects: [project],
+          tasks: orderedTasks.map((task) => ({ task, completed: false })),
+          syncedAt: "2026-08-17T07:00:00.000Z",
+        },
+        mapping,
+      );
+      return managedPathsByTaskId(freshVault);
+    };
+
+    const forward = await reconcileFresh(tasks);
+    const reversed = await reconcileFresh([...tasks].reverse());
+
+    expect(reversed).toEqual(forward);
+  });
+
+  it("disambiguates a natural title that resembles a generated creation-time path", async () => {
+    const project = makeProject("root", { name: "Root" });
+    const firstTask = makeTask("first-task", {
+      content: "Review",
+      createdAt: "2026-08-17T06:32:05.000Z",
+      project,
+    });
+    const secondTask = makeTask("second-task", {
+      content: "Review",
+      createdAt: "2026-08-17T06:33:05.000Z",
+      project,
+    });
+    const naturalTitleTask = makeTask("natural-title", {
+      content: "Review · 2026-08-17 06.32.05Z",
+      createdAt: "2026-08-17T06:34:05.000Z",
+      project,
+    });
+
+    const result = await adapter.reconcile(
+      {
+        rootProjectId: project.id,
+        projects: [project],
+        tasks: [
+          { task: naturalTitleTask, completed: false },
+          { task: secondTask, completed: false },
+          { task: firstTask, completed: false },
+        ],
+        syncedAt: "2026-08-17T07:00:00.000Z",
+      },
+      mapping,
+    );
+    const paths = managedPathsByTaskId(vault);
+
+    expect(result.conflicts).toEqual([]);
+    expect(new Set(paths.values()).size).toBe(3);
+    expect(paths.get(firstTask.id)).toBe("Sync/Review · 2026-08-17 06.32.05Z.md");
+    expect(paths.get(naturalTitleTask.id)).toBe(
+      "Sync/Review · 2026-08-17 06.32.05Z · 2026-08-17 06.34.05Z.md",
+    );
+  });
+
+  it("disambiguates same-name sibling projects and a same-name parent task by typed IDs", async () => {
+    const root = makeProject("root", { name: "Root" });
+    const firstProject = makeProject("project-alpha", { name: "Area", parentId: root.id });
+    const secondProject = makeProject("project-beta", { name: "Area", parentId: root.id });
+    const firstProjectTask = makeTask("first-project-task", {
+      content: "First project task",
+      project: firstProject,
+    });
+    const secondProjectTask = makeTask("second-project-task", {
+      content: "Second project task",
+      project: secondProject,
+    });
+    const parentTask = makeTask("parent-task", { content: "Area", project: root });
+    const childTask = makeTask("child-task", {
+      content: "Parent child",
+      parentId: parentTask.id,
+      project: root,
+    });
+    const snapshot: ProjectSyncSnapshot = {
+      rootProjectId: root.id,
+      projects: [root, secondProject, firstProject],
+      tasks: [
+        { task: childTask, completed: false },
+        { task: secondProjectTask, completed: false },
+        { task: parentTask, completed: false },
+        { task: firstProjectTask, completed: false },
+      ],
+      syncedAt: "2026-08-10T00:00:00.000Z",
+    };
+
+    const first = await adapter.reconcile(snapshot, mapping);
+    const firstPaths = managedPathsByTaskId(vault);
+    const firstProjectFolder = parentPathOf(firstPaths.get(firstProjectTask.id));
+    const secondProjectFolder = parentPathOf(firstPaths.get(secondProjectTask.id));
+    const parentTaskFolder = parentPathOf(firstPaths.get(parentTask.id));
+
+    expect(first).toMatchObject({ created: 4, moved: 0 });
+    expect(first.conflicts).toEqual([]);
+    expect(firstProjectFolder).toMatch(/^Sync\/Area · p-/u);
+    expect(secondProjectFolder).toMatch(/^Sync\/Area · p-/u);
+    expect(parentTaskFolder).toMatch(/^Sync\/Area · t-/u);
+    expect(new Set([firstProjectFolder, secondProjectFolder, parentTaskFolder]).size).toBe(3);
+    expect(firstPaths.get(childTask.id)).toBe(`${parentTaskFolder}/Parent child.md`);
+    expect([...vault.files.keys()].some(hasNumberedCollisionSuffix)).toBe(false);
+
+    const second = await adapter.reconcile(
+      {
+        ...snapshot,
+        projects: [...snapshot.projects].reverse(),
+        tasks: [...snapshot.tasks].reverse(),
+      },
+      mapping,
+    );
+
+    expect(second).toMatchObject({ created: 0, moved: 0, unchanged: 4 });
+    expect(second.conflicts).toEqual([]);
+    expect(managedPathsByTaskId(vault)).toEqual(firstPaths);
+  });
+
+  it("uses project and task creation times for cross-kind sibling collisions", async () => {
+    const root = makeProject("root", { name: "Root" });
+    const firstProject = makeProject("project-alpha", {
+      createdAt: "2026-08-17T06:10:00.000Z",
+      name: "Area",
+      parentId: root.id,
+    });
+    const secondProject = makeProject("project-beta", {
+      createdAt: "2026-08-17T06:11:00.000Z",
+      name: "Area",
+      parentId: root.id,
+    });
+    const firstProjectTask = makeTask("first-project-task", {
+      content: "First project task",
+      project: firstProject,
+    });
+    const secondProjectTask = makeTask("second-project-task", {
+      content: "Second project task",
+      project: secondProject,
+    });
+    const parentTask = makeTask("parent-task", {
+      content: "Area",
+      createdAt: "2026-08-17T06:12:00.000Z",
+      project: root,
+    });
+    const childTask = makeTask("child-task", {
+      content: "Parent child",
+      parentId: parentTask.id,
+      project: root,
+    });
+
+    const result = await adapter.reconcile(
+      {
+        rootProjectId: root.id,
+        projects: [root, secondProject, firstProject],
+        tasks: [
+          { task: childTask, completed: false },
+          { task: secondProjectTask, completed: false },
+          { task: parentTask, completed: false },
+          { task: firstProjectTask, completed: false },
+        ],
+        syncedAt: "2026-08-17T07:00:00.000Z",
+      },
+      mapping,
+    );
+    const paths = managedPathsByTaskId(vault);
+
+    expect(result.conflicts).toEqual([]);
+    expect(parentPathOf(paths.get(firstProjectTask.id))).toBe("Sync/Area · 2026-08-17 06.10.00Z");
+    expect(parentPathOf(paths.get(secondProjectTask.id))).toBe("Sync/Area · 2026-08-17 06.11.00Z");
+    expect(parentPathOf(paths.get(parentTask.id))).toBe("Sync/Area · 2026-08-17 06.12.00Z");
+  });
+
+  it("uses typed project and task IDs when cross-kind creation times normalize identically", async () => {
+    const root = makeProject("root", { name: "Root" });
+    const childProject = makeProject("project-area", {
+      createdAt: "2026-08-17T06:10:00.000Z",
+      name: "Area",
+      parentId: root.id,
+    });
+    const projectTask = makeTask("project-child", {
+      content: "Project child",
+      project: childProject,
+    });
+    const parentTask = makeTask("task-area", {
+      content: "Area",
+      createdAt: "2026-08-17T14:10:00+08:00",
+      project: root,
+    });
+    const taskChild = makeTask("task-child", {
+      content: "Task child",
+      parentId: parentTask.id,
+      project: root,
+    });
+    const snapshot: ProjectSyncSnapshot = {
+      rootProjectId: root.id,
+      projects: [root, childProject],
+      tasks: [
+        { task: taskChild, completed: false },
+        { task: projectTask, completed: false },
+        { task: parentTask, completed: false },
+      ],
+      syncedAt: "2026-08-17T07:00:00.000Z",
+    };
+
+    const first = await adapter.reconcile(snapshot, mapping);
+    const firstPaths = managedPathsByTaskId(vault);
+    const projectFolder = parentPathOf(firstPaths.get(projectTask.id));
+    const taskFolder = parentPathOf(firstPaths.get(parentTask.id));
+
+    expect(first.conflicts).toEqual([]);
+    expect(projectFolder).toMatch(/^Sync\/Area · 2026-08-17 06\.10\.00Z · p-[^/]+$/u);
+    expect(taskFolder).toMatch(/^Sync\/Area · 2026-08-17 06\.10\.00Z · t-[^/]+$/u);
+    expect(projectFolder).not.toBe(taskFolder);
+    expect(firstPaths.get(projectTask.id)).toBe(`${projectFolder}/Project child.md`);
+    expect(firstPaths.get(taskChild.id)).toBe(`${taskFolder}/Task child.md`);
+
+    const second = await adapter.reconcile(
+      {
+        ...snapshot,
+        projects: [...snapshot.projects].reverse(),
+        tasks: [...snapshot.tasks].reverse(),
+      },
+      mapping,
+    );
+
+    expect(second).toMatchObject({ created: 0, moved: 0, unchanged: 3 });
+    expect(second.conflicts).toEqual([]);
+    expect(managedPathsByTaskId(vault)).toEqual(firstPaths);
+  });
+
+  it("marks both a parent self-note and its same-title direct child", async () => {
+    const project = makeProject("root", { name: "Root" });
+    const parent = makeTask("parent-identity", { content: "Alpha", project });
+    const child = makeTask("child-identity", {
+      content: "Alpha",
+      parentId: parent.id,
+      project,
+    });
+    const snapshot: ProjectSyncSnapshot = {
+      rootProjectId: project.id,
+      projects: [project],
+      tasks: [
+        { task: child, completed: false },
+        { task: parent, completed: false },
+      ],
+      syncedAt: "2026-08-10T00:00:00.000Z",
+    };
+
+    const first = await adapter.reconcile(snapshot, mapping);
+    const firstPaths = managedPathsByTaskId(vault);
+    const parentPath = firstPaths.get(parent.id);
+    const parentFolder = parentPathOf(parentPath);
+    const childPath = firstPaths.get(child.id);
+
+    expect(first).toMatchObject({ created: 2, moved: 0 });
+    expect(first.conflicts).toEqual([]);
+    expect(parentFolder).toMatch(/^Sync\/Alpha · t-/u);
+    expect(parentPath).toBe(`${parentFolder}/${basename(parentFolder)}.md`);
+    expect(childPath?.startsWith(`${parentFolder}/Alpha · t-`)).toBe(true);
+    expect(childPath?.endsWith(".md")).toBe(true);
+    expect(childPath).not.toBe(parentPath);
+    expect([...vault.files.keys()].some(hasNumberedCollisionSuffix)).toBe(false);
+
+    const second = await adapter.reconcile(
+      { ...snapshot, tasks: [...snapshot.tasks].reverse() },
+      mapping,
+    );
+
+    expect(second).toMatchObject({ created: 0, moved: 0, unchanged: 2 });
+    expect(second.conflicts).toEqual([]);
+    expect(managedPathsByTaskId(vault)).toEqual(firstPaths);
+  });
+
+  it("uses typed markers for a child-project folder that collides with a leaf-task file", async () => {
+    const root = makeProject("root", { name: "Root" });
+    const childProject = makeProject("child-project", {
+      name: "Alpha.md",
+      parentId: root.id,
+    });
+    const rootTask = makeTask("root-task", { content: "Alpha", project: root });
+    const childProjectTask = makeTask("child-project-task", {
+      content: "Inside",
+      project: childProject,
+    });
+    const snapshot: ProjectSyncSnapshot = {
+      rootProjectId: root.id,
+      projects: [root, childProject],
+      tasks: [
+        { task: rootTask, completed: false },
+        { task: childProjectTask, completed: false },
+      ],
+      syncedAt: "2026-08-10T00:00:00.000Z",
+    };
+
+    const first = await adapter.reconcile(snapshot, mapping);
+    const firstPaths = managedPathsByTaskId(vault);
+    const rootTaskPath = firstPaths.get(rootTask.id);
+    const projectFolder = parentPathOf(firstPaths.get(childProjectTask.id));
+
+    expect(first).toMatchObject({ created: 2, moved: 0 });
+    expect(first.conflicts).toEqual([]);
+    expect(rootTaskPath).toMatch(/^Sync\/Alpha · t-[^/]+\.md$/u);
+    expect(projectFolder).toMatch(/^Sync\/Alpha\.md · p-/u);
+    expect(firstPaths.get(childProjectTask.id)).toBe(`${projectFolder}/Inside.md`);
+    expect([...vault.files.keys()].some(hasNumberedCollisionSuffix)).toBe(false);
+
+    const second = await adapter.reconcile(
+      {
+        ...snapshot,
+        projects: [...snapshot.projects].reverse(),
+        tasks: [...snapshot.tasks].reverse(),
+      },
+      mapping,
+    );
+
+    expect(second).toMatchObject({ created: 0, moved: 0, unchanged: 2 });
+    expect(second.conflicts).toEqual([]);
+    expect(managedPathsByTaskId(vault)).toEqual(firstPaths);
+  });
+
+  it("migrates legacy plain and numbered same-title notes without losing any user region", async () => {
+    const project = makeProject("root", { name: "Root" });
+    const firstTask = makeTask("6g7v4J39V9jhMw2Q", { content: "Diagram", project });
+    const secondTask = makeTask("6g7v4JPmg6Q8QXCQ", { content: "Diagram", project });
+    const thirdTask = makeTask("6g7v4JQXhQJcX9m", { content: "Diagram", project });
+    const makeLegacyDocument = (task: typeof firstTask, userNotes: string): string =>
+      `${renderNewTaskDocument(
+        makeTaskFrontmatter(
+          { task, completed: false },
+          project.id,
+          testProjectPath(project),
+          "2026-08-09T00:00:00.000Z",
+          mapping.id,
+        ),
+        makeManagedBody(task),
+      )}\n${userNotes}\n`;
+    vault.addFile("Sync/Diagram.md", makeLegacyDocument(firstTask, "First user region"));
+    vault.addFile("Sync/Diagram (2).md", makeLegacyDocument(secondTask, "Second user region"));
+    vault.addFile("Sync/Diagram (3).md", makeLegacyDocument(thirdTask, "Third user region"));
+
+    const result = await adapter.reconcile(
+      {
+        rootProjectId: project.id,
+        projects: [project],
+        tasks: [
+          { task: secondTask, completed: false },
+          { task: thirdTask, completed: false },
+          { task: firstTask, completed: false },
+        ],
+        syncedAt: "2026-08-10T00:00:00.000Z",
+      },
+      mapping,
+    );
+    const paths = managedPathsByTaskId(vault);
+    const firstPath = paths.get(firstTask.id);
+    const secondPath = paths.get(secondTask.id);
+    const thirdPath = paths.get(thirdTask.id);
+
+    expect(result.conflicts).toEqual([]);
+    expect(vault.files.has("Sync/Diagram.md")).toBe(false);
+    expect(vault.files.has("Sync/Diagram (2).md")).toBe(false);
+    expect(vault.files.has("Sync/Diagram (3).md")).toBe(false);
+    expect(firstPath).toMatch(/^Sync\/Diagram · t-[^/]+\.md$/u);
+    expect(secondPath).toMatch(/^Sync\/Diagram · t-[^/]+\.md$/u);
+    expect(thirdPath).toMatch(/^Sync\/Diagram · t-[^/]+\.md$/u);
+    expect(vault.files.get(firstPath ?? "")?.content).toContain("First user region");
+    expect(vault.files.get(secondPath ?? "")?.content).toContain("Second user region");
+    expect(vault.files.get(thirdPath ?? "")?.content).toContain("Third user region");
+    expect(parseFrontmatter(vault.files.get(firstPath ?? "")?.content ?? "")).toMatchObject({
+      todoist_task_id: firstTask.id,
+      todoist_content: firstTask.content,
+    });
+    expect(parseFrontmatter(vault.files.get(secondPath ?? "")?.content ?? "")).toMatchObject({
+      todoist_task_id: secondTask.id,
+      todoist_content: secondTask.content,
+    });
+    expect(parseFrontmatter(vault.files.get(thirdPath ?? "")?.content ?? "")).toMatchObject({
+      todoist_task_id: thirdTask.id,
+      todoist_content: thirdTask.content,
+    });
+    expect([...vault.files.keys()].some(hasNumberedCollisionSuffix)).toBe(false);
+  });
+
+  it("migrates current ID-only duplicate paths to creation-time paths without losing user text", async () => {
+    const project = makeProject("root", { name: "Root" });
+    const firstTask = makeTask("first-task", {
+      content: "Review",
+      createdAt: "2026-08-17T06:32:05.000Z",
+      project,
+    });
+    const secondTask = makeTask("second-task", {
+      content: "Review",
+      createdAt: "2026-08-17T06:33:05.000Z",
+      project,
+    });
+    const addOldProjection = (path: string, task: typeof firstTask, userText: string): FakeFile =>
+      vault.addFile(
+        path,
+        `${renderNewTaskDocument(
+          makeTaskFrontmatter(
+            { task, completed: false },
+            project.id,
+            testProjectPath(project),
+            "2026-08-16T00:00:00.000Z",
+            mapping.id,
+          ),
+          makeManagedBody(task),
+        )}\n${userText}\n`,
+      );
+    const firstOldFile = addOldProjection("Sync/Review · t-first.md", firstTask, "First user text");
+    const secondOldFile = addOldProjection(
+      "Sync/Review · t-second.md",
+      secondTask,
+      "Second user text",
+    );
+    const snapshot: ProjectSyncSnapshot = {
+      rootProjectId: project.id,
+      projects: [project],
+      tasks: [
+        { task: secondTask, completed: false },
+        { task: firstTask, completed: false },
+      ],
+      syncedAt: "2026-08-17T07:00:00.000Z",
+    };
+
+    const result = await adapter.reconcile(snapshot, mapping);
+    const firstPath = "Sync/Review · 2026-08-17 06.32.05Z.md";
+    const secondPath = "Sync/Review · 2026-08-17 06.33.05Z.md";
+
+    expect(result).toMatchObject({ created: 0, moved: 2 });
+    expect(result.conflicts).toEqual([]);
+    expect(vault.files.has("Sync/Review · t-first.md")).toBe(false);
+    expect(vault.files.has("Sync/Review · t-second.md")).toBe(false);
+    expect(vault.files.get(firstPath)?.file).toBe(firstOldFile);
+    expect(vault.files.get(secondPath)?.file).toBe(secondOldFile);
+    expect(vault.files.get(firstPath)?.content).toContain("First user text");
+    expect(vault.files.get(secondPath)?.content).toContain("Second user text");
+    expect(parseFrontmatter(vault.files.get(firstPath)?.content ?? "").todoist_task_id).toBe(
+      firstTask.id,
+    );
+    expect(parseFrontmatter(vault.files.get(secondPath)?.content ?? "").todoist_task_id).toBe(
+      secondTask.id,
+    );
+
+    vi.clearAllMocks();
+    const second = await adapter.reconcile(snapshot, mapping);
+
+    expect(second).toMatchObject({ created: 0, moved: 0, unchanged: 2 });
+    expect(second.conflicts).toEqual([]);
+    expect(vault.files.get(firstPath)?.file).toBe(firstOldFile);
+    expect(vault.files.get(secondPath)?.file).toBe(secondOldFile);
+    expect(fileManager.renameFile).not.toHaveBeenCalled();
+    expect(fileManager.trashFile).not.toHaveBeenCalled();
+  });
+
+  it("moves the same task note into and out of a remote collision group", async () => {
+    const project = makeProject("root", { name: "Root" });
+    const firstTask = makeTask("first-task", { content: "Review", project });
+    const secondTask = makeTask("second-task", { content: "Review", project });
+    const firstSnapshot: ProjectSyncSnapshot = {
+      rootProjectId: project.id,
+      projects: [project],
+      tasks: [{ task: firstTask, completed: false }],
+      syncedAt: "2026-08-10T00:00:00.000Z",
+    };
+    await adapter.reconcile(firstSnapshot, mapping);
+    const plainPath = "Sync/Review.md";
+    const firstFile = vault.files.get(plainPath)?.file;
+    const plainContent = vault.files.get(plainPath)?.content ?? "";
+    vault.files.set(plainPath, {
+      file: firstFile as FakeFile,
+      content: `${plainContent}\nPersistent user notes\n`,
+    });
+
+    const collisionSnapshot: ProjectSyncSnapshot = {
+      ...firstSnapshot,
+      tasks: [
+        { task: secondTask, completed: false },
+        { task: firstTask, completed: false },
+      ],
+    };
+    const joined = await adapter.reconcile(collisionSnapshot, mapping);
+    const joinedPaths = managedPathsByTaskId(vault);
+    const markedFirstPath = joinedPaths.get(firstTask.id);
+
+    expect(joined).toMatchObject({ created: 1, moved: 1 });
+    expect(markedFirstPath).toMatch(/^Sync\/Review · t-/u);
+    expect(vault.files.get(markedFirstPath ?? "")?.file).toBe(firstFile);
+    expect(vault.files.get(markedFirstPath ?? "")?.content).toContain("Persistent user notes");
+
+    const separated = await adapter.reconcile(firstSnapshot, mapping);
+
+    expect(separated).toMatchObject({ created: 0, moved: 1, deleted: 1 });
+    expect(separated.conflicts).toEqual([]);
+    expect(vault.files.size).toBe(1);
+    expect(vault.files.get(plainPath)?.file).toBe(firstFile);
+    expect(vault.files.get(plainPath)?.content).toContain("Persistent user notes");
+    expect([...vault.files.keys()].some(hasNumberedCollisionSuffix)).toBe(false);
+  });
+
+  it("allows equal child titles under different parent-task folders and remains idempotent", async () => {
+    const project = makeProject("root", { name: "Root" });
+    const firstParent = makeTask("parent-a", { content: "First parent", project });
+    const secondParent = makeTask("parent-b", { content: "Second parent", project });
+    const firstTask = makeTask("task-a", {
+      content: "Same title",
+      parentId: firstParent.id,
+      project,
+    });
+    const secondTask = makeTask("task-b", {
+      content: "Same title",
+      parentId: secondParent.id,
+      project,
+    });
     const firstSnapshot: ProjectSyncSnapshot = {
       rootProjectId: project.id,
       projects: [project],
       tasks: [
+        { task: firstParent, completed: false },
+        { task: secondParent, completed: false },
         { task: firstTask, completed: false },
         { task: secondTask, completed: false },
       ],
@@ -890,30 +1967,27 @@ describe("ObsidianProjectSyncVault", () => {
     };
 
     const first = await adapter.reconcile(firstSnapshot, mapping);
-    const canonical = vault.files.get("Sync/Same title.md");
-    const alternate = vault.files.get("Sync/Same title (2).md");
 
-    expect(first).toMatchObject({ created: 2, moved: 0 });
+    expect(first).toMatchObject({ created: 4, moved: 0 });
     expect(first.conflicts).toEqual([]);
-    expect(parseFrontmatter(canonical?.content ?? "").todoist_task_id).toBe(firstTask.id);
-    expect(parseFrontmatter(alternate?.content ?? "").todoist_task_id).toBe(secondTask.id);
-    expect(vault.files.size).toBe(2);
+    expect(
+      parseFrontmatter(vault.files.get("Sync/First parent/Same title.md")?.content ?? "")
+        .todoist_task_id,
+    ).toBe(firstTask.id);
+    expect(
+      parseFrontmatter(vault.files.get("Sync/Second parent/Same title.md")?.content ?? "")
+        .todoist_task_id,
+    ).toBe(secondTask.id);
+    expect(vault.files.size).toBe(4);
 
     const second = await adapter.reconcile(
       { ...firstSnapshot, tasks: [...firstSnapshot.tasks].reverse() },
       mapping,
     );
 
-    expect(second).toMatchObject({ created: 0, moved: 0, unchanged: 2 });
+    expect(second).toMatchObject({ created: 0, moved: 0, unchanged: 4 });
     expect(second.conflicts).toEqual([]);
-    expect(vault.files.get("Sync/Same title.md")?.file).toBe(canonical?.file);
-    expect(vault.files.get("Sync/Same title (2).md")?.file).toBe(alternate?.file);
-    expect(
-      parseFrontmatter(vault.files.get("Sync/Same title.md")?.content ?? "").todoist_task_id,
-    ).toBe(firstTask.id);
-    expect(
-      parseFrontmatter(vault.files.get("Sync/Same title (2).md")?.content ?? "").todoist_task_id,
-    ).toBe(secondTask.id);
+    expect([...vault.files.keys()].some((path) => / \(\d+\)(?:\/|\.md$)/u.test(path))).toBe(false);
   });
 
   it("rebuilds a clean canonical projection and trashes equivalent same-ID copies", async () => {
@@ -1009,7 +2083,110 @@ describe("ObsidianProjectSyncVault", () => {
     expect(parseFrontmatter(repaired).todoist_task_id).toBe(task.id);
   });
 
-  it("preserves every same-ID copy when user-owned regions differ, including empty versus nonempty", async () => {
+  it("repairs a malformed canonical note and trashes its valid same-ID Sync copy", async () => {
+    const project = makeProject("root", { name: "Root" });
+    const task = makeTask("6hGr78cXw24jQC7W", { content: "WIFI", project });
+    const frontmatter = makeTaskFrontmatter(
+      { task, completed: false },
+      project.id,
+      testProjectPath(project),
+      "2026-08-12T00:00:00.000Z",
+      mapping.id,
+    );
+    const valid = renderNewTaskDocument(frontmatter, makeManagedBody(task));
+    const malformed = `${valid.replace(
+      "todoist_completed: false\n",
+      "todoist_completed: false\ntodoist_completed: completed\n",
+    )}\nCanonical user notes\n`;
+    const canonicalPath = "Sync/WIFI.md";
+    const duplicatePath = "Sync/WIFI (2).md";
+    vault.addFile(canonicalPath, malformed);
+    vault.addFile(duplicatePath, valid);
+
+    const result = await adapter.reconcile(
+      {
+        rootProjectId: project.id,
+        projects: [project],
+        tasks: [{ task, completed: false }],
+        syncedAt: "2026-08-12T01:00:00.000Z",
+      },
+      mapping,
+    );
+
+    expect(result).toMatchObject({ created: 0, moved: 0, updated: 1 });
+    expect(result.conflicts).toEqual([]);
+    expect(vault.files.size).toBe(1);
+    expect(vault.files.has(canonicalPath)).toBe(true);
+    expect(vault.files.has(duplicatePath)).toBe(false);
+    expect(parseFrontmatter(vault.files.get(canonicalPath)?.content ?? "")).toMatchObject({
+      todoist_task_id: task.id,
+      todoist_completed: false,
+    });
+    expect(vault.files.get(canonicalPath)?.content).toContain("Canonical user notes");
+    expect(fileManager.trashFile).toHaveBeenCalledWith(
+      expect.objectContaining({ path: duplicatePath }),
+    );
+  });
+
+  it("repairs one malformed managed note in place instead of allocating a numbered path", async () => {
+    const project = makeProject("root", { name: "Root" });
+    const task = makeTask("recoverable-task", { content: "Task", project });
+    const valid = renderNewTaskDocument(
+      makeTaskFrontmatter(
+        { task, completed: false },
+        project.id,
+        testProjectPath(project),
+        "2026-08-12T00:00:00.000Z",
+        mapping.id,
+      ),
+      makeManagedBody(task),
+    );
+    const path = "Sync/Task.md";
+    vault.addFile(path, valid.replace("todoist_priority: P4", "todoist_priority: [broken"));
+
+    const result = await adapter.reconcile(
+      {
+        rootProjectId: project.id,
+        projects: [project],
+        tasks: [{ task, completed: false }],
+        syncedAt: "2026-08-12T01:00:00.000Z",
+      },
+      mapping,
+    );
+
+    expect(result).toMatchObject({ created: 0, moved: 0, updated: 1 });
+    expect(result.conflicts).toEqual([]);
+    expect(vault.files.size).toBe(1);
+    expect(vault.files.has(path)).toBe(true);
+    expect(vault.files.has("Sync/Task (2).md")).toBe(false);
+    expect(parseFrontmatter(vault.files.get(path)?.content ?? "").todoist_task_id).toBe(task.id);
+  });
+
+  it("trashes every same-ID tracked copy absent from the complete remote snapshot", async () => {
+    const project = makeProject("root", { name: "Root" });
+    const task = makeTask("deleted-task", { content: "Deleted task", project });
+    const document = renderNewTaskDocument(
+      makeTaskFrontmatter(
+        { task, completed: false },
+        project.id,
+        testProjectPath(project),
+        "2026-08-12T00:00:00.000Z",
+        mapping.id,
+      ),
+      makeManagedBody(task),
+    );
+    vault.addFile("Sync/Deleted task.md", document);
+    vault.addFile("Sync/Deleted task (2).md", document);
+
+    const result = await adapter.reconcile(emptySnapshot(project), mapping);
+
+    expect(result).toMatchObject({ deleted: 2, created: 0, updated: 0 });
+    expect(result.conflicts).toEqual([]);
+    expect(vault.files.size).toBe(0);
+    expect(fileManager.trashFile).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps the preferred same-ID note and trashes alternate copies even when user content differs", async () => {
     const project = makeProject("root", { name: "Root" });
     const task = makeTask("duplicate-task", { content: "Task", project });
     const frontmatter = makeTaskFrontmatter(
@@ -1036,18 +2213,13 @@ describe("ObsidianProjectSyncVault", () => {
       mapping,
     );
 
-    expect(result).toMatchObject({ created: 0, updated: 0, moved: 0, unchanged: 0 });
-    expect(result.conflicts).toEqual([
-      expect.objectContaining({
-        taskId: task.id,
-        projectionBlocked: true,
-        message: expect.stringContaining("different user-authored content"),
-      }),
-    ]);
+    expect(result).toMatchObject({ created: 0, updated: 0, moved: 0, unchanged: 1 });
+    expect(result.conflicts).toEqual([]);
     expect(vault.files.get(canonicalPath)?.content).toBe(canonical);
-    expect(vault.files.get(duplicatePath)?.content).toBe(duplicate);
-    expect(fileManager.trashFile).not.toHaveBeenCalled();
-    expect(vault.process).not.toHaveBeenCalled();
+    expect(vault.files.has(duplicatePath)).toBe(false);
+    expect(fileManager.trashFile).toHaveBeenCalledWith(
+      expect.objectContaining({ path: duplicatePath }),
+    );
   });
 
   it("preflights every duplicate before writing the canonical projection", async () => {
@@ -1106,15 +2278,14 @@ describe("ObsidianProjectSyncVault", () => {
     expect(vault.process).not.toHaveBeenCalled();
   });
 
-  it("keeps two legitimate same-title task identities while collapsing each identity's copies", async () => {
+  it("moves an existing numbered projection to the exact canonical path in one run", async () => {
     const project = makeProject("root", { name: "Root" });
-    const first = makeTask("task-a", { content: "Pre-Review", project });
-    const second = makeTask("task-b", { content: "Pre-Review", project });
-    for (const [task, paths] of [
-      [first, ["Sync/Pre-Review.md", "Sync/Pre-Review (3).md"]],
-      [second, ["Sync/Pre-Review (2).md", "Sync/Pre-Review (4).md"]],
-    ] as const) {
-      const document = renderNewTaskDocument(
+    const task = makeTask("task-a", { content: "Pre-Review", project });
+    const numberedPath = "Sync/Pre-Review (3).md";
+    const canonicalPath = "Sync/Pre-Review.md";
+    const numbered = vault.addFile(
+      numberedPath,
+      `${renderNewTaskDocument(
         makeTaskFrontmatter(
           { task, completed: false },
           project.id,
@@ -1123,34 +2294,145 @@ describe("ObsidianProjectSyncVault", () => {
           mapping.id,
         ),
         makeManagedBody(task),
-      );
-      for (const path of paths) {
-        vault.addFile(path, document);
-      }
-    }
+      )}\nUser-authored notes remain attached.\n`,
+    );
+
+    const result = await adapter.reconcile(
+      {
+        rootProjectId: project.id,
+        projects: [project],
+        tasks: [{ task, completed: false }],
+        syncedAt: "2026-08-12T01:00:00.000Z",
+      },
+      mapping,
+    );
+
+    expect(result).toMatchObject({ created: 0, moved: 1 });
+    expect(result.conflicts).toEqual([]);
+    expect(vault.files.size).toBe(1);
+    expect(vault.files.has(numberedPath)).toBe(false);
+    expect(vault.files.get(canonicalPath)?.file).toBe(numbered);
+    expect(vault.files.get(canonicalPath)?.content).toContain(
+      "User-authored notes remain attached.",
+    );
+    expect(fileManager.renameFile).toHaveBeenCalledWith(numbered, canonicalPath);
+  });
+
+  it.each([
+    "Hadoop",
+    "No SQL",
+  ])("moves the complete legacy %s (3) parent subtree to canonical paths in one run", async (title) => {
+    const project = makeProject("root", { name: "Root" });
+    const parent = makeTask(`parent-${title}`, { content: title, project });
+    const child = makeTask(`child-${title}`, {
+      content: "Child task",
+      parentId: parent.id,
+      project,
+    });
+    const legacyFolder = `Sync/${title} (3)`;
+    vault.folders.add(legacyFolder);
+    vault.addFile(
+      `${legacyFolder}/${title} (3).md`,
+      `${renderNewTaskDocument(
+        makeTaskFrontmatter(
+          { task: parent, completed: false },
+          project.id,
+          testProjectPath(project),
+          "2026-08-12T00:01:00.000Z",
+          mapping.id,
+        ),
+        makeManagedBody(parent),
+      )}\nParent user notes.\n`,
+    );
+    vault.addFile(
+      `${legacyFolder}/Child task.md`,
+      renderNewTaskDocument(
+        makeTaskFrontmatter(
+          { task: child, completed: false },
+          project.id,
+          testProjectPath(project),
+          "2026-08-12T00:01:00.000Z",
+          mapping.id,
+        ),
+        makeManagedBody(child),
+      ),
+    );
 
     const result = await adapter.reconcile(
       {
         rootProjectId: project.id,
         projects: [project],
         tasks: [
-          { task: first, completed: false },
-          { task: second, completed: false },
+          { task: parent, completed: false },
+          { task: child, completed: false },
         ],
         syncedAt: "2026-08-12T01:00:00.000Z",
       },
       mapping,
     );
 
-    expect(result).toMatchObject({ created: 0, updated: 2, moved: 0 });
+    expect(result).toMatchObject({ created: 0, moved: 2 });
+    expect(result.conflicts).toEqual([]);
+    expect(vault.files.has(`${legacyFolder}/${title} (3).md`)).toBe(false);
+    expect(vault.files.has(`${legacyFolder}/Child task.md`)).toBe(false);
+    expect(vault.folders.has(legacyFolder)).toBe(false);
+    expect(vault.files.get(`Sync/${title}/${title}.md`)?.content).toContain("Parent user notes.");
+    expect(vault.files.has(`Sync/${title}/Child task.md`)).toBe(true);
+    expect([...vault.files.keys()].some((path) => path.includes(`${title} (3)`))).toBe(false);
+  });
+
+  it("collapses duplicate same-ID parent subtrees into the canonical folder in one run", async () => {
+    const project = makeProject("root", { name: "Root" });
+    const parent = makeTask("parent", { content: "Parent", project });
+    const child = makeTask("child", { content: "Child", parentId: parent.id, project });
+    const parentDocument = renderNewTaskDocument(
+      makeTaskFrontmatter(
+        { task: parent, completed: false },
+        project.id,
+        testProjectPath(project),
+        "2026-08-12T00:01:00.000Z",
+        mapping.id,
+      ),
+      makeManagedBody(parent),
+    );
+    const childDocument = renderNewTaskDocument(
+      makeTaskFrontmatter(
+        { task: child, completed: false },
+        project.id,
+        testProjectPath(project),
+        "2026-08-12T00:01:00.000Z",
+        mapping.id,
+      ),
+      makeManagedBody(child),
+    );
+    vault.folders.add("Sync/Parent");
+    vault.folders.add("Sync/Parent (2)");
+    vault.addFile("Sync/Parent/Parent.md", parentDocument);
+    vault.addFile("Sync/Parent/Child.md", childDocument);
+    vault.addFile("Sync/Parent (2)/Parent (2).md", parentDocument);
+    vault.addFile("Sync/Parent (2)/Child.md", childDocument);
+
+    const result = await adapter.reconcile(
+      {
+        rootProjectId: project.id,
+        projects: [project],
+        tasks: [
+          { task: parent, completed: false },
+          { task: child, completed: false },
+        ],
+        syncedAt: "2026-08-12T01:00:00.000Z",
+      },
+      mapping,
+    );
+
+    expect(result).toMatchObject({ created: 0, moved: 0 });
     expect(result.conflicts).toEqual([]);
     expect(vault.files.size).toBe(2);
-    expect(
-      new Set(
-        [...vault.files.values()].map(({ content }) => parseFrontmatter(content).todoist_task_id),
-      ),
-    ).toEqual(new Set([first.id, second.id]));
-    expect(fileManager.trashFile).toHaveBeenCalledTimes(2);
+    expect(vault.files.has("Sync/Parent/Parent.md")).toBe(true);
+    expect(vault.files.has("Sync/Parent/Child.md")).toBe(true);
+    expect(vault.files.has("Sync/Parent (2)/Parent (2).md")).toBe(false);
+    expect(vault.files.has("Sync/Parent (2)/Child.md")).toBe(false);
+    expect(vault.folders.has("Sync/Parent (2)")).toBe(false);
   });
 
   it("stops safely and reports partial cleanup when a later trash operation fails", async () => {
@@ -1243,10 +2525,10 @@ describe("ObsidianProjectSyncVault", () => {
   });
 
   it.each([
-    ["exact", "Sync/Task.md", "Task", "Sync/Task (2).md"],
-    ["case-insensitive", "Sync/TASK.md", "Task", "Sync/Task (2).md"],
-    ["Unicode-normalized", "Sync/Cafe\u0301.md", "Café", "Sync/Café (2).md"],
-  ])("preserves an unmanaged %s filename collision and reuses one alternate path", async (_kind, unmanagedPath, taskTitle, managedPath) => {
+    ["exact", "Sync/Task.md", "Task", "Sync/Task.md"],
+    ["case-insensitive", "Sync/TASK.md", "Task", "Sync/Task.md"],
+    ["Unicode-normalized", "Sync/Cafe\u0301.md", "Café", "Sync/Café.md"],
+  ])("trashes an unmanaged %s occupant and reclaims the canonical filename in one run", async (_kind, unmanagedPath, taskTitle, canonicalPath) => {
     const project = makeProject("root", { name: "Root" });
     const task = makeTask("collision-task", { content: taskTitle, project });
     const unmanaged = vault.addFile(unmanagedPath, "User-owned document\n");
@@ -1258,29 +2540,57 @@ describe("ObsidianProjectSyncVault", () => {
     };
 
     const first = await adapter.reconcile(snapshot, mapping);
-    const managed = vault.files.get(managedPath);
+    const managed = vault.files.get(canonicalPath);
 
-    expect(first).toMatchObject({ created: 1, moved: 0 });
-    expect(first.conflicts).toEqual([
-      expect.objectContaining({
-        taskId: task.id,
-        path: managedPath,
-        message: expect.stringContaining("occupied"),
-      }),
-    ]);
-    expect(vault.files.get(unmanagedPath)?.file).toBe(unmanaged);
-    expect(vault.files.get(unmanagedPath)?.content).toBe("User-owned document\n");
+    expect(first).toMatchObject({ created: 1, moved: 0, deleted: 1 });
+    expect(first.conflicts).toEqual([]);
+    expect(vault.files.get(unmanagedPath)?.file).not.toBe(unmanaged);
     expect(parseFrontmatter(managed?.content ?? "").todoist_task_id).toBe(task.id);
+    expect(fileManager.trashFile).toHaveBeenCalledWith(unmanaged);
 
+    vi.clearAllMocks();
     const second = await adapter.reconcile(snapshot, mapping);
 
     expect(second).toMatchObject({ created: 0, moved: 0, unchanged: 1 });
-    expect(vault.files.size).toBe(2);
-    expect(vault.files.get(managedPath)?.file).toBe(managed?.file);
-    expect(vault.files.has(managedPath.replace(" (2).md", " (3).md"))).toBe(false);
+    expect(vault.files.size).toBe(1);
+    expect(vault.files.get(canonicalPath)?.file).toBe(managed?.file);
+    expect(fileManager.trashFile).not.toHaveBeenCalled();
+    expect(fileManager.renameFile).not.toHaveBeenCalled();
   });
 
-  it("does not create a replacement task note while likely managed YAML is malformed", async () => {
+  it("recreates exact canonical file and folder types after sweeping wrong-type occupants", async () => {
+    const root = makeProject("root", { name: "Root" });
+    const child = makeProject("child", { name: "Child", parentId: root.id });
+    const rootTask = makeTask("root-task", { content: "Root task", project: root });
+    const childTask = makeTask("child-task", { content: "Child task", project: child });
+    const projectFolderOccupant = vault.addFile("Sync/Child", "Wrong type\n");
+    vault.folders.add("Sync/Root task.md");
+    const taskFileOccupant = vault.getFolderByPath("Sync/Root task.md");
+
+    const result = await adapter.reconcile(
+      {
+        rootProjectId: root.id,
+        projects: [root, child],
+        tasks: [
+          { task: rootTask, completed: false },
+          { task: childTask, completed: false },
+        ],
+        syncedAt: "2026-08-10T00:00:00.000Z",
+      },
+      mapping,
+    );
+
+    expect(result).toMatchObject({ created: 2, moved: 0, deleted: 1 });
+    expect(result.conflicts).toEqual([]);
+    expect(vault.getFolderByPath("Sync/Child")).not.toBeNull();
+    expect(vault.files.has("Sync/Child/Child task.md")).toBe(true);
+    expect(vault.getFolderByPath("Sync/Root task.md")).toBeNull();
+    expect(vault.files.has("Sync/Root task.md")).toBe(true);
+    expect(fileManager.trashFile).toHaveBeenCalledWith(projectFolderOccupant);
+    expect(fileManager.trashFile).toHaveBeenCalledWith(taskFileOccupant);
+  });
+
+  it("trashes an unreadable unmanaged occupant and recreates the canonical task note", async () => {
     const project = makeProject("root", { name: "Root" });
     const task = makeTask("malformed-task", { content: "Task", project });
     const path = "Sync/Task.md";
@@ -1306,17 +2616,12 @@ describe("ObsidianProjectSyncVault", () => {
       mapping,
     );
 
-    expect(result).toMatchObject({ created: 0, updated: 0, moved: 0 });
+    expect(result).toMatchObject({ created: 1, updated: 0, moved: 0, deleted: 1 });
     expect(result.conflicts).toEqual([
       expect.objectContaining({ path, message: expect.stringContaining("Could not parse") }),
-      expect.objectContaining({
-        taskId: task.id,
-        path,
-        projectionBlocked: true,
-        message: expect.stringContaining("creation was blocked"),
-      }),
     ]);
-    expect(vault.files.get(path)?.content).toBe(malformed);
+    expect(vault.files.get(path)?.content).not.toBe(malformed);
+    expect(parseFrontmatter(vault.files.get(path)?.content ?? "").todoist_task_id).toBe(task.id);
     expect(vault.files.has("Sync/Task (2).md")).toBe(false);
   });
 
@@ -1543,6 +2848,193 @@ describe("ObsidianProjectSyncVault", () => {
     });
   });
 
+  it.each([
+    "file",
+    "folder",
+  ] as const)("stages user content when a task moving mappings blocks another task's canonical %s path", async (blockedKind) => {
+    const first = makeProject("first", { name: "First" });
+    const second = makeProject("second", { name: "Second" });
+    const firstMapping: ProjectSyncMapping = {
+      id: "mapping-first",
+      folder: "Sync",
+      project: { projectId: first.id, projectName: first.name },
+      includeSubprojects: false,
+      previousFolders: [],
+    };
+    const secondMapping: ProjectSyncMapping = {
+      id: "mapping-second",
+      folder: "Archive",
+      project: { projectId: second.id, projectName: second.name },
+      includeSubprojects: false,
+      previousFolders: [],
+    };
+    vault.folders.add("Archive");
+    const movingTask = makeTask("moving-task", { content: "Shared", project: first });
+    const oldPath = blockedKind === "file" ? "Sync/Shared.md" : "Sync/Shared/Shared.md";
+    if (blockedKind === "folder") {
+      vault.folders.add("Sync/Shared");
+    }
+    const oldFile = vault.addFile(
+      oldPath,
+      `${renderNewTaskDocument(
+        makeTaskFrontmatter(
+          { task: movingTask, completed: false },
+          first.id,
+          testProjectPath(first),
+          "2026-08-10T00:00:00.000Z",
+          firstMapping.id,
+        ),
+        makeManagedBody(movingTask),
+      )}\nUser body must cross the mapping boundary.\n`,
+    );
+    const replacement = makeTask("replacement", { content: "Shared", project: first });
+    const replacementChild = makeTask("replacement-child", {
+      content: "Replacement child",
+      parentId: replacement.id,
+      project: first,
+    });
+    const firstSnapshotTasks = [
+      { task: replacement, completed: false },
+      ...(blockedKind === "folder" ? [{ task: replacementChild, completed: false }] : []),
+    ];
+    const mappingRoots = [
+      { mappingId: firstMapping.id, rootProjectId: first.id, folder: firstMapping.folder },
+      { mappingId: secondMapping.id, rootProjectId: second.id, folder: secondMapping.folder },
+    ];
+    const allSnapshotTaskIds = new Set([
+      movingTask.id,
+      ...firstSnapshotTasks.map(({ task }) => task.id),
+    ]);
+    const stagedUserDocumentsByTaskId = new Map<
+      string,
+      { frontmatter: Record<string, unknown>; body: string }
+    >();
+    const scanToken = {};
+
+    const source = await adapter.reconcile(
+      {
+        rootProjectId: first.id,
+        projects: [first],
+        tasks: firstSnapshotTasks,
+        syncedAt: "2026-08-10T01:00:00.000Z",
+      },
+      firstMapping,
+      {
+        assertValid: () => undefined,
+        mappingRoots,
+        allSnapshotTaskIds,
+        stagedUserDocumentsByTaskId,
+        scanToken,
+      },
+    );
+
+    expect(source).toMatchObject({ created: firstSnapshotTasks.length, deleted: 1 });
+    expect(source.conflicts).toEqual([]);
+    expect(fileManager.trashFile).toHaveBeenCalledWith(oldFile);
+    expect(stagedUserDocumentsByTaskId.has(movingTask.id)).toBe(true);
+    const replacementPath = blockedKind === "file" ? "Sync/Shared.md" : "Sync/Shared/Shared.md";
+    expect(parseFrontmatter(vault.files.get(replacementPath)?.content ?? "").todoist_task_id).toBe(
+      replacement.id,
+    );
+
+    const movedTask = makeTask(movingTask.id, { content: "Shared", project: second });
+    const destination = await adapter.reconcile(
+      {
+        rootProjectId: second.id,
+        projects: [second],
+        tasks: [{ task: movedTask, completed: false }],
+        syncedAt: "2026-08-10T01:00:00.000Z",
+      },
+      secondMapping,
+      {
+        assertValid: () => undefined,
+        mappingRoots,
+        allSnapshotTaskIds,
+        stagedUserDocumentsByTaskId,
+        scanToken,
+      },
+    );
+
+    const destinationPath = "Archive/Shared.md";
+    expect(destination).toMatchObject({ created: 1, moved: 0 });
+    expect(destination.conflicts).toEqual([]);
+    expect(vault.files.get(destinationPath)?.content).toContain(
+      "User body must cross the mapping boundary.",
+    );
+    expect(parseFrontmatter(vault.files.get(destinationPath)?.content ?? "")).toMatchObject({
+      todoist_task_id: movingTask.id,
+      todoist_project: second.name,
+    });
+    expect(stagedUserDocumentsByTaskId.size).toBe(0);
+    expect([...vault.files.keys()].some((path) => / \(\d+\)(?:\/|\.md$)/u.test(path))).toBe(false);
+  });
+
+  it("collapses one task ID across mapping roots into its authoritative destination", async () => {
+    const first = makeProject("first", { name: "First" });
+    const second = makeProject("second", { name: "Second" });
+    const firstMapping: ProjectSyncMapping = {
+      id: "mapping-first",
+      folder: "Sync",
+      project: { projectId: first.id, projectName: first.name },
+      includeSubprojects: false,
+      previousFolders: [],
+    };
+    const secondMapping: ProjectSyncMapping = {
+      id: "mapping-second",
+      folder: "Archive",
+      project: { projectId: second.id, projectName: second.name },
+      includeSubprojects: false,
+      previousFolders: [],
+    };
+    vault.folders.add("Archive");
+    const task = makeTask("one-id", { content: "One task", project: second });
+    const document = renderNewTaskDocument(
+      makeTaskFrontmatter(
+        { task, completed: false },
+        second.id,
+        testProjectPath(second),
+        "2026-08-10T00:00:00.000Z",
+        secondMapping.id,
+      ),
+      makeManagedBody(task),
+    );
+    vault.addFile("Sync/One task.md", document);
+    vault.addFile("Archive/One task.md", document);
+    const mappingRoots = [
+      { mappingId: firstMapping.id, rootProjectId: first.id, folder: firstMapping.folder },
+      { mappingId: secondMapping.id, rootProjectId: second.id, folder: secondMapping.folder },
+    ];
+    const allSnapshotTaskIds = new Set([task.id]);
+    const scanToken = {};
+
+    await adapter.reconcile(emptySnapshot(first), firstMapping, {
+      assertValid: () => undefined,
+      mappingRoots,
+      allSnapshotTaskIds,
+      scanToken,
+    });
+    const destination = await adapter.reconcile(
+      {
+        rootProjectId: second.id,
+        projects: [second],
+        tasks: [{ task, completed: false }],
+        syncedAt: "2026-08-10T01:00:00.000Z",
+      },
+      secondMapping,
+      { assertValid: () => undefined, mappingRoots, allSnapshotTaskIds, scanToken },
+    );
+
+    expect(destination.conflicts).toEqual([]);
+    expect(vault.files.size).toBe(1);
+    expect(vault.files.has("Sync/One task.md")).toBe(false);
+    expect(vault.files.has("Archive/One task.md")).toBe(true);
+    expect(fileManager.trashFile).toHaveBeenCalledOnce();
+    expect(catalogStorage.getCatalog(firstMapping.id)?.tasks).toEqual([]);
+    expect(catalogStorage.getCatalog(secondMapping.id)?.tasks).toEqual([
+      expect.objectContaining({ id: task.id, projectId: second.id }),
+    ]);
+  });
+
   it("shares one scan across mappings and rereads each note before mutating it", async () => {
     const first = makeProject("first", { name: "First" });
     const second = makeProject("second", { name: "Second" });
@@ -1598,9 +3090,9 @@ describe("ObsidianProjectSyncVault", () => {
       scanToken,
     });
 
-    // Two reads build the shared scan; one additional live read per note prevents a stale scan from
-    // driving a frontmatter mutation after an external Obsidian Sync update.
-    expect(read).toHaveBeenCalledTimes(4);
+    // Two reads build the shared scan. Exclusive-root cleanup revalidates the first mapping's live
+    // identity, and each reconciliation performs one further live read before mutation.
+    expect(read).toHaveBeenCalledTimes(5);
   });
 
   it("does not stale a cached note after an earlier mapping moves it into the destination", async () => {
@@ -1680,53 +3172,36 @@ describe("ObsidianProjectSyncVault", () => {
     });
   });
 
-  it("never adopts a same-ID note owned by an inactive mapping root", async () => {
-    const oldProject = makeProject("old-root", { name: "Old" });
-    const activeProject = makeProject("new-root", { name: "New" });
-    const oldTask = makeTask("same-remote-id", { content: "Task", project: oldProject });
-    const activeTask = makeTask("same-remote-id", { content: "Task", project: activeProject });
-    const oldMapping = {
-      id: "mapping-old",
-      folder: "Sync",
-      project: { projectId: oldProject.id, projectName: oldProject.name },
-      includeSubprojects: false,
-      previousFolders: [],
-    };
-    const activeMapping = {
-      id: "mapping-new",
+  it("sweeps only the active mapping root and ignores open files in other or historical roots", async () => {
+    const activeProject = makeProject("active", { name: "Active" });
+    const otherProject = makeProject("other", { name: "Other" });
+    const activeTask = makeTask("active-task", { content: "Task", project: activeProject });
+    const activeMapping: ProjectSyncMapping = {
+      id: "mapping-active",
       folder: "Sync",
       project: { projectId: activeProject.id, projectName: activeProject.name },
       includeSubprojects: false,
+      previousFolders: ["Old"],
+    };
+    const otherMapping: ProjectSyncMapping = {
+      id: "mapping-other",
+      folder: "Archive",
+      project: { projectId: otherProject.id, projectName: otherProject.name },
+      includeSubprojects: false,
       previousFolders: [],
     };
-    const oldPath = "Sync/Task.md";
-    const oldContent = renderNewTaskDocument(
-      makeTaskFrontmatter(
-        { task: oldTask, completed: false },
-        oldProject.id,
-        testProjectPath(oldProject),
-        "2026-08-12T00:00:00.000Z",
-        oldMapping.id,
-      ),
-      makeManagedBody(oldTask),
+    vault.folders.add("Old");
+    vault.folders.add("Archive");
+    const activeUnmanaged = vault.addFile("Sync/Remove me.md", "Exclusive root occupant\n");
+    const historicalUnmanaged = vault.addFile("Old/User note.md", "Historical user note\n");
+    const otherUnmanaged = vault.addFile("Archive/User note.md", "Other mapping user note\n");
+    adapter = new ObsidianProjectSyncVault(
+      vault as unknown as Vault,
+      fileManager as unknown as FileManager,
+      () => new Set([historicalUnmanaged.path, otherUnmanaged.path]),
+      undefined,
+      catalogStorage,
     );
-    vault.addFile(oldPath, oldContent);
-    catalogStorage.catalogs.set(oldMapping.id, {
-      mappingId: oldMapping.id,
-      rootProjectId: oldProject.id,
-      includeSubprojects: false,
-      syncedAt: "2026-08-12T00:00:00.000Z",
-      projects: [
-        {
-          id: oldProject.id,
-          parentId: oldProject.parentId,
-          name: oldProject.name,
-          childOrder: oldProject.childOrder,
-        },
-      ],
-      tasks: [{ id: oldTask.id, projectId: oldProject.id, order: oldTask.order }],
-      completionEvents: [],
-    });
 
     const result = await adapter.reconcile(
       {
@@ -1740,28 +3215,37 @@ describe("ObsidianProjectSyncVault", () => {
         assertValid: () => undefined,
         mappingRoots: [
           {
-            mappingId: oldMapping.id,
-            rootProjectId: oldProject.id,
-            folder: oldMapping.folder,
-            active: false,
+            mappingId: activeMapping.id,
+            rootProjectId: activeProject.id,
+            folder: activeMapping.folder,
+            active: true,
           },
           {
             mappingId: activeMapping.id,
             rootProjectId: activeProject.id,
-            folder: activeMapping.folder,
+            folder: "Old",
+            active: true,
+          },
+          {
+            mappingId: otherMapping.id,
+            rootProjectId: otherProject.id,
+            folder: otherMapping.folder,
             active: true,
           },
         ],
       },
     );
 
-    expect(result).toMatchObject({ created: 1, moved: 0, updated: 0 });
-    expect(vault.files.get(oldPath)?.content).toBe(oldContent);
-    expect(parseFrontmatter(vault.files.get("Sync/Task (2).md")?.content ?? "")).toMatchObject({
+    expect(result).toMatchObject({ created: 1, moved: 0, deleted: 1, deferred: 0 });
+    expect(vault.files.has(activeUnmanaged.path)).toBe(false);
+    expect(vault.files.get(historicalUnmanaged.path)?.content).toBe("Historical user note\n");
+    expect(vault.files.get(otherUnmanaged.path)?.content).toBe("Other mapping user note\n");
+    expect(parseFrontmatter(vault.files.get("Sync/Task.md")?.content ?? "")).toMatchObject({
       todoist_task_id: activeTask.id,
       todoist_project: activeProject.name,
     });
-    expect(fileManager.trashFile).not.toHaveBeenCalled();
+    expect(fileManager.trashFile).toHaveBeenCalledTimes(1);
+    expect(fileManager.trashFile).toHaveBeenCalledWith(activeUnmanaged);
   });
 
   it("preflights every configured folder synchronously", () => {
@@ -2329,7 +3813,7 @@ describe("ObsidianProjectSyncVault", () => {
     expect(fileManager.trashFile).not.toHaveBeenCalled();
   });
 
-  it("does not trash a task when the live note comes from a newer snapshot", async () => {
+  it("trashes a tracked ID absent from the complete snapshot regardless of a local clock", async () => {
     const project = makeProject("root", { name: "Root" });
     const task = makeTask("newer-missing", { content: "Newer missing", project });
     const path = "Sync/Newer missing.md";
@@ -2355,20 +3839,13 @@ describe("ObsidianProjectSyncVault", () => {
       mapping,
     );
 
-    expect(result).toMatchObject({ updated: 0, deleted: 0 });
-    expect(result.conflicts).toEqual([
-      expect.objectContaining({
-        taskId: task.id,
-        path,
-        projectionBlocked: true,
-        message: expect.stringContaining("remote deletion was not applied"),
-      }),
-    ]);
-    expect(vault.files.get(path)?.content).toBe(original);
-    expect(fileManager.trashFile).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ updated: 0, deleted: 1 });
+    expect(result.conflicts).toEqual([]);
+    expect(vault.files.has(path)).toBe(false);
+    expect(fileManager.trashFile).toHaveBeenCalledOnce();
   });
 
-  it("rechecks the remote-deletion snapshot fence immediately before trashing", async () => {
+  it("rechecks the immutable task ID immediately before authoritative deletion", async () => {
     const project = makeProject("root", { name: "Root" });
     const task = {
       ...makeTask("missing-revision-race", { content: "Missing race", project }),
@@ -2413,20 +3890,10 @@ describe("ObsidianProjectSyncVault", () => {
       mapping,
     );
 
-    expect(result).toMatchObject({ updated: 0, deleted: 0 });
-    expect(result.conflicts).toEqual([
-      expect.objectContaining({
-        taskId: task.id,
-        path,
-        projectionBlocked: true,
-        message: expect.stringContaining("remote deletion was not applied"),
-      }),
-    ]);
-    expect(parseFrontmatter(vault.files.get(path)?.content ?? "")).toMatchObject({
-      todoist_updated_at: "2026-08-10T02:00:00.000Z",
-      todoist_synced_at: "2026-08-10T00:00:00.000Z",
-    });
-    expect(fileManager.trashFile).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ updated: 0, deleted: 1 });
+    expect(result.conflicts).toEqual([]);
+    expect(vault.files.has(path)).toBe(false);
+    expect(fileManager.trashFile).toHaveBeenCalledOnce();
   });
 
   it("does not write when the run is invalidated before the atomic Vault process callback", async () => {
@@ -2542,7 +4009,7 @@ describe("ObsidianProjectSyncVault", () => {
     expect(catalogStorage.getCatalog(mapping.id)?.tasks).toEqual([]);
   });
 
-  it("marks former child-project notes out of scope and does not rewrite them again", async () => {
+  it("deletes former child-project notes once they leave the configured authoritative scope", async () => {
     const root = makeProject("root", { name: "Root" });
     const child = makeProject("child", { name: "Child", parentId: root.id });
     const task = makeTask("child-task", { content: "Child task", project: child });
@@ -2563,15 +4030,10 @@ describe("ObsidianProjectSyncVault", () => {
     const first = await adapter.reconcile(emptySnapshot(root), rootOnlyMapping);
     const second = await adapter.reconcile(emptySnapshot(root), rootOnlyMapping);
 
-    expect(first).toMatchObject({ moved: 1, outOfScope: 1, updated: 1, unchanged: 0, deleted: 0 });
-    expect(second).toMatchObject({ moved: 0, outOfScope: 1, updated: 0, unchanged: 1, deleted: 0 });
+    expect(first).toMatchObject({ moved: 0, outOfScope: 0, updated: 0, unchanged: 0, deleted: 1 });
+    expect(second).toMatchObject({ moved: 0, outOfScope: 0, updated: 0, unchanged: 0, deleted: 0 });
     expect(vault.files.has(legacyPath)).toBe(false);
-    expect(parseFrontmatter(vault.files.get(canonicalPath)?.content ?? "")).toMatchObject({
-      todoist_status: "out_of_scope",
-    });
-    expect(parseFrontmatter(vault.files.get(canonicalPath)?.content ?? "")).not.toHaveProperty(
-      "todoist_stale_since",
-    );
+    expect(vault.files.has(canonicalPath)).toBe(false);
   });
 });
 
@@ -2586,3 +4048,33 @@ const parseFrontmatter = (content: string): Record<string, unknown> => {
   const parsed = loadYaml(frontmatterInfo(content).frontmatter);
   return isRecord(parsed) ? parsed : {};
 };
+
+const managedPathsByTaskId = (vault: FakeVault): Map<string, string> => {
+  const result = new Map<string, string>();
+  for (const [path, { content }] of vault.files) {
+    const taskId = parseFrontmatter(content).todoist_task_id;
+    if (typeof taskId === "string") {
+      if (result.has(taskId)) {
+        throw new Error(`Expected one managed note for Todoist task '${taskId}'`);
+      }
+      result.set(taskId, path);
+    }
+  }
+  return result;
+};
+
+const parentPathOf = (path: string | undefined): string => {
+  if (path === undefined) {
+    throw new Error("Expected managed task path");
+  }
+  const separator = path.lastIndexOf("/");
+  if (separator < 0) {
+    throw new Error(`Expected '${path}' to have a parent path`);
+  }
+  return path.slice(0, separator);
+};
+
+const basename = (path: string): string => path.slice(path.lastIndexOf("/") + 1);
+
+const hasNumberedCollisionSuffix = (path: string): boolean =>
+  / \((?:2|3|[4-9]\d*)\)(?:\/|\.md$)/u.test(path);

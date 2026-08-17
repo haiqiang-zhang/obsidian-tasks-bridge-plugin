@@ -7,6 +7,8 @@ import type { Deadline, Duration, Priority, TaskId } from "@/api/domain/task";
 export type Task = {
   id: TaskId;
   createdAt: string;
+  /** Creation time explicitly supplied by Todoist, excluding local fallback timestamps. */
+  authoritativeCreatedAt?: string;
   updatedAt?: string;
   completedAt?: string | null;
 

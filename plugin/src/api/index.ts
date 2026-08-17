@@ -363,7 +363,6 @@ export class TodoistApiClient {
         return {
           tasks: Array.from(entriesByTaskId.values(), (entry) => ({
             ...entry.itemObject,
-            addedAt: entry.itemObject.addedAt ?? entry.completedAt,
             completedAt: entry.itemObject.checked ? entry.completedAt : null,
           })),
           completionEvents: [...completionEventsById.values()],

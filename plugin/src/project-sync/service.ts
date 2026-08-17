@@ -50,6 +50,15 @@ export class ProjectFolderSyncService {
   private readonly vault: ProjectSyncVault;
   private config: ProjectSyncConfig;
   private configGeneration = 0;
+  /**
+   * Once the complete remote snapshot and Vault preflight have succeeded, finish the projection
+   * batch without letting a late Vault/Sync notification stop it between files. Obsidian exposes
+   * atomic single-file operations, not a cross-file transaction, so an uninterrupted serialized
+   * commit is the only safe batch boundary. A notification received here invalidates the next run
+   * instead.
+   */
+  private commitInProgress = false;
+  private invalidationPending = false;
   private disposed = false;
   private inFlight: InFlightSync | undefined;
   private status: ProjectSyncStatus = { state: "idle" };
@@ -88,6 +97,7 @@ export class ProjectFolderSyncService {
     // Vault destinations and migration bookkeeping do not change the server-side project scope.
     // Keep the last complete snapshot across those projection-only updates.
     const statisticsScopeChanged = !hasSameStatisticsScopes(this.config, config);
+    this.invalidationPending = false;
     this.config = cloneConfig(config);
     this.configGeneration++;
     this.statisticsRepository?.setConfig(config);
@@ -101,6 +111,10 @@ export class ProjectFolderSyncService {
     if (this.disposed) {
       return;
     }
+    if (this.commitInProgress) {
+      this.invalidationPending = true;
+      return;
+    }
     this.configGeneration++;
     this.setStatus(this.config.enabled ? { state: "idle" } : { state: "disabled" });
   }
@@ -110,6 +124,7 @@ export class ProjectFolderSyncService {
       return;
     }
     this.disposed = true;
+    this.invalidationPending = false;
     this.configGeneration++;
     this.statisticsSnapshot = null;
     this.unsubscribeStatistics?.();
@@ -221,6 +236,7 @@ export class ProjectFolderSyncService {
       startedAt: startedAt.toISOString(),
     });
 
+    let commitStarted = false;
     try {
       this.assertCurrent(generation);
       const { activeConfig, plans, unavailableMappings } = this.makeMappingPlans(config);
@@ -259,6 +275,9 @@ export class ProjectFolderSyncService {
           } satisfies ProjectSyncSnapshot,
         }),
       );
+      for (const { mapping, snapshot } of snapshots) {
+        this.vault.validateSnapshot(snapshot, mapping);
+      }
       const activeMappingIds = new Set(snapshots.map(({ mapping }) => mapping.id));
       const mappingRoots = config.mappings.flatMap((mapping) => {
         const project = requireProject(mapping);
@@ -279,6 +298,10 @@ export class ProjectFolderSyncService {
         ];
       });
       const scanToken = {};
+      const stagedUserDocumentsByTaskId = new Map<
+        string,
+        { frontmatter: Record<string, unknown>; body: string }
+      >();
       const allSnapshotTaskIds = new Set(
         snapshots.flatMap(({ snapshot }) => snapshot.tasks.map(({ task }) => task.id)),
       );
@@ -286,12 +309,19 @@ export class ProjectFolderSyncService {
       for (const mapping of unavailableMappings) {
         result.pausedMappingIds.push(mapping.id);
       }
+
+      // Everything above is read-only. From this point through catalog/statistics publication the
+      // run is one logical commit. External activity is remembered for the next run, but it cannot
+      // leave this batch half-applied.
+      this.commitInProgress = true;
+      commitStarted = true;
       for (const { mapping, snapshot } of snapshots) {
         this.assertCurrent(generation);
         const mappingResult = await this.vault.reconcile(snapshot, mapping, {
           assertValid: () => this.assertCurrent(generation),
           mappingRoots,
           allSnapshotTaskIds,
+          stagedUserDocumentsByTaskId,
           scanToken,
         });
         addResult(result, mappingResult);
@@ -305,6 +335,7 @@ export class ProjectFolderSyncService {
             assertValid: () => this.assertCurrent(generation),
             mappingRoots,
             allSnapshotTaskIds,
+            stagedUserDocumentsByTaskId,
             scanToken,
           });
         }
@@ -323,7 +354,25 @@ export class ProjectFolderSyncService {
       }
       this.setErrorIfCurrent(generation, error);
       throw error;
+    } finally {
+      if (commitStarted) {
+        this.finishCommit(generation);
+      }
     }
+  }
+
+  private finishCommit(generation: number): void {
+    this.commitInProgress = false;
+    const invalidatedDuringCommit = this.invalidationPending;
+    this.invalidationPending = false;
+    if (!invalidatedDuringCommit || this.disposed || generation !== this.configGeneration) {
+      return;
+    }
+
+    // Preserve the completed batch, then make every later request capture a new generation. The
+    // next automatic interval will reconcile any external change that arrived during the commit.
+    this.configGeneration++;
+    this.setStatus(this.config.enabled ? { state: "idle" } : { state: "disabled" });
   }
 
   private makeMappingPlans(config: ProjectSyncConfig): MappingPlans {

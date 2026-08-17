@@ -559,7 +559,8 @@ describe("TodoistApiClient", () => {
         tasks: [
           {
             id: "task-42",
-            addedAt: "2026-08-09T12:34:56.000Z",
+            addedAt: "1970-01-01T00:00:00.000Z",
+            addedAtIsAuthoritative: false,
             content: "Annotated task",
             description: "Full snapshot",
             projectId: "456",
@@ -848,7 +849,7 @@ describe("TodoistApiClient", () => {
         expect(page.tasks).toMatchObject([
           {
             id: "completed-1",
-            addedAt: "2026-08-08T12:00:00.000Z",
+            addedAt: "1970-01-01T00:00:00.000Z",
             completedAt: "2026-08-08T12:00:00.000Z",
           },
           {
@@ -1144,6 +1145,32 @@ describe("TodoistApiClient", () => {
 
       expect(page.tasks[0]).toHaveProperty("completedAt", null);
       expect(page.tasks[0].addedAt).toBe("1970-01-01T00:00:00.000Z");
+    });
+
+    it("never substitutes completed_at for a missing added_at", async () => {
+      const completedAt = "2026-08-08T12:00:00.000Z";
+      const fetcher = makeFetcher();
+      fetcher.fetch.mockResolvedValueOnce(
+        makeCompletedPaginatedResponse([
+          makeTask({ id: "missing-created-at", added_at: null, completed_at: completedAt }),
+        ]),
+      );
+      const client = new TodoistApiClient("test-token", fetcher);
+      const request = {
+        since: "2026-08-01T00:00:00.000Z",
+        until: "2026-08-09T00:00:00.000Z",
+        historyStart: "2026-08-01T00:00:00.000Z",
+      };
+
+      const page = await client.getCompletedTasksPage(undefined, request);
+
+      expect(page.tasks[0]).toMatchObject({
+        id: "missing-created-at",
+        addedAt: "1970-01-01T00:00:00.000Z",
+        addedAtIsAuthoritative: false,
+        completedAt,
+      });
+      expect(page.tasks[0].addedAt).not.toBe(completedAt);
     });
 
     it("uses the current unchecked state instead of a stale completion timestamp", async () => {
@@ -1585,6 +1612,78 @@ describe("TodoistApiClient", () => {
       const { params } = parseUrl(call.url);
       expect(params.get("sync_token")).toBe("old-token");
       expect(params.get("resource_types")).not.toBeNull();
+    });
+
+    it("preserves project creation time for stable Vault path disambiguation", async () => {
+      const fetcher = makeFetcher();
+      fetcher.fetch.mockResolvedValueOnce({
+        statusCode: 200,
+        body: JSON.stringify({
+          sync_token: "new-token",
+          projects: [
+            {
+              id: "project-1",
+              created_at: "2026-08-17T06:32:05.123Z",
+              parent_id: null,
+              name: "Study",
+              child_order: 1,
+              inbox_project: false,
+              color: "charcoal",
+              is_deleted: false,
+              is_archived: false,
+            },
+          ],
+          sections: [],
+          labels: [],
+        }),
+      });
+
+      const client = new TodoistApiClient("test-token", fetcher);
+
+      await expect(client.sync("old-token")).resolves.toMatchObject({
+        projects: [{ id: "project-1", createdAt: "2026-08-17T06:32:05.123Z" }],
+      });
+    });
+
+    it("accepts null or omitted project creation time without inventing one", async () => {
+      const fetcher = makeFetcher();
+      fetcher.fetch.mockResolvedValueOnce({
+        statusCode: 200,
+        body: JSON.stringify({
+          sync_token: "new-token",
+          projects: [
+            {
+              id: "null-created-at",
+              created_at: null,
+              parent_id: null,
+              name: "Legacy project",
+              child_order: 1,
+              inbox_project: false,
+              color: "charcoal",
+              is_deleted: false,
+              is_archived: false,
+            },
+            {
+              id: "missing-created-at",
+              parent_id: null,
+              name: "Older project response",
+              child_order: 2,
+              inbox_project: false,
+              color: "charcoal",
+              is_deleted: false,
+              is_archived: false,
+            },
+          ],
+          sections: [],
+          labels: [],
+        }),
+      });
+      const client = new TodoistApiClient("test-token", fetcher);
+
+      const result = await client.sync("old-token");
+
+      expect(result.projects[0]).toHaveProperty("createdAt", null);
+      expect(result.projects[1]).not.toHaveProperty("createdAt");
     });
   });
 

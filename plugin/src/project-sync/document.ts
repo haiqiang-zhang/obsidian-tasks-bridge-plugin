@@ -95,10 +95,12 @@ export const makeTaskFrontmatter = (
     todoist_project_path: projectPath.names,
     todoist_labels: task.labels.map((label) => label.name),
     todoist_priority: priorityName(task.priority),
-    todoist_created_at: task.createdAt,
     todoist_url: todoistTaskWebUrl(task.project.id, task.id),
-    todoist_synced_at: syncedAt,
   };
+
+  if (task.authoritativeCreatedAt !== undefined) {
+    frontmatter.todoist_created_at = task.authoritativeCreatedAt;
+  }
 
   // Project IDs, mapping IDs, parent IDs, section IDs, Todoist order, missing counters, and raw
   // completion history belong to the plugin's local catalog. The Markdown task binds to Todoist
@@ -107,6 +109,10 @@ export const makeTaskFrontmatter = (
   void projectPath.ids;
   void mappingId;
   void completionEvents;
+  // The local projection time is intentionally not serialized into task Markdown. Two devices
+  // projecting the same Todoist snapshot must produce byte-identical managed content so Obsidian
+  // Sync never manufactures a conflict copy solely because their clocks differ.
+  void syncedAt;
 
   if (task.updatedAt !== undefined) {
     frontmatter.todoist_updated_at = task.updatedAt;
@@ -407,5 +413,44 @@ export const readManagedNoteIdentity = (
   if (typeof taskId !== "string" || taskId.trim() === "") {
     return null;
   }
+  return { taskId };
+};
+
+const todoistTaskIdPattern = /^[A-Za-z0-9][A-Za-z0-9_-]*$/u;
+
+/**
+ * Recover only the immutable task identity from otherwise malformed managed frontmatter.
+ *
+ * This deliberately accepts one narrow shape: exactly one top-level scalar task ID plus one valid
+ * Tasks Bridge managed-body region. No other frontmatter value is trusted or recovered.
+ */
+export const readRecoverableManagedNoteIdentity = (
+  content: string,
+  rawFrontmatter: string,
+): ManagedNoteIdentity | null => {
+  const starts = findAll(content, MANAGED_BODY_START);
+  const ends = findAll(content, MANAGED_BODY_END);
+  if (starts.length !== 1 || ends.length !== 1 || starts[0] >= ends[0]) {
+    return null;
+  }
+
+  const candidates = rawFrontmatter
+    .replace(/\r\n?/gu, "\n")
+    .split("\n")
+    .flatMap((line) => {
+      const match = line.match(/^todoist_task_id:[\t ]*(.*)$/u);
+      return match === null ? [] : [match[1]?.trim() ?? ""];
+    });
+  if (candidates.length !== 1) {
+    return null;
+  }
+
+  const scalar = candidates[0] ?? "";
+  const quoted = scalar.match(/^(['"])([A-Za-z0-9][A-Za-z0-9_-]*)\1$/u);
+  const taskId = quoted?.[2] ?? (todoistTaskIdPattern.test(scalar) ? scalar : null);
+  if (taskId === null) {
+    return null;
+  }
+
   return { taskId };
 };

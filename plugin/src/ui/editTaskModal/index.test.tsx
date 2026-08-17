@@ -26,6 +26,7 @@ vi.mock("@/ui/createTaskModal/PrioritySelector", () => ({ PrioritySelector: () =
 const makeTask = (overrides: Partial<Task> = {}): Task => ({
   id: "task-1",
   addedAt: "2026-08-01T00:00:00.000Z",
+  addedAtIsAuthoritative: true,
   content: "Write the report",
   description: "Draft the first section",
   projectId: "project-1",

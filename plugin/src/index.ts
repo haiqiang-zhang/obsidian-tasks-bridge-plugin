@@ -382,7 +382,16 @@ export default class TodoistPlugin extends Plugin {
         return null;
       }
 
-      const result = await this.services.projectSync.sync();
+      const permit = await this.obsidianSyncGate.waitForSafePermit(() =>
+        this.isAsyncGenerationCurrent(generation),
+      );
+      if (permit === null || !this.obsidianSyncGate.isPermitCurrent(permit)) {
+        return null;
+      }
+
+      const result = await this.obsidianSyncGate.monitor(
+        async () => await this.services.projectSync.sync(),
+      );
       if (!this.isAsyncGenerationCurrent(generation)) {
         return null;
       }
@@ -961,8 +970,10 @@ export default class TodoistPlugin extends Plugin {
     const mappings = useSettingsStore.getState().projectSyncMappings;
     const relevantPaths = paths.filter((path) => isProjectSyncPath(path, mappings));
     if (relevantPaths.length > 0 && this.projectSyncActivity.recordVaultActivity(relevantPaths)) {
-      // Abort an automatic reconcile whose snapshot was captured before this external change.
-      // Exact-path suppression above prevents this plugin's own writes from invalidating itself.
+      // A late file event can arrive just after the Sync engine reports Fully synced. Restart the
+      // settle window before allowing another projection. Exact-path suppression above keeps this
+      // plugin's own writes (and their outbound upload) out of this path.
+      this.obsidianSyncGate.recordExternalVaultActivity();
       this.services.projectSync.invalidate();
     }
   }

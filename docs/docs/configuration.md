@@ -19,7 +19,7 @@ Changing this setting will automatically migrate your token to the new storage l
 
 ## Project sync
 
-Project sync is an independent, one-way Todoist-to-Vault projection. You can configure multiple Todoist-project-to-Vault-folder mappings. Its controls remain available while the mode is disabled, so you can prepare every destination and scope before enabling it. See the [project sync guide](./project-mode) for the folder layout, task properties, and safety behavior.
+Project sync is an independent, one-way Todoist-to-Vault projection. You can configure multiple Todoist-project-to-Vault-folder mappings. Each current active mapping folder is a dedicated, exclusive mirror: after a complete successful fetch, Tasks Bridge moves every file, attachment, and subfolder not represented by that Todoist snapshot to the trash configured in Obsidian. Its controls remain available while the mode is disabled, so you can prepare every destination and scope before enabling it. See the [project sync guide](./project-mode) for the folder layout, task properties, and complete safety behavior.
 
 ### Enable project sync
 
@@ -35,13 +35,13 @@ Select the root project to synchronize. Projects are displayed hierarchically wi
 
 #### Vault folder
 
-Select or enter an existing Vault folder. This is the selected Todoist project's **exact root folder**, not a parent destination. Tasks belonging directly to the selected project are written into this folder. The plugin does not add another folder named after the selected project.
+Select or enter an empty, dedicated Vault folder. This is the selected Todoist project's **exact root folder**, not a parent destination. Tasks belonging directly to the selected project are written into this folder. The plugin does not add another folder named after the selected project. Do not store independent notes or attachments anywhere inside the mapped folder.
 
-If you later change this folder, the plugin migrates the mapping's managed notes from every registered previous root. Open notes are deferred and retried, so an interrupted move does not create a second copy or discard user-authored content.
+If you later change this folder, only the new current folder is used for the exclusive projection. Registered previous folders are never swept; Tasks Bridge may inspect them only to locate a positively identified, already tracked task note and move that note into its new canonical path. Other content in a previous folder is not touched. Inactive or unavailable mappings are not treated as empty Todoist snapshots.
 
 #### Include child projects
 
-When enabled, all descendants of the selected project are synchronized recursively. Each child project becomes a nested folder below the mapped root folder. When disabled, only the selected project and its own tasks are synchronized. Previously synchronized descendant notes remain in place and become `out_of_scope` rather than being deleted.
+When enabled, all descendants of the selected project are synchronized recursively. Each child project becomes a nested folder below the mapped root folder. When disabled, only the selected project and its own tasks are represented by the next complete snapshot. Previously synchronized descendant files and folders are then moved to the configured trash as entries outside the active projection.
 
 #### Mapping validation
 
@@ -54,6 +54,8 @@ Validation messages appear directly in each mapping. All mappings must be valid 
 - a separately mapped Todoist project already covered by another mapping with **Include child projects** enabled.
 
 These restrictions ensure that two mappings never own the same Todoist tasks or write inside the same Vault tree.
+
+After the complete Todoist snapshots are fetched, Tasks Bridge preflights every canonical project, task-folder, and task-note path. Todoist legitimately allows same-level duplicate names. When remote siblings collide after portable-name sanitization, case-insensitive comparison, Unicode NFC normalization, or length truncation, every member first receives its readable UTC creation time. A stable typed short-ID marker is added only when the creation time is missing or still does not make the path unique. Numeric `(2)`/`(3)` suffixes are never used, and local Vault occupants never influence the allocated remote path.
 
 If a mapping edit makes an enabled configuration invalid, the plugin turns project sync off in the same settings update. It also turns the mode off if live project or folder metadata later makes the configuration invalid.
 
