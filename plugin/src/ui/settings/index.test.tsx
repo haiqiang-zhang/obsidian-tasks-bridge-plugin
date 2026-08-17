@@ -85,7 +85,7 @@ describe("SettingsTab", () => {
       { name: "Enable project sync" },
       {
         name: "Preserve unmanaged Vault content",
-        desc: expect.stringContaining("still updates, moves, and removes"),
+        desc: "Leave files without a managed Todoist task ID and folders not recorded as Tasks Bridge-created untouched.",
         control: {
           type: "toggle",
           key: "projectSyncPreserveUnmanagedItems",
