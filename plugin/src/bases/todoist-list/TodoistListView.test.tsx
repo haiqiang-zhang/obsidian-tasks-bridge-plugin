@@ -71,7 +71,7 @@ const actions = (): TodoistListActions => ({
 });
 
 const projectStatistics = (): TodoistListProjectStatisticsSource => ({
-  getConfig: vi.fn(() => ({ enabled: true, mappings: [] })),
+  getConfig: vi.fn(() => ({ enabled: true, preserveUnmanagedItems: true, mappings: [] })),
   getProjects: vi.fn(() => []),
   getSnapshot: vi.fn(() => null),
   getStatus: vi.fn((): ProjectSyncStatus => ({ state: "idle" })),
@@ -89,7 +89,7 @@ const observableProjectStatistics = (
     listener = undefined;
   });
   const source: TodoistListProjectStatisticsSource = {
-    getConfig: vi.fn(() => ({ enabled: true, mappings: [] })),
+    getConfig: vi.fn(() => ({ enabled: true, preserveUnmanagedItems: true, mappings: [] })),
     getProjects: vi.fn(() => []),
     getSnapshot: vi.fn(() => snapshot),
     getStatus: vi.fn(() => status),
@@ -258,6 +258,7 @@ describe("TasksListView", () => {
     vi.mocked(statistics.getProjects).mockReturnValue([unrelated, child, root]);
     vi.mocked(statistics.getConfig).mockReturnValue({
       enabled: true,
+      preserveUnmanagedItems: true,
       mappings: [
         {
           id: "mapping",

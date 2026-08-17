@@ -41,6 +41,7 @@ const mapping = (
 
 const config = (...mappings: ProjectSyncMapping[]): ProjectSyncConfig => ({
   enabled: true,
+  preserveUnmanagedItems: true,
   mappings: mappings.length === 0 ? [mapping()] : mappings,
 });
 
@@ -112,16 +113,48 @@ describe("ProjectFolderSyncService", () => {
       1,
       expect.objectContaining({ rootProjectId: root.id, projects: [root, child] }),
       mappings[0],
-      expect.objectContaining({ assertValid: expect.any(Function) }),
+      expect.objectContaining({
+        assertValid: expect.any(Function),
+        preserveUnmanagedItems: true,
+      }),
     );
     expect(vault.reconcile).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({ rootProjectId: other.id, projects: [other] }),
       mappings[1],
-      expect.objectContaining({ assertValid: expect.any(Function) }),
+      expect.objectContaining({
+        assertValid: expect.any(Function),
+        preserveUnmanagedItems: true,
+      }),
     );
     expect(vi.mocked(vault.reconcile).mock.calls[0][2].scanToken).toBe(
       vi.mocked(vault.reconcile).mock.calls[1][2].scanToken,
+    );
+  });
+
+  it("propagates an explicit opt-out to Vault reconciliation", async () => {
+    const root = makeProject("root");
+    const vault = makeVault();
+    const initialConfig = { ...config(), preserveUnmanagedItems: false };
+    const service = new ProjectFolderSyncService(
+      {
+        listProjects: () => [root],
+        fetchProjectTasks: async () => projectTaskPage(),
+      },
+      vault,
+      initialConfig,
+    );
+
+    await service.sync();
+
+    expect(service.getConfig().preserveUnmanagedItems).toBe(false);
+    expect(vault.validateConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ preserveUnmanagedItems: false }),
+    );
+    expect(vault.reconcile).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ preserveUnmanagedItems: false }),
     );
   });
 
@@ -472,9 +505,14 @@ describe("ProjectFolderSyncService", () => {
     service.setConfig(config());
     expect(service.getStatisticsSnapshot()).toBe(firstSnapshot);
 
+    service.setConfig({ ...config(), preserveUnmanagedItems: false });
+    expect(service.getConfig().preserveUnmanagedItems).toBe(false);
+    expect(service.getStatisticsSnapshot()).toBe(firstSnapshot);
+    expect(observed[observed.length - 1]).toEqual({ state: "idle", hasSnapshot: true });
+
     service.clearStatisticsSnapshot();
     expect(service.getStatisticsSnapshot()).toBeNull();
-    expect(observed[observed.length - 1]).toEqual({ state: "success", hasSnapshot: false });
+    expect(observed[observed.length - 1]).toEqual({ state: "idle", hasSnapshot: false });
 
     await service.sync();
     const migratedSnapshot = service.getStatisticsSnapshot();
@@ -562,7 +600,11 @@ describe("ProjectFolderSyncService", () => {
 
     expect(fetchProjectTasks).toHaveBeenCalledOnce();
     expect(fetchProjectTasks).toHaveBeenCalledWith(available.id);
-    expect(vault.validateConfig).toHaveBeenCalledWith({ enabled: true, mappings: [active] });
+    expect(vault.validateConfig).toHaveBeenCalledWith({
+      enabled: true,
+      preserveUnmanagedItems: true,
+      mappings: [active],
+    });
     expect(vault.reconcile).toHaveBeenCalledOnce();
     expect(result?.pausedMappingIds).toEqual([unavailable.id]);
     expect(result?.conflicts).toEqual([]);
@@ -611,7 +653,11 @@ describe("ProjectFolderSyncService", () => {
 
     await expect(service.sync()).resolves.toMatchObject({ pausedMappingIds: [unavailable.id] });
     expect(fetchProjectTasks).toHaveBeenCalledOnce();
-    expect(vault.validateConfig).toHaveBeenCalledWith({ enabled: true, mappings: [active] });
+    expect(vault.validateConfig).toHaveBeenCalledWith({
+      enabled: true,
+      preserveUnmanagedItems: true,
+      mappings: [active],
+    });
     expect(vault.reconcile).toHaveBeenCalledOnce();
   });
 
@@ -642,7 +688,7 @@ describe("ProjectFolderSyncService", () => {
     const service = new ProjectFolderSyncService(
       { listProjects: () => [], fetchProjectTasks: vi.fn() },
       vault,
-      { enabled: false, mappings: [] },
+      { enabled: false, preserveUnmanagedItems: true, mappings: [] },
     );
 
     expect(() => service.validateConfig()).toThrow("at least one project mapping");

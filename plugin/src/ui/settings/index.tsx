@@ -75,6 +75,15 @@ export class SettingsTab extends PluginSettingTab {
             ),
           },
           {
+            name: i18n.projectSync.preserveUnmanagedItems.label,
+            desc: i18n.projectSync.preserveUnmanagedItems.description,
+            control: {
+              type: "toggle",
+              key: "projectSyncPreserveUnmanagedItems",
+              defaultValue: true,
+            },
+          },
+          {
             name: i18n.projectSync.mappings.label,
             desc: i18n.projectSync.mappings.description,
             aliases: [i18n.projectSync.project.label, i18n.projectSync.folder.label],
@@ -449,6 +458,7 @@ const DefaultLabelsControl: React.FC<{ plugin: TodoistPlugin }> = ({ plugin }) =
 
 const booleanDeclarativeSettingKeys = new Set<string>([
   "autoRefreshToggle",
+  "projectSyncPreserveUnmanagedItems",
   "fadeToggle",
   "renderDateIcon",
   "renderProjectIcon",
@@ -459,6 +469,7 @@ const booleanDeclarativeSettingKeys = new Set<string>([
 
 type BooleanDeclarativeSettingKey =
   | "autoRefreshToggle"
+  | "projectSyncPreserveUnmanagedItems"
   | "fadeToggle"
   | "renderDateIcon"
   | "renderProjectIcon"

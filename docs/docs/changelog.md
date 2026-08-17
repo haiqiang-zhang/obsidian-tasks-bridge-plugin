@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### ✨ Improvements
+
+- Project sync now preserves unmanaged Vault content by default. Task notes remain fully managed by immutable `todoist_task_id`, while a versioned folder-creation ledger limits folder cleanup to empty folders actually created by Tasks Bridge. User-created Bases, notes, attachments, and folders inside mappings survive Todoist renames and deletions; managed task notes still move or go to the configured Obsidian trash as required. A settings toggle retains the legacy exclusive-mirror behavior for dedicated roots.
+
 ## v2.9.19 (2026-08-17)
 
 ### 🐛 Bug Fixes

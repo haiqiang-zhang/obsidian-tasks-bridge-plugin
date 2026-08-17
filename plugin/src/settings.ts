@@ -106,6 +106,7 @@ const defaultSettings: Settings = {
   autoRefreshInterval: defaultAutoRefreshInterval,
 
   projectSyncEnabled: false,
+  projectSyncPreserveUnmanagedItems: true,
   projectSyncMappings: [],
 
   renderDateIcon: true,
@@ -137,6 +138,7 @@ export type Settings = {
   autoRefreshInterval: number;
 
   projectSyncEnabled: boolean;
+  projectSyncPreserveUnmanagedItems: boolean;
   projectSyncMappings: ProjectSyncMapping[];
 
   renderDateIcon: boolean;
@@ -172,7 +174,12 @@ export const normalizeSettings = (value: unknown): Settings => {
   const storedKeys = new Set(Object.keys(stored));
 
   for (const key of Object.keys(defaultSettings) as Array<keyof Settings>) {
-    if (key !== "projectSyncEnabled" && key !== "projectSyncMappings" && storedKeys.has(key)) {
+    if (
+      key !== "projectSyncEnabled" &&
+      key !== "projectSyncPreserveUnmanagedItems" &&
+      key !== "projectSyncMappings" &&
+      storedKeys.has(key)
+    ) {
       normalizedRecord[key] = stored[key];
     }
   }
@@ -181,6 +188,9 @@ export const normalizeSettings = (value: unknown): Settings => {
   normalized.autoRefreshInterval = normalizeAutoRefreshInterval(stored.autoRefreshInterval);
 
   normalized.projectSyncEnabled = stored.projectSyncEnabled === true;
+  // This is a destructive-operation safety boundary. Only an explicit boolean false may disable
+  // protection; missing or malformed values retain the safe default.
+  normalized.projectSyncPreserveUnmanagedItems = stored.projectSyncPreserveUnmanagedItems !== false;
   const mappings = normalizeStoredMappings(stored);
   normalized.projectSyncMappings = mappings.values;
   if (mappings.incompleteLegacyMapping || !hasCompleteProjectSyncMappings(mappings.values)) {

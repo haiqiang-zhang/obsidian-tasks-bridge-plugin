@@ -319,6 +319,7 @@ export class ProjectFolderSyncService {
         this.assertCurrent(generation);
         const mappingResult = await this.vault.reconcile(snapshot, mapping, {
           assertValid: () => this.assertCurrent(generation),
+          preserveUnmanagedItems: config.preserveUnmanagedItems,
           mappingRoots,
           allSnapshotTaskIds,
           stagedUserDocumentsByTaskId,
@@ -333,6 +334,7 @@ export class ProjectFolderSyncService {
         for (const { mapping, snapshot } of snapshots) {
           await this.statisticsRepository.persistProjectCatalog(snapshot, mapping, {
             assertValid: () => this.assertCurrent(generation),
+            preserveUnmanagedItems: config.preserveUnmanagedItems,
             mappingRoots,
             allSnapshotTaskIds,
             stagedUserDocumentsByTaskId,
@@ -415,6 +417,7 @@ export class ProjectFolderSyncService {
 
     const activeConfig: ProjectSyncConfig = {
       enabled: config.enabled,
+      preserveUnmanagedItems: config.preserveUnmanagedItems,
       mappings: plans.map(({ mapping }) => mapping),
     };
     if (plans.length > 0) {
@@ -513,6 +516,7 @@ class ProjectSyncInvalidatedError extends Error {}
 
 const cloneConfig = (config: ProjectSyncConfig): ProjectSyncConfig => ({
   enabled: config.enabled,
+  preserveUnmanagedItems: config.preserveUnmanagedItems,
   mappings: config.mappings.map((mapping) => ({
     ...mapping,
     project: mapping.project === null ? null : { ...mapping.project },
@@ -596,6 +600,7 @@ const makeStatisticsSnapshot = (
 
 const isSameConfig = (left: ProjectSyncConfig, right: ProjectSyncConfig): boolean =>
   left.enabled === right.enabled &&
+  left.preserveUnmanagedItems === right.preserveUnmanagedItems &&
   left.mappings.length === right.mappings.length &&
   left.mappings.every((mapping, index) => {
     const other = right.mappings[index];

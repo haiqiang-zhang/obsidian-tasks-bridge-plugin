@@ -10,6 +10,7 @@ import {
   ManagedBodyConflictError,
   makeManagedBody,
   makeTaskFrontmatter,
+  readManagedNoteIdentity,
   readRecoverableManagedNoteIdentity,
   replaceManagedBody,
   replaceManagedTaskDocument,
@@ -268,5 +269,23 @@ describe("project task documents", () => {
     expect(
       readRecoverableManagedNoteIdentity(`---\n${malformedYaml}\n---\nUser notes\n`, malformedYaml),
     ).toBeNull();
+  });
+
+  it.each([
+    ["alphanumeric", "6hGr78cXw24jQC7W"],
+    ["hyphenated", "task-1"],
+    ["underscored", "task_1"],
+  ])("accepts an exact %s Todoist task ID", (_kind, taskId) => {
+    expect(readManagedNoteIdentity({ todoist_task_id: taskId })).toEqual({ taskId });
+  });
+
+  it.each([
+    ["whitespace-only", " \t "],
+    ["leading-whitespace", " task-1"],
+    ["trailing-whitespace", "task-1 "],
+    ["embedded-space", "task 1"],
+    ["punctuation", "task.1"],
+  ])("rejects a %s Todoist task ID instead of claiming the note", (_kind, taskId) => {
+    expect(readManagedNoteIdentity({ todoist_task_id: taskId })).toBeNull();
   });
 });

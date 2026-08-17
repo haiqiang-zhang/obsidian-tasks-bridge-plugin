@@ -35,6 +35,7 @@ export const makeServices = (plugin: TodoistPlugin): Services => {
   const settings = useSettingsStore.getState();
   const projectSyncConfig = {
     enabled: settings.projectSyncEnabled,
+    preserveUnmanagedItems: settings.projectSyncPreserveUnmanagedItems,
     mappings: settings.projectSyncMappings,
   };
   const runInternalMutation = async <T>(
@@ -57,6 +58,7 @@ export const makeServices = (plugin: TodoistPlugin): Services => {
       },
       runInternalMutation,
       plugin.projectCatalogStorage,
+      plugin.projectSyncFolderOwnershipStorage,
     ),
     projectSyncConfig,
     new ObsidianProjectSyncStatisticsRepository(

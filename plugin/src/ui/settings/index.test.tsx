@@ -66,6 +66,43 @@ describe("SettingsTab", () => {
     expect(plugin.services.token.migrateStorage).not.toHaveBeenCalled();
   });
 
+  it("places the unmanaged-content safeguard directly after the Project sync toggle", async () => {
+    const plugin = {
+      services: {
+        token: {
+          migrateStorage: vi.fn(async () => undefined),
+        },
+      },
+      writeOptions: vi.fn(async () => undefined),
+    } as unknown as TodoistPlugin;
+    const tab = new SettingsTab({} as App, plugin);
+    const projectSync = tab.getSettingDefinitions()[1];
+    if (!projectSync || !("type" in projectSync) || projectSync.type !== "group") {
+      throw new TypeError("Expected the Project sync settings group");
+    }
+
+    expect(projectSync.items?.slice(0, 3)).toMatchObject([
+      { name: "Enable project sync" },
+      {
+        name: "Preserve unmanaged Vault content",
+        desc: expect.stringContaining("still updates, moves, and removes"),
+        control: {
+          type: "toggle",
+          key: "projectSyncPreserveUnmanagedItems",
+          defaultValue: true,
+        },
+      },
+      { name: "Project mappings" },
+    ]);
+
+    useSettingsStore.setState({ projectSyncPreserveUnmanagedItems: false });
+    expect(tab.getControlValue("projectSyncPreserveUnmanagedItems")).toBe(false);
+    await tab.setControlValue("projectSyncPreserveUnmanagedItems", true);
+    expect(plugin.writeOptions).toHaveBeenCalledWith({
+      projectSyncPreserveUnmanagedItems: true,
+    });
+  });
+
   it("cleans up React controls through the declarative render callback", async () => {
     const plugin = {
       services: {

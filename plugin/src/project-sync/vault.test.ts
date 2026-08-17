@@ -10,6 +10,16 @@ import {
   type ProjectCatalogStorage,
 } from "./catalog";
 import { makeManagedBody, makeTaskFrontmatter, renderNewTaskDocument } from "./document";
+import {
+  emptyProjectSyncFolderOwnershipRegistry,
+  listOwnedFolders,
+  type ManagedFolderCreation,
+  type ManagedFolderOwnership,
+  type ProjectSyncFolderOwnershipRegistry,
+  type ProjectSyncFolderOwnershipStorage,
+  recordCreatedFolders,
+  releaseOwnedFolderPaths,
+} from "./folderOwnership";
 import type { ProjectSyncConfig, ProjectSyncMapping, ProjectSyncSnapshot } from "./types";
 import { ObsidianProjectSyncVault } from "./vault";
 
@@ -60,6 +70,15 @@ type FakeFolder = TAbstractFile & { path: string; name: string; _fakeKind: "fold
 class FakeVault {
   readonly files = new Map<string, { file: FakeFile; content: string }>();
   readonly folders = new Set<string>(["Sync"]);
+  readonly adapter = {
+    list: vi.fn(async (path: string) => {
+      const prefix = `${path}/`;
+      return {
+        files: [...this.files.keys()].filter((candidate) => candidate.startsWith(prefix)),
+        folders: [...this.folders].filter((candidate) => candidate.startsWith(prefix)),
+      };
+    }),
+  };
   private readonly folderEntries = new Map<string, FakeFolder>();
   beforeProcess: (() => void) | undefined;
   beforeCreate: ((path: string) => void) | undefined;
@@ -131,6 +150,13 @@ class FakeVault {
       throw new Error(`File already exists: ${path}`);
     }
     return this.addFile(path, content);
+  }
+
+  replaceFolderIdentity(path: string): void {
+    if (!this.folders.has(path)) {
+      throw new Error(`Missing fake folder: ${path}`);
+    }
+    this.folderEntries.delete(path);
   }
 
   private folderEntry(path: string): FakeFolder {
@@ -236,6 +262,34 @@ class FakeCatalogStorage implements ProjectCatalogStorage {
   }
 }
 
+class FakeFolderOwnershipStorage implements ProjectSyncFolderOwnershipStorage {
+  registry: ProjectSyncFolderOwnershipRegistry = emptyProjectSyncFolderOwnershipRegistry();
+  private nextCreationId = 0;
+
+  listOwnedFolders(mappingId: string): readonly ManagedFolderOwnership[] {
+    return listOwnedFolders(this.registry, mappingId);
+  }
+
+  async recordCreatedFolder(input: ManagedFolderCreation): Promise<void> {
+    await this.recordCreatedFolders([input]);
+  }
+
+  async recordCreatedFolders(inputs: readonly ManagedFolderCreation[]): Promise<void> {
+    this.registry = recordCreatedFolders(this.registry, inputs, () => {
+      this.nextCreationId++;
+      return `test-folder-${this.nextCreationId}`;
+    });
+  }
+
+  async releaseOwnedFolderPath(mappingId: string, path: string): Promise<void> {
+    await this.releaseOwnedFolderPaths(mappingId, [path]);
+  }
+
+  async releaseOwnedFolderPaths(mappingId: string, paths: readonly string[]): Promise<void> {
+    this.registry = releaseOwnedFolderPaths(this.registry, mappingId, paths);
+  }
+}
+
 const frontmatterInfo = (content: string) => {
   if (!content.startsWith("---\n")) {
     return { exists: false, frontmatter: "", from: 0, to: 0, contentStart: 0 };
@@ -271,6 +325,7 @@ const mapping: ProjectSyncMapping = {
 
 const config: ProjectSyncConfig = {
   enabled: true,
+  preserveUnmanagedItems: true,
   mappings: [mapping],
 };
 
@@ -278,18 +333,21 @@ describe("ObsidianProjectSyncVault", () => {
   let vault: FakeVault;
   let fileManager: FakeFileManager;
   let catalogStorage: FakeCatalogStorage;
+  let folderOwnershipStorage: FakeFolderOwnershipStorage;
   let adapter: ObsidianProjectSyncVault;
 
   beforeEach(() => {
     vault = new FakeVault();
     fileManager = new FakeFileManager(vault);
     catalogStorage = new FakeCatalogStorage();
+    folderOwnershipStorage = new FakeFolderOwnershipStorage();
     adapter = new ObsidianProjectSyncVault(
       vault as unknown as Vault,
       fileManager as unknown as FileManager,
       () => new Set(),
       undefined,
       catalogStorage,
+      folderOwnershipStorage,
     );
   });
 
@@ -329,6 +387,277 @@ describe("ObsidianProjectSyncVault", () => {
       todoist_project: "Child",
       todoist_project_path: ["Root", "Child"],
     });
+  });
+
+  it("preserves same-named Bases and arbitrary user content while deleting remote task notes", async () => {
+    const root = makeProject("root", { name: "Root" });
+    const child = makeProject("child", { name: "Child", parentId: root.id });
+    const rootTask = makeTask("root-task", { content: "Root task", project: root });
+    const childTask = makeTask("child-task", { content: "Child task", project: child });
+    vault.folders.add("Sync/Child");
+    vault.folders.add("Sync/User material");
+    vault.folders.add("Sync/User material/Empty folder");
+    const rootBase = vault.addFile("Sync/Root.base", "filters:\n  and: []\n");
+    const childBase = vault.addFile("Sync/Child/Child.base", "views: []\n");
+    const userNote = vault.addFile("Sync/User material/Notes.md", "Personal notes\n");
+    const attachment = vault.addFile("Sync/User material/reference.bin", "binary placeholder");
+
+    const first = await adapter.reconcile(
+      {
+        rootProjectId: root.id,
+        projects: [root, child],
+        tasks: [
+          { task: rootTask, completed: false },
+          { task: childTask, completed: false },
+        ],
+        syncedAt: "2026-08-17T10:00:00.000Z",
+      },
+      mapping,
+    );
+
+    expect(first).toMatchObject({ created: 2, deleted: 0 });
+    expect(first.conflicts).toEqual([]);
+    expect(folderOwnershipStorage.listOwnedFolders(mapping.id)).toEqual([]);
+
+    const second = await adapter.reconcile(
+      {
+        rootProjectId: root.id,
+        projects: [root],
+        tasks: [],
+        syncedAt: "2026-08-17T11:00:00.000Z",
+      },
+      mapping,
+    );
+
+    expect(second).toMatchObject({ created: 0, deleted: 2 });
+    expect(second.conflicts).toEqual([]);
+    expect(vault.files.has("Sync/Root task.md")).toBe(false);
+    expect(vault.files.has("Sync/Child/Child task.md")).toBe(false);
+    expect(vault.files.get(rootBase.path)?.file).toBe(rootBase);
+    expect(vault.files.get(childBase.path)?.file).toBe(childBase);
+    expect(vault.files.get(userNote.path)?.file).toBe(userNote);
+    expect(vault.files.get(attachment.path)?.file).toBe(attachment);
+    expect(vault.folders.has("Sync/Child")).toBe(true);
+    expect(vault.folders.has("Sync/User material/Empty folder")).toBe(true);
+    expect(fileManager.trashFile).not.toHaveBeenCalledWith(rootBase);
+    expect(fileManager.trashFile).not.toHaveBeenCalledWith(childBase);
+    expect(fileManager.trashFile).not.toHaveBeenCalledWith(userNote);
+    expect(fileManager.trashFile).not.toHaveBeenCalledWith(attachment);
+  });
+
+  it("preserves invalid task-ID notes as user content while exact supported IDs remain managed", async () => {
+    const project = makeProject("root", { name: "Root" });
+    const invalidIds = [" \t ", " task-1", "task-1 ", "task 1", "task.1"];
+    const validIds = ["6hGr78cXw24jQC7W", "task-1", "task_1"];
+    const invalidFiles = invalidIds.map((taskId, index) => {
+      const path = `Sync/User note ${index + 1}.md`;
+      const content = renderNewTaskDocument(
+        { todoist_task_id: taskId, user_property: "preserve me" },
+        makeManagedBody(makeTask(`invalid-source-${index + 1}`, { project })),
+      );
+      return { file: vault.addFile(path, content), content };
+    });
+    const validFiles = validIds.map((taskId, index) => {
+      const path = `Sync/Managed note ${index + 1}.md`;
+      const content = renderNewTaskDocument(
+        { todoist_task_id: taskId },
+        makeManagedBody(makeTask(taskId, { project })),
+      );
+      return vault.addFile(path, content);
+    });
+
+    const result = await adapter.reconcile(emptySnapshot(project), mapping);
+
+    expect(result).toMatchObject({ created: 0, deleted: validFiles.length });
+    expect(result.conflicts).toEqual([]);
+    for (const { file, content } of invalidFiles) {
+      expect(vault.files.get(file.path)).toEqual({ file, content });
+      expect(fileManager.trashFile).not.toHaveBeenCalledWith(file);
+    }
+    for (const file of validFiles) {
+      expect(vault.files.has(file.path)).toBe(false);
+      expect(fileManager.trashFile).toHaveBeenCalledWith(file);
+    }
+  });
+
+  it("tracks created project and task folders, but retains old owned folders with user content", async () => {
+    const root = makeProject("root", { name: "Root" });
+    const child = makeProject("child", { name: "Child", parentId: root.id });
+    const parent = makeTask("parent", { content: "Parent", project: root });
+    const subtask = makeTask("subtask", {
+      content: "Subtask",
+      parentId: parent.id,
+      project: root,
+    });
+    const childTask = makeTask("child-task", { content: "Child task", project: child });
+    const initial: ProjectSyncSnapshot = {
+      rootProjectId: root.id,
+      projects: [root, child],
+      tasks: [
+        { task: parent, completed: false },
+        { task: subtask, completed: false },
+        { task: childTask, completed: false },
+      ],
+      syncedAt: "2026-08-17T10:00:00.000Z",
+    };
+
+    await adapter.reconcile(initial, mapping);
+
+    expect(folderOwnershipStorage.listOwnedFolders(mapping.id)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ ownerKind: "project", ownerId: child.id, path: "Sync/Child" }),
+        expect.objectContaining({ ownerKind: "task", ownerId: parent.id, path: "Sync/Parent" }),
+      ]),
+    );
+    expect(folderOwnershipStorage.listOwnedFolders(mapping.id)).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ path: "Sync" })]),
+    );
+    const childBase = vault.addFile("Sync/Child/Child.base", "views: []\n");
+    const parentBase = vault.addFile("Sync/Parent/Parent.base", "views: []\n");
+    const renamedChild = { ...child, name: "Renamed child" };
+    const renamedParent = { ...parent, content: "Renamed parent" };
+    const renamedSnapshot: ProjectSyncSnapshot = {
+      ...initial,
+      projects: [root, renamedChild],
+      tasks: [
+        { task: renamedParent, completed: false },
+        { task: subtask, completed: false },
+        { task: { ...childTask, project: renamedChild }, completed: false },
+      ],
+      syncedAt: "2026-08-17T11:00:00.000Z",
+    };
+
+    const renamed = await adapter.reconcile(renamedSnapshot, mapping);
+
+    expect(renamed).toMatchObject({ moved: 3, deleted: 0 });
+    expect(renamed.conflicts).toEqual([]);
+    expect(vault.files.has("Sync/Renamed child/Child task.md")).toBe(true);
+    expect(vault.files.has("Sync/Renamed parent/Renamed parent.md")).toBe(true);
+    expect(vault.files.has("Sync/Renamed parent/Subtask.md")).toBe(true);
+    expect(vault.files.get(childBase.path)?.file).toBe(childBase);
+    expect(vault.files.get(parentBase.path)?.file).toBe(parentBase);
+    expect(vault.folders.has("Sync/Child")).toBe(true);
+    expect(vault.folders.has("Sync/Parent")).toBe(true);
+    expect(folderOwnershipStorage.listOwnedFolders(mapping.id)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ path: "Sync/Child" }),
+        expect.objectContaining({ path: "Sync/Parent" }),
+        expect.objectContaining({ path: "Sync/Renamed child" }),
+        expect.objectContaining({ path: "Sync/Renamed parent" }),
+      ]),
+    );
+
+    vault.files.delete(childBase.path);
+    vault.files.delete(parentBase.path);
+    vi.clearAllMocks();
+    const settled = await adapter.reconcile(renamedSnapshot, mapping);
+
+    expect(settled.conflicts).toEqual([]);
+    expect(vault.folders.has("Sync/Child")).toBe(false);
+    expect(vault.folders.has("Sync/Parent")).toBe(false);
+    expect(folderOwnershipStorage.listOwnedFolders(mapping.id)).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ path: "Sync/Child" }),
+        expect.objectContaining({ path: "Sync/Parent" }),
+      ]),
+    );
+    expect(fileManager.trashFile).toHaveBeenCalledWith(
+      expect.objectContaining({ path: "Sync/Child" }),
+    );
+    expect(fileManager.trashFile).toHaveBeenCalledWith(
+      expect.objectContaining({ path: "Sync/Parent" }),
+    );
+  });
+
+  it("keeps an owned folder from a previous mapping root tracked until user content is removed", async () => {
+    const root = makeProject("root", { name: "Root" });
+    const child = makeProject("child", { name: "Child", parentId: root.id });
+    const task = makeTask("child-task", { content: "Child task", project: child });
+    vault.folders.add("Old");
+    const oldMapping: ProjectSyncMapping = { ...mapping, folder: "Old" };
+    const snapshot: ProjectSyncSnapshot = {
+      rootProjectId: root.id,
+      projects: [root, child],
+      tasks: [{ task, completed: false }],
+      syncedAt: "2026-08-17T10:00:00.000Z",
+    };
+
+    await adapter.reconcile(snapshot, oldMapping);
+    expect(folderOwnershipStorage.listOwnedFolders(mapping.id)).toEqual(
+      expect.arrayContaining([expect.objectContaining({ path: "Old/Child" })]),
+    );
+    const userBase = vault.addFile("Old/Child/Child.base", "views: []\n");
+    const movedMapping: ProjectSyncMapping = {
+      ...mapping,
+      previousFolders: ["Old"],
+    };
+
+    const moved = await adapter.reconcile(snapshot, movedMapping);
+
+    expect(moved).toMatchObject({ created: 0, moved: 1 });
+    expect(moved.conflicts).toEqual([]);
+    expect(vault.files.has("Sync/Child/Child task.md")).toBe(true);
+    expect(vault.files.get(userBase.path)?.file).toBe(userBase);
+    expect(vault.folders.has("Old/Child")).toBe(true);
+    expect(folderOwnershipStorage.listOwnedFolders(mapping.id)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ path: "Old/Child" }),
+        expect.objectContaining({ path: "Sync/Child" }),
+      ]),
+    );
+
+    vault.files.delete(userBase.path);
+    vi.clearAllMocks();
+    const settled = await adapter.reconcile(snapshot, movedMapping);
+
+    expect(settled.conflicts).toEqual([]);
+    expect(vault.folders.has("Old/Child")).toBe(false);
+    expect(folderOwnershipStorage.listOwnedFolders(mapping.id)).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ path: "Old/Child" })]),
+    );
+    expect(fileManager.trashFile).toHaveBeenCalledWith(
+      expect.objectContaining({ path: "Old/Child" }),
+    );
+  });
+
+  it("preserves an exact user collision while still applying unrelated Todoist deletion", async () => {
+    const project = makeProject("root", { name: "Root" });
+    const obsolete = makeTask("obsolete", { content: "Obsolete", project });
+    await adapter.reconcile(
+      {
+        rootProjectId: project.id,
+        projects: [project],
+        tasks: [{ task: obsolete, completed: false }],
+        syncedAt: "2026-08-17T10:00:00.000Z",
+      },
+      mapping,
+    );
+    const userFile = vault.addFile("Sync/Blocked.md", "User-owned note\n");
+    const blocked = makeTask("blocked", { content: "Blocked", project });
+
+    const result = await adapter.reconcile(
+      {
+        rootProjectId: project.id,
+        projects: [project],
+        tasks: [{ task: blocked, completed: false }],
+        syncedAt: "2026-08-17T11:00:00.000Z",
+      },
+      mapping,
+    );
+
+    expect(result).toMatchObject({ created: 0, deleted: 1 });
+    expect(result.conflicts).toEqual([
+      expect.objectContaining({
+        taskId: blocked.id,
+        path: userFile.path,
+        projectionBlocked: true,
+      }),
+    ]);
+    expect(vault.files.has("Sync/Obsolete.md")).toBe(false);
+    expect(vault.files.get(userFile.path)?.file).toBe(userFile);
+    expect(vault.files.get(userFile.path)?.content).toBe("User-owned note\n");
+    expect(vault.files.has("Sync/Blocked (2).md")).toBe(false);
+    expect(fileManager.trashFile).not.toHaveBeenCalledWith(userFile);
   });
 
   it("projects a parent task into a same-named folder beside its direct subtasks", async () => {
@@ -644,6 +973,7 @@ describe("ObsidianProjectSyncVault", () => {
         syncedAt: "2026-08-13T00:00:00.000Z",
       },
       mapping,
+      { assertValid: () => undefined, preserveUnmanagedItems: false },
     );
 
     expect(result).toMatchObject({ created: 2, moved: 0, deleted: 1 });
@@ -673,7 +1003,10 @@ describe("ObsidianProjectSyncVault", () => {
       syncedAt: "2026-08-13T00:00:00.000Z",
     };
 
-    const first = await adapter.reconcile(snapshot, mapping);
+    const first = await adapter.reconcile(snapshot, mapping, {
+      assertValid: () => undefined,
+      preserveUnmanagedItems: false,
+    });
 
     expect(first).toMatchObject({ created: 2, moved: 0, deleted: 2 });
     expect(first.conflicts).toEqual([]);
@@ -684,7 +1017,10 @@ describe("ObsidianProjectSyncVault", () => {
     expect(vault.folders).toEqual(new Set(["Sync", "Sync/Parent"]));
 
     vi.clearAllMocks();
-    const second = await adapter.reconcile(snapshot, mapping);
+    const second = await adapter.reconcile(snapshot, mapping, {
+      assertValid: () => undefined,
+      preserveUnmanagedItems: false,
+    });
 
     expect(second).toMatchObject({ created: 0, moved: 0, deleted: 0, unchanged: 2 });
     expect(second.conflicts).toEqual([]);
@@ -865,7 +1201,7 @@ describe("ObsidianProjectSyncVault", () => {
     expect(vault.files.has("Sync/Second.md")).toBe(false);
   });
 
-  it("rejects a raced task folder that gains an unmanaged descendant", async () => {
+  it("reuses but does not claim a raced user folder that gains an unmanaged descendant", async () => {
     const project = makeProject("root", { name: "Root" });
     const parent = makeTask("parent", { content: "Parent", project });
     const child = makeTask("child", { content: "Child", parentId: parent.id, project });
@@ -874,6 +1210,68 @@ describe("ObsidianProjectSyncVault", () => {
       vault.folders.add(path);
       vault.addFile(`${path}/Arrived from Sync.md`, "Concurrent inbound file\n");
     };
+
+    const result = await adapter.reconcile(
+      {
+        rootProjectId: project.id,
+        projects: [project],
+        tasks: [
+          { task: parent, completed: false },
+          { task: child, completed: false },
+        ],
+        syncedAt: "2026-08-12T01:00:00.000Z",
+      },
+      mapping,
+    );
+
+    expect(result).toMatchObject({ created: 2, moved: 0, deleted: 0 });
+    expect(result.conflicts).toEqual([]);
+    expect(vault.files.get("Sync/Parent/Arrived from Sync.md")?.content).toBe(
+      "Concurrent inbound file\n",
+    );
+    expect(vault.files.has("Sync/Parent/Parent.md")).toBe(true);
+    expect(vault.files.has("Sync/Parent/Child.md")).toBe(true);
+    expect(folderOwnershipStorage.listOwnedFolders(mapping.id)).toEqual([]);
+  });
+
+  it("does not claim a newly created folder whose live folder identity is replaced before recording", async () => {
+    const project = makeProject("root", { name: "Root" });
+    const parent = makeTask("parent", { content: "Parent", project });
+    const child = makeTask("child", { content: "Child", parentId: parent.id, project });
+    let replaced = false;
+
+    const result = await adapter.reconcile(
+      {
+        rootProjectId: project.id,
+        projects: [project],
+        tasks: [
+          { task: parent, completed: false },
+          { task: child, completed: false },
+        ],
+        syncedAt: "2026-08-17T12:00:00.000Z",
+      },
+      mapping,
+      {
+        assertValid: () => {
+          if (!replaced && vault.folders.has("Sync/Parent")) {
+            replaced = true;
+            vault.replaceFolderIdentity("Sync/Parent");
+          }
+        },
+      },
+    );
+
+    expect(result.conflicts).toEqual([]);
+    expect(vault.files.has("Sync/Parent/Parent.md")).toBe(true);
+    expect(vault.files.has("Sync/Parent/Child.md")).toBe(true);
+    expect(folderOwnershipStorage.listOwnedFolders(mapping.id)).toEqual([]);
+  });
+
+  it("records a successfully created folder before propagating run invalidation", async () => {
+    const project = makeProject("root", { name: "Root" });
+    const parent = makeTask("parent", { content: "Parent", project });
+    const child = makeTask("child", { content: "Child", parentId: parent.id, project });
+    let invalidated = false;
 
     await expect(
       adapter.reconcile(
@@ -884,17 +1282,23 @@ describe("ObsidianProjectSyncVault", () => {
             { task: parent, completed: false },
             { task: child, completed: false },
           ],
-          syncedAt: "2026-08-12T01:00:00.000Z",
+          syncedAt: "2026-08-17T12:00:00.000Z",
         },
         mapping,
+        {
+          assertValid: () => {
+            if (!invalidated && vault.folders.has("Sync/Parent")) {
+              invalidated = true;
+              throw new Error("run invalidated after folder creation");
+            }
+          },
+        },
       ),
-    ).rejects.toThrow("changed during synchronization");
+    ).rejects.toThrow("run invalidated after folder creation");
 
-    expect(vault.files.get("Sync/Parent/Arrived from Sync.md")?.content).toBe(
-      "Concurrent inbound file\n",
-    );
-    expect(vault.files.has("Sync/Parent/Parent.md")).toBe(false);
-    expect(vault.files.has("Sync/Parent/Child.md")).toBe(false);
+    expect(folderOwnershipStorage.listOwnedFolders(mapping.id)).toEqual([
+      expect.objectContaining({ ownerId: parent.id, path: "Sync/Parent" }),
+    ]);
   });
 
   it("does not trash an empty obsolete folder after it gains a descendant", async () => {
@@ -912,7 +1316,16 @@ describe("ObsidianProjectSyncVault", () => {
         }
         return await operation();
       },
+      catalogStorage,
+      folderOwnershipStorage,
     );
+    await folderOwnershipStorage.recordCreatedFolder({
+      mappingId: mapping.id,
+      rootProjectId: project.id,
+      ownerKind: "project",
+      ownerId: "obsolete-project",
+      path: "Sync/Obsolete",
+    });
 
     const result = await adapter.reconcile(emptySnapshot(project), mapping);
 
@@ -921,6 +1334,33 @@ describe("ObsidianProjectSyncVault", () => {
     expect(vault.files.get("Sync/Obsolete/Arrived from Sync.md")?.content).toBe(
       "Concurrent inbound file\n",
     );
+    expect(fileManager.trashFile).not.toHaveBeenCalledWith(
+      expect.objectContaining({ path: "Sync/Obsolete" }),
+    );
+  });
+
+  it("preserves an owned folder when the raw adapter sees content missing from the Vault index", async () => {
+    const project = makeProject("root", { name: "Root" });
+    vault.folders.add("Sync/Obsolete");
+    vault.adapter.list.mockResolvedValue({
+      files: ["Sync/Obsolete/Arriving.base"],
+      folders: [],
+    });
+    await folderOwnershipStorage.recordCreatedFolder({
+      mappingId: mapping.id,
+      rootProjectId: project.id,
+      ownerKind: "project",
+      ownerId: "obsolete-project",
+      path: "Sync/Obsolete",
+    });
+
+    const result = await adapter.reconcile(emptySnapshot(project), mapping);
+
+    expect(result.conflicts).toEqual([]);
+    expect(vault.folders.has("Sync/Obsolete")).toBe(true);
+    expect(folderOwnershipStorage.listOwnedFolders(mapping.id)).toEqual([
+      expect.objectContaining({ path: "Sync/Obsolete" }),
+    ]);
     expect(fileManager.trashFile).not.toHaveBeenCalledWith(
       expect.objectContaining({ path: "Sync/Obsolete" }),
     );
@@ -2323,8 +2763,9 @@ describe("ObsidianProjectSyncVault", () => {
     "No SQL",
   ])("moves the complete legacy %s (3) parent subtree to canonical paths in one run", async (title) => {
     const project = makeProject("root", { name: "Root" });
-    const parent = makeTask(`parent-${title}`, { content: title, project });
-    const child = makeTask(`child-${title}`, {
+    const idSuffix = title.replace(/ /gu, "-").toLowerCase();
+    const parent = makeTask(`parent-${idSuffix}`, { content: title, project });
+    const child = makeTask(`child-${idSuffix}`, {
       content: "Child task",
       parentId: parent.id,
       project,
@@ -2375,7 +2816,7 @@ describe("ObsidianProjectSyncVault", () => {
     expect(result.conflicts).toEqual([]);
     expect(vault.files.has(`${legacyFolder}/${title} (3).md`)).toBe(false);
     expect(vault.files.has(`${legacyFolder}/Child task.md`)).toBe(false);
-    expect(vault.folders.has(legacyFolder)).toBe(false);
+    expect(vault.folders.has(legacyFolder)).toBe(true);
     expect(vault.files.get(`Sync/${title}/${title}.md`)?.content).toContain("Parent user notes.");
     expect(vault.files.has(`Sync/${title}/Child task.md`)).toBe(true);
     expect([...vault.files.keys()].some((path) => path.includes(`${title} (3)`))).toBe(false);
@@ -2432,7 +2873,7 @@ describe("ObsidianProjectSyncVault", () => {
     expect(vault.files.has("Sync/Parent/Child.md")).toBe(true);
     expect(vault.files.has("Sync/Parent (2)/Parent (2).md")).toBe(false);
     expect(vault.files.has("Sync/Parent (2)/Child.md")).toBe(false);
-    expect(vault.folders.has("Sync/Parent (2)")).toBe(false);
+    expect(vault.folders.has("Sync/Parent (2)")).toBe(true);
   });
 
   it("stops safely and reports partial cleanup when a later trash operation fails", async () => {
@@ -2525,10 +2966,77 @@ describe("ObsidianProjectSyncVault", () => {
   });
 
   it.each([
+    ["exact", "Sync/Task.md", "Task"],
+    ["case-insensitive", "Sync/TASK.md", "Task"],
+    ["Unicode-normalized", "Sync/Cafe\u0301.md", "Café"],
+  ])("preserves an unmanaged %s canonical-path collision", async (_kind, userPath, title) => {
+    const project = makeProject("root", { name: "Root" });
+    const task = makeTask("protected-collision", { content: title, project });
+    const userFile = vault.addFile(userPath, "User-owned document\n");
+
+    const result = await adapter.reconcile(
+      {
+        rootProjectId: project.id,
+        projects: [project],
+        tasks: [{ task, completed: false }],
+        syncedAt: "2026-08-17T12:00:00.000Z",
+      },
+      mapping,
+    );
+
+    expect(result).toMatchObject({ created: 0, moved: 0, deleted: 0 });
+    expect(result.conflicts).toEqual([
+      expect.objectContaining({
+        taskId: task.id,
+        path: userFile.path,
+        projectionBlocked: true,
+      }),
+    ]);
+    expect(vault.files.get(userFile.path)?.file).toBe(userFile);
+    expect(vault.files.get(userFile.path)?.content).toBe("User-owned document\n");
+    expect(fileManager.trashFile).not.toHaveBeenCalledWith(userFile);
+    expect([...vault.files.keys()].filter((path) => path !== userFile.path)).toEqual([]);
+  });
+
+  it.each([
+    ["exact", "Child", "Sync/Child"],
+    ["case-insensitive", "Child", "Sync/CHILD"],
+    ["Unicode-normalized", "Café", "Sync/Cafe\u0301"],
+  ])("blocks only a project subtree when its %s canonical folder is occupied by a user file", async (_kind, childName, occupantPath) => {
+    const root = makeProject("root", { name: "Root" });
+    const child = makeProject("child", { name: childName, parentId: root.id });
+    const rootTask = makeTask("root-task", { content: "Root task", project: root });
+    const childTask = makeTask("child-task", { content: "Child task", project: child });
+    const occupant = vault.addFile(occupantPath, "User-owned file at the folder path\n");
+
+    const result = await adapter.reconcile(
+      {
+        rootProjectId: root.id,
+        projects: [root, child],
+        tasks: [
+          { task: rootTask, completed: false },
+          { task: childTask, completed: false },
+        ],
+        syncedAt: "2026-08-17T12:00:00.000Z",
+      },
+      mapping,
+    );
+
+    expect(result).toMatchObject({ created: 1, deleted: 0 });
+    expect(result.conflicts).toEqual([
+      expect.objectContaining({ path: occupant.path, projectionBlocked: true }),
+    ]);
+    expect(vault.files.get(occupant.path)?.file).toBe(occupant);
+    expect(vault.files.has("Sync/Root task.md")).toBe(true);
+    expect(vault.files.has(`Sync/${childName}/Child task.md`)).toBe(false);
+    expect(fileManager.trashFile).not.toHaveBeenCalledWith(occupant);
+  });
+
+  it.each([
     ["exact", "Sync/Task.md", "Task", "Sync/Task.md"],
     ["case-insensitive", "Sync/TASK.md", "Task", "Sync/Task.md"],
     ["Unicode-normalized", "Sync/Cafe\u0301.md", "Café", "Sync/Café.md"],
-  ])("trashes an unmanaged %s occupant and reclaims the canonical filename in one run", async (_kind, unmanagedPath, taskTitle, canonicalPath) => {
+  ])("legacy exclusive mode trashes an unmanaged %s occupant and reclaims the canonical filename", async (_kind, unmanagedPath, taskTitle, canonicalPath) => {
     const project = makeProject("root", { name: "Root" });
     const task = makeTask("collision-task", { content: taskTitle, project });
     const unmanaged = vault.addFile(unmanagedPath, "User-owned document\n");
@@ -2539,7 +3047,11 @@ describe("ObsidianProjectSyncVault", () => {
       syncedAt: "2026-08-10T00:00:00.000Z",
     };
 
-    const first = await adapter.reconcile(snapshot, mapping);
+    const legacyContext = {
+      assertValid: () => undefined,
+      preserveUnmanagedItems: false,
+    };
+    const first = await adapter.reconcile(snapshot, mapping, legacyContext);
     const managed = vault.files.get(canonicalPath);
 
     expect(first).toMatchObject({ created: 1, moved: 0, deleted: 1 });
@@ -2549,7 +3061,7 @@ describe("ObsidianProjectSyncVault", () => {
     expect(fileManager.trashFile).toHaveBeenCalledWith(unmanaged);
 
     vi.clearAllMocks();
-    const second = await adapter.reconcile(snapshot, mapping);
+    const second = await adapter.reconcile(snapshot, mapping, legacyContext);
 
     expect(second).toMatchObject({ created: 0, moved: 0, unchanged: 1 });
     expect(vault.files.size).toBe(1);
@@ -2558,7 +3070,7 @@ describe("ObsidianProjectSyncVault", () => {
     expect(fileManager.renameFile).not.toHaveBeenCalled();
   });
 
-  it("recreates exact canonical file and folder types after sweeping wrong-type occupants", async () => {
+  it("legacy exclusive mode recreates canonical types after sweeping wrong-type occupants", async () => {
     const root = makeProject("root", { name: "Root" });
     const child = makeProject("child", { name: "Child", parentId: root.id });
     const rootTask = makeTask("root-task", { content: "Root task", project: root });
@@ -2578,6 +3090,7 @@ describe("ObsidianProjectSyncVault", () => {
         syncedAt: "2026-08-10T00:00:00.000Z",
       },
       mapping,
+      { assertValid: () => undefined, preserveUnmanagedItems: false },
     );
 
     expect(result).toMatchObject({ created: 2, moved: 0, deleted: 1 });
@@ -2590,7 +3103,7 @@ describe("ObsidianProjectSyncVault", () => {
     expect(fileManager.trashFile).toHaveBeenCalledWith(taskFileOccupant);
   });
 
-  it("trashes an unreadable unmanaged occupant and recreates the canonical task note", async () => {
+  it("legacy exclusive mode trashes an unreadable occupant and recreates the task note", async () => {
     const project = makeProject("root", { name: "Root" });
     const task = makeTask("malformed-task", { content: "Task", project });
     const path = "Sync/Task.md";
@@ -2614,6 +3127,7 @@ describe("ObsidianProjectSyncVault", () => {
         syncedAt: "2026-08-10T00:00:00.000Z",
       },
       mapping,
+      { assertValid: () => undefined, preserveUnmanagedItems: false },
     );
 
     expect(result).toMatchObject({ created: 1, updated: 0, moved: 0, deleted: 1 });
@@ -3233,6 +3747,7 @@ describe("ObsidianProjectSyncVault", () => {
             active: true,
           },
         ],
+        preserveUnmanagedItems: false,
       },
     );
 
@@ -3254,6 +3769,7 @@ describe("ObsidianProjectSyncVault", () => {
     expect(() =>
       adapter.validateConfig({
         enabled: false,
+        preserveUnmanagedItems: true,
         mappings: [
           mapping,
           {
@@ -3270,6 +3786,7 @@ describe("ObsidianProjectSyncVault", () => {
     expect(() =>
       adapter.validateConfig({
         enabled: false,
+        preserveUnmanagedItems: true,
         mappings: [
           mapping,
           {
@@ -3295,6 +3812,7 @@ describe("ObsidianProjectSyncVault", () => {
     vault.folders.add(secondFolder);
     const overlapping: ProjectSyncConfig = {
       enabled: true,
+      preserveUnmanagedItems: true,
       mappings: [
         {
           id: "mapping-first",
@@ -3323,6 +3841,7 @@ describe("ObsidianProjectSyncVault", () => {
     expect(() =>
       adapter.validateConfig({
         enabled: true,
+        preserveUnmanagedItems: true,
         mappings: [
           { ...mapping, folder: "Sync/Child" },
           {
@@ -3345,6 +3864,7 @@ describe("ObsidianProjectSyncVault", () => {
     expect(() =>
       adapter.validateConfig({
         enabled: true,
+        preserveUnmanagedItems: true,
         mappings: [
           { ...mapping, folder: "New", previousFolders: ["Old"] },
           {
@@ -3363,6 +3883,7 @@ describe("ObsidianProjectSyncVault", () => {
     expect(() =>
       adapter.validateConfig({
         enabled: true,
+        preserveUnmanagedItems: true,
         mappings: [{ ...mapping, folder }],
       }),
     ).toThrow("dedicated folder");

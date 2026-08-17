@@ -52,6 +52,11 @@ export const en: Translations = {
         label: "Enable project sync",
         description: "Synchronize one or more Todoist projects into independent Vault folder trees",
       },
+      preserveUnmanagedItems: {
+        label: "Preserve unmanaged Vault content",
+        description:
+          "Leave files without a managed Todoist task ID and folders not recorded as Tasks Bridge-created untouched. Tasks Bridge still updates, moves, and removes everything it manages when Todoist changes. Turn this off only for dedicated mirror folders; unmanaged content may then be moved to trash.",
+      },
       mappings: {
         label: "Project mappings",
         description:

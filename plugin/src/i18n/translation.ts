@@ -52,6 +52,10 @@ export type Translations = {
         label: string;
         description: string;
       };
+      preserveUnmanagedItems: {
+        label: string;
+        description: string;
+      };
       mappings: {
         label: string;
         description: string;

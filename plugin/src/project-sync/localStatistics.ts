@@ -539,6 +539,7 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 
 const cloneConfig = (config: ProjectSyncConfig): ProjectSyncConfig => ({
   enabled: config.enabled,
+  preserveUnmanagedItems: config.preserveUnmanagedItems,
   mappings: config.mappings.map((mapping) => ({
     ...mapping,
     project: mapping.project === null ? null : { ...mapping.project },

@@ -140,6 +140,7 @@ describe("ProjectTaskPropertySyncService", () => {
       {
         getConfig: vi.fn(() => ({
           enabled: true,
+          preserveUnmanagedItems: true,
           mappings: [
             {
               id: "mapping-1",

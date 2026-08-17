@@ -406,17 +406,21 @@ export const replaceManagedTaskDocument = (
   };
 };
 
+const todoistTaskIdPattern = /^[A-Za-z0-9][A-Za-z0-9_-]*$/u;
+
 export const readManagedNoteIdentity = (
   frontmatter: ManagedFrontmatter,
 ): ManagedNoteIdentity | null => {
   const taskId = frontmatter.todoist_task_id;
-  if (typeof taskId !== "string" || taskId.trim() === "") {
+  if (
+    typeof taskId !== "string" ||
+    taskId !== taskId.trim() ||
+    !todoistTaskIdPattern.test(taskId)
+  ) {
     return null;
   }
   return { taskId };
 };
-
-const todoistTaskIdPattern = /^[A-Za-z0-9][A-Za-z0-9_-]*$/u;
 
 /**
  * Recover only the immutable task identity from otherwise malformed managed frontmatter.

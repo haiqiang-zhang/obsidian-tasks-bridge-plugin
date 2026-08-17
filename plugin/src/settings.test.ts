@@ -27,6 +27,20 @@ describe("normalizeSettings auto-refresh", () => {
 });
 
 describe("normalizeSettings project sync", () => {
+  it.each([
+    [undefined, true],
+    [true, true],
+    [false, false],
+    [null, true],
+    ["false", true],
+    [0, true],
+  ])("preserves unmanaged Vault items safely for stored value %j", (stored, expected) => {
+    expect(
+      normalizeSettings({ projectSyncPreserveUnmanagedItems: stored })
+        .projectSyncPreserveUnmanagedItems,
+    ).toBe(expected);
+  });
+
   it("drops the retired single-device writer assignment", () => {
     expect(normalizeSettings({ projectSyncWriterId: "device-a" })).not.toHaveProperty(
       "projectSyncWriterId",

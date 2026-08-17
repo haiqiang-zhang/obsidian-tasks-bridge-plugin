@@ -20,17 +20,29 @@ import { ObsidianSyncActivityGate } from "@/infra/obsidianSyncGate";
 import { secondsToMillis } from "@/infra/time";
 import {
   cloneProjectCatalog,
+  decodeProjectSyncFolderOwnershipRegistry,
+  emptyProjectSyncFolderOwnershipRegistry,
   isProjectSyncPath,
+  listOwnedFolders,
   MANAGED_TASK_CODE_BLOCK,
+  type ManagedFolderCreation,
   mergeProjectCatalogCollections,
+  mergeProjectSyncFolderOwnershipRegistries,
+  PROJECT_SYNC_FOLDER_OWNERSHIP_DATA_KEY,
   type ProjectCatalog,
   type ProjectCatalogCollection,
   type ProjectCatalogStorage,
   ProjectSyncActivityTracker,
   type ProjectSyncConfig,
+  type ProjectSyncFolderOwnershipOpaqueData,
+  type ProjectSyncFolderOwnershipRegistry,
+  type ProjectSyncFolderOwnershipStorage,
   type ProjectSyncResult,
   readProjectCatalogCollection,
+  recordCreatedFolders as recordCreatedFolderOwnership,
+  releaseOwnedFolderPaths as releaseFolderOwnership,
   withProjectCatalogCollection,
+  withProjectSyncFolderOwnershipRegistry,
 } from "@/project-sync";
 import { ProjectTaskCardInjector } from "@/project-sync/taskCardInjector";
 import { QueryInjector } from "@/query/injector";
@@ -50,6 +62,9 @@ import { SettingsTab } from "@/ui/settings";
 const hexadecimalRadix = 16;
 const byteHexWidth = 2;
 const queryCacheStorageKey = "tasks-bridge:query-cache:v2";
+const projectSyncFolderOwnershipStorageKey = "tasks-bridge:project-sync-folder-ownership:v2";
+const projectSyncFolderOwnershipRetryInitialMs = 1000;
+const projectSyncFolderOwnershipRetryMaximumMs = 30_000;
 
 type AsyncGeneration = {
   apiToken: number;
@@ -61,6 +76,7 @@ export default class TodoistPlugin extends Plugin {
   public readonly services: Services;
   public readonly queryCache = new QueryCache();
   public readonly projectCatalogStorage: ProjectCatalogStorage;
+  public readonly projectSyncFolderOwnershipStorage: ProjectSyncFolderOwnershipStorage;
 
   private settingsQueue: Promise<void> = Promise.resolve();
   private settingsOperationGeneration = 0;
@@ -76,6 +92,13 @@ export default class TodoistPlugin extends Plugin {
   private readonly obsidianSyncGate: ObsidianSyncActivityGate;
   private disposed = false;
   private projectCatalogs: ProjectCatalogCollection = {};
+  private projectSyncFolderOwnership: ProjectSyncFolderOwnershipRegistry =
+    emptyProjectSyncFolderOwnershipRegistry();
+  private projectSyncFolderOwnershipOpaque: ProjectSyncFolderOwnershipOpaqueData | undefined;
+  private projectSyncFolderOwnershipNeedsPersist = false;
+  private projectSyncFolderOwnershipShadowIsOpaque = false;
+  private projectSyncFolderOwnershipRetryTimeoutId: number | undefined;
+  private projectSyncFolderOwnershipRetryDelayMs = projectSyncFolderOwnershipRetryInitialMs;
 
   constructor(app: App, pluginManifest: PluginManifest) {
     super(app, pluginManifest);
@@ -85,6 +108,18 @@ export default class TodoistPlugin extends Plugin {
         return catalog === undefined ? null : cloneProjectCatalog(catalog);
       },
       persistCatalogs: async (catalogs) => await this.persistProjectCatalogs(catalogs),
+    };
+    this.projectSyncFolderOwnershipStorage = {
+      listOwnedFolders: (mappingId) =>
+        this.projectSyncFolderOwnershipShadowIsOpaque
+          ? []
+          : listOwnedFolders(this.projectSyncFolderOwnership, mappingId),
+      recordCreatedFolder: async (input) => await this.persistCreatedFolders([input]),
+      recordCreatedFolders: async (inputs) => await this.persistCreatedFolders(inputs),
+      releaseOwnedFolderPath: async (mappingId, path) =>
+        await this.persistReleasedFolderPaths(mappingId, [path]),
+      releaseOwnedFolderPaths: async (mappingId, paths) =>
+        await this.persistReleasedFolderPaths(mappingId, paths),
     };
     this.services = makeServices(this);
     this.obsidianSyncGate = new ObsidianSyncActivityGate(app, {
@@ -228,6 +263,7 @@ export default class TodoistPlugin extends Plugin {
 
     this.disposed = true;
     this.clearAutoRefreshSchedule();
+    this.clearProjectSyncFolderOwnershipRetry();
     this.obsidianSyncGate.dispose();
     this.apiTokenGeneration++;
     this.projectSyncConfigGeneration++;
@@ -273,10 +309,56 @@ export default class TodoistPlugin extends Plugin {
 
       const options = normalizeSettings(storedData);
       this.projectCatalogs = readProjectCatalogCollection(storedData);
+      const storedFolderOwnership = decodeProjectSyncFolderOwnershipRegistry(storedData);
+      const localFolderOwnership = decodeProjectSyncFolderOwnershipRegistry(
+        this.app.loadLocalStorage(projectSyncFolderOwnershipStorageKey),
+      );
+      this.projectSyncFolderOwnershipShadowIsOpaque = localFolderOwnership.status === "opaque";
+      let folderOwnershipNeedsRestore = false;
+      if (storedFolderOwnership.status === "opaque") {
+        // A future or malformed synchronized schema must never be rewritten or interpreted as
+        // deletion authority. Keep it byte-for-byte and disable folder cleanup until supported.
+        this.projectSyncFolderOwnership = emptyProjectSyncFolderOwnershipRegistry();
+        this.projectSyncFolderOwnershipOpaque = storedFolderOwnership.opaque;
+        this.projectSyncFolderOwnershipNeedsPersist = false;
+      } else if (this.projectSyncFolderOwnershipShadowIsOpaque) {
+        // A downgraded plugin cannot safely interpret or overwrite a newer device-local safety
+        // shadow. Keep synchronized data intact, but grant no folder-deletion authority.
+        this.projectSyncFolderOwnership = storedFolderOwnership.registry;
+        this.projectSyncFolderOwnershipOpaque = undefined;
+        this.projectSyncFolderOwnershipNeedsPersist = false;
+      } else {
+        // Device-local storage is only a safety journal for revocations. Restoring active grants
+        // after data.json was reset could make an unrelated same-path folder deletable.
+        const localRevocations = hasFolderOwnershipRecoveryContext(storedData)
+          ? folderOwnershipRevocationsOnly(localFolderOwnership.registry)
+          : emptyProjectSyncFolderOwnershipRegistry();
+        const mergedFolderOwnership = mergeProjectSyncFolderOwnershipRegistries(
+          storedFolderOwnership.registry,
+          localRevocations,
+        );
+        folderOwnershipNeedsRestore =
+          JSON.stringify(mergedFolderOwnership) !== JSON.stringify(storedFolderOwnership.registry);
+        this.projectSyncFolderOwnership = mergedFolderOwnership;
+        this.projectSyncFolderOwnershipOpaque = undefined;
+        this.projectSyncFolderOwnershipNeedsPersist = folderOwnershipNeedsRestore;
+        if (
+          !isEmptyProjectSyncFolderOwnershipRegistry(mergedFolderOwnership) ||
+          localFolderOwnership.status !== "missing"
+        ) {
+          this.persistProjectSyncFolderOwnershipShadow();
+        }
+      }
+      const folderOwnershipScopesRevoked =
+        this.releaseProjectSyncFolderOwnershipOutsideSettings(options);
       useSettingsStore.setState(options, true);
       this.applyProjectSyncConfig();
 
-      if (!hasCanonicalStoredSettings(storedData, options)) {
+      if (
+        folderOwnershipNeedsRestore ||
+        folderOwnershipScopesRevoked ||
+        !hasCanonicalStoredSettings(storedData, options)
+      ) {
         // Besides normalizing legacy settings, this removes the legacy queryCache field after it
         // has been migrated to vault-specific, device-local storage.
         await this.persistSettings();
@@ -303,6 +385,7 @@ export default class TodoistPlugin extends Plugin {
             };
       const previousSettings = useSettingsStore.getState();
       useSettingsStore.setState(normalizedUpdate);
+      this.releaseProjectSyncFolderOwnershipOutsideSettings(useSettingsStore.getState());
       this.applySettingsRuntime(previousSettings);
       await this.persistSettings();
     });
@@ -330,6 +413,38 @@ export default class TodoistPlugin extends Plugin {
       const catalogsNeedRestore =
         JSON.stringify(mergedCatalogs) !== JSON.stringify(externalCatalogs);
       this.projectCatalogs = mergedCatalogs;
+      const externalFolderOwnership = decodeProjectSyncFolderOwnershipRegistry(storedData);
+      let folderOwnershipNeedsRestore = false;
+      if (externalFolderOwnership.status === "opaque") {
+        // An unsupported synchronized schema takes precedence over locally understood data. It is
+        // preserved exactly and folder deletion authority is disabled, while the device-local
+        // shadow remains available to a future compatible version.
+        this.projectSyncFolderOwnership = emptyProjectSyncFolderOwnershipRegistry();
+        this.projectSyncFolderOwnershipOpaque = externalFolderOwnership.opaque;
+        this.projectSyncFolderOwnershipNeedsPersist = false;
+      } else if (this.projectSyncFolderOwnershipOpaque !== undefined) {
+        // A current process that already observed an unsupported newer schema must not replace it
+        // with an older device's valid-but-stale envelope.
+        folderOwnershipNeedsRestore = true;
+        this.projectSyncFolderOwnershipNeedsPersist = true;
+      } else if (this.projectSyncFolderOwnershipShadowIsOpaque) {
+        // Do not merge or rewrite ownership while a newer local safety journal is present.
+        this.projectSyncFolderOwnership = externalFolderOwnership.registry;
+        this.projectSyncFolderOwnershipNeedsPersist = false;
+      } else {
+        const mergedFolderOwnership = mergeProjectSyncFolderOwnershipRegistries(
+          this.projectSyncFolderOwnership,
+          externalFolderOwnership.registry,
+        );
+        folderOwnershipNeedsRestore =
+          JSON.stringify(mergedFolderOwnership) !==
+          JSON.stringify(externalFolderOwnership.registry);
+        this.projectSyncFolderOwnership = mergedFolderOwnership;
+        this.projectSyncFolderOwnershipNeedsPersist ||= folderOwnershipNeedsRestore;
+        if (!isEmptyProjectSyncFolderOwnershipRegistry(mergedFolderOwnership)) {
+          this.persistProjectSyncFolderOwnershipShadow();
+        }
+      }
       const nextSettings = normalizeSettings(
         mergeExternalStoredSettings(storedData, previousSettings),
       );
@@ -337,6 +452,8 @@ export default class TodoistPlugin extends Plugin {
         previousSettings,
         nextSettings,
       );
+      const folderOwnershipScopesRevoked =
+        this.releaseProjectSyncFolderOwnershipOutsideSettings(nextSettings);
       useSettingsStore.setState(nextSettings, true);
       this.applySettingsRuntime(previousSettings);
       this.services.projectSync.reloadStatisticsCatalogs();
@@ -347,6 +464,8 @@ export default class TodoistPlugin extends Plugin {
       if (
         restoreAfterOlderSettingsOperation ||
         catalogsNeedRestore ||
+        folderOwnershipNeedsRestore ||
+        folderOwnershipScopesRevoked ||
         !hasCanonicalStoredSettings(storedData, nextSettings)
       ) {
         // Restore the captured external version after any older in-flight local save and ensure a
@@ -810,14 +929,27 @@ export default class TodoistPlugin extends Plugin {
     return pending;
   }
 
-  private persistSettings(): Promise<void> {
+  private async persistSettings(): Promise<void> {
     if (this.disposed) {
-      return Promise.resolve();
+      return;
     }
 
-    return this.saveData(
-      withProjectCatalogCollection({ ...useSettingsStore.getState() }, this.projectCatalogs),
-    );
+    try {
+      await this.saveData(
+        withProjectSyncFolderOwnershipRegistry(
+          withProjectCatalogCollection({ ...useSettingsStore.getState() }, this.projectCatalogs),
+          this.projectSyncFolderOwnership,
+          this.projectSyncFolderOwnershipOpaque,
+        ),
+      );
+      this.projectSyncFolderOwnershipNeedsPersist = false;
+      this.clearProjectSyncFolderOwnershipRetry();
+    } catch (error: unknown) {
+      if (this.projectSyncFolderOwnershipNeedsPersist) {
+        this.scheduleProjectSyncFolderOwnershipRetry();
+      }
+      throw error;
+    }
   }
 
   private persistProjectCatalogs(catalogs: readonly ProjectCatalog[]): Promise<void> {
@@ -842,6 +974,185 @@ export default class TodoistPlugin extends Plugin {
     });
   }
 
+  private persistCreatedFolders(inputs: readonly ManagedFolderCreation[]): Promise<void> {
+    if (
+      this.disposed ||
+      this.projectSyncFolderOwnershipOpaque !== undefined ||
+      this.projectSyncFolderOwnershipShadowIsOpaque
+    ) {
+      return Promise.resolve();
+    }
+    return this.enqueueSettingsOperation(async () => {
+      if (
+        this.disposed ||
+        this.projectSyncFolderOwnershipOpaque !== undefined ||
+        this.projectSyncFolderOwnershipShadowIsOpaque
+      ) {
+        return;
+      }
+      const next = recordCreatedFolderOwnership(this.projectSyncFolderOwnership, inputs);
+      if (JSON.stringify(next) !== JSON.stringify(this.projectSyncFolderOwnership)) {
+        this.projectSyncFolderOwnership = next;
+        this.markProjectSyncFolderOwnershipDirty();
+      }
+      if (this.projectSyncFolderOwnershipNeedsPersist) {
+        await this.persistSettings();
+      }
+    });
+  }
+
+  private persistReleasedFolderPaths(mappingId: string, paths: readonly string[]): Promise<void> {
+    if (
+      this.disposed ||
+      paths.length === 0 ||
+      this.projectSyncFolderOwnershipOpaque !== undefined ||
+      this.projectSyncFolderOwnershipShadowIsOpaque
+    ) {
+      return Promise.resolve();
+    }
+    return this.enqueueSettingsOperation(async () => {
+      if (
+        this.disposed ||
+        this.projectSyncFolderOwnershipOpaque !== undefined ||
+        this.projectSyncFolderOwnershipShadowIsOpaque
+      ) {
+        return;
+      }
+      const next = releaseFolderOwnership(this.projectSyncFolderOwnership, mappingId, paths);
+      if (JSON.stringify(next) !== JSON.stringify(this.projectSyncFolderOwnership)) {
+        this.projectSyncFolderOwnership = next;
+        this.markProjectSyncFolderOwnershipDirty();
+      }
+      if (this.projectSyncFolderOwnershipNeedsPersist) {
+        await this.persistSettings();
+      }
+    });
+  }
+
+  private persistReleasedFolderPathsAcrossMappings(paths: readonly string[]): Promise<void> {
+    if (
+      this.disposed ||
+      paths.length === 0 ||
+      this.projectSyncFolderOwnershipOpaque !== undefined ||
+      this.projectSyncFolderOwnershipShadowIsOpaque
+    ) {
+      return Promise.resolve();
+    }
+    return this.enqueueSettingsOperation(async () => {
+      if (
+        this.disposed ||
+        this.projectSyncFolderOwnershipOpaque !== undefined ||
+        this.projectSyncFolderOwnershipShadowIsOpaque
+      ) {
+        return;
+      }
+      let next = this.projectSyncFolderOwnership;
+      for (const mappingId of new Set(next.records.map(({ mappingId }) => mappingId))) {
+        next = releaseFolderOwnership(next, mappingId, paths);
+      }
+      if (JSON.stringify(next) !== JSON.stringify(this.projectSyncFolderOwnership)) {
+        this.projectSyncFolderOwnership = next;
+        this.markProjectSyncFolderOwnershipDirty();
+      }
+      if (this.projectSyncFolderOwnershipNeedsPersist) {
+        await this.persistSettings();
+      }
+    });
+  }
+
+  private markProjectSyncFolderOwnershipDirty(): void {
+    this.projectSyncFolderOwnershipNeedsPersist = true;
+    this.persistProjectSyncFolderOwnershipShadow();
+  }
+
+  private persistProjectSyncFolderOwnershipShadow(): void {
+    if (this.projectSyncFolderOwnershipShadowIsOpaque) {
+      return;
+    }
+    try {
+      this.app.saveLocalStorage(
+        projectSyncFolderOwnershipStorageKey,
+        withProjectSyncFolderOwnershipRegistry(
+          {},
+          folderOwnershipRevocationsOnly(this.projectSyncFolderOwnership),
+        ),
+      );
+    } catch (error: unknown) {
+      // Local storage is a best-effort crash journal. Its quota must never prevent the
+      // authoritative synchronized data.json save from proceeding.
+      console.error("Failed to persist the Project sync folder safety journal:", error);
+    }
+  }
+
+  private scheduleProjectSyncFolderOwnershipRetry(): void {
+    if (
+      this.disposed ||
+      !this.projectSyncFolderOwnershipNeedsPersist ||
+      this.projectSyncFolderOwnershipRetryTimeoutId !== undefined
+    ) {
+      return;
+    }
+
+    const delay = this.projectSyncFolderOwnershipRetryDelayMs;
+    this.projectSyncFolderOwnershipRetryDelayMs = Math.min(
+      delay * 2,
+      projectSyncFolderOwnershipRetryMaximumMs,
+    );
+    this.projectSyncFolderOwnershipRetryTimeoutId = window.setTimeout(() => {
+      this.projectSyncFolderOwnershipRetryTimeoutId = undefined;
+      void this.enqueueSettingsOperation(async () => {
+        if (!this.disposed && this.projectSyncFolderOwnershipNeedsPersist) {
+          await this.persistSettings();
+        }
+      }).catch((error: unknown) => {
+        if (!this.disposed) {
+          console.error("Failed to retry Project sync folder ownership persistence:", error);
+        }
+      });
+    }, delay);
+  }
+
+  private clearProjectSyncFolderOwnershipRetry(): void {
+    if (this.projectSyncFolderOwnershipRetryTimeoutId !== undefined) {
+      window.clearTimeout(this.projectSyncFolderOwnershipRetryTimeoutId);
+      this.projectSyncFolderOwnershipRetryTimeoutId = undefined;
+    }
+    this.projectSyncFolderOwnershipRetryDelayMs = projectSyncFolderOwnershipRetryInitialMs;
+  }
+
+  private releaseProjectSyncFolderOwnershipOutsideSettings(next: Settings): boolean {
+    if (
+      this.projectSyncFolderOwnershipOpaque !== undefined ||
+      this.projectSyncFolderOwnershipShadowIsOpaque
+    ) {
+      return false;
+    }
+    const activeScopes = new Map(
+      next.projectSyncMappings.flatMap((mapping) =>
+        mapping.project === null ? [] : [[mapping.id, mapping.project.projectId] as const],
+      ),
+    );
+    let updated = this.projectSyncFolderOwnership;
+    const pathsByMapping = new Map<string, string[]>();
+    for (const ownership of updated.records) {
+      if (activeScopes.get(ownership.mappingId) === ownership.rootProjectId) {
+        continue;
+      }
+      const paths = pathsByMapping.get(ownership.mappingId) ?? [];
+      paths.push(ownership.path);
+      pathsByMapping.set(ownership.mappingId, paths);
+    }
+    for (const [mappingId, paths] of pathsByMapping) {
+      updated = releaseFolderOwnership(updated, mappingId, paths);
+    }
+    if (JSON.stringify(updated) === JSON.stringify(this.projectSyncFolderOwnership)) {
+      return false;
+    }
+    this.projectSyncFolderOwnership = updated;
+    this.markProjectSyncFolderOwnershipDirty();
+    return true;
+  }
+
   private persistQueryCache(): Promise<void> {
     if (this.disposed) {
       return Promise.resolve();
@@ -850,7 +1161,7 @@ export default class TodoistPlugin extends Plugin {
     return Promise.resolve();
   }
 
-  private static readonly settingsVersion = 5;
+  private static readonly settingsVersion = 6;
 
   private async applyMigrations(): Promise<void> {
     const migrations: Record<number, () => Promise<void>> = {
@@ -871,6 +1182,10 @@ export default class TodoistPlugin extends Plugin {
       5: async () => {
         // The single-device writer assignment is retired. Settings normalization removes the
         // legacy field, and every updated device may now run inbound-aware automatic projection.
+      },
+      6: async () => {
+        // Project sync now preserves unmanaged Vault content unless the user explicitly opts out.
+        // Settings normalization supplies the fail-safe default for existing installations.
       },
     };
 
@@ -957,12 +1272,26 @@ export default class TodoistPlugin extends Plugin {
     const record = (path: string) => this.recordProjectSyncVaultActivity(path);
     this.registerEvent(this.app.vault.on("create", (file) => record(file.path)));
     this.registerEvent(this.app.vault.on("modify", (file) => record(file.path)));
-    this.registerEvent(this.app.vault.on("delete", (file) => record(file.path)));
+    this.registerEvent(
+      this.app.vault.on("delete", (file) => {
+        this.releaseFolderOwnershipAfterVaultReplacement(file.path);
+        record(file.path);
+      }),
+    );
     this.registerEvent(
       this.app.vault.on("rename", (file, oldPath) => {
+        this.releaseFolderOwnershipAfterVaultReplacement(oldPath);
         this.recordProjectSyncVaultActivity(oldPath, file.path);
       }),
     );
+  }
+
+  private releaseFolderOwnershipAfterVaultReplacement(path: string): void {
+    void this.persistReleasedFolderPathsAcrossMappings([path]).catch((error: unknown) => {
+      if (!this.disposed) {
+        console.error("Failed to release replaced Project sync folder ownership:", error);
+      }
+    });
   }
 
   private recordProjectSyncVaultActivity(...paths: string[]): void {
@@ -983,12 +1312,41 @@ const isRecord = (value: unknown): value is Record<string, unknown> => {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 };
 
-const hasCanonicalStoredSettings = (storedData: unknown, settings: Settings): boolean =>
+const isEmptyProjectSyncFolderOwnershipRegistry = (
+  registry: ProjectSyncFolderOwnershipRegistry,
+): boolean =>
+  registry.records.length === 0 &&
+  registry.tombstones.length === 0 &&
+  registry.pathTombstones.length === 0;
+
+const folderOwnershipRevocationsOnly = (
+  registry: ProjectSyncFolderOwnershipRegistry,
+): ProjectSyncFolderOwnershipRegistry => ({
+  records: [],
+  tombstones: registry.tombstones,
+  pathTombstones: registry.pathTombstones,
+});
+
+const hasFolderOwnershipRecoveryContext = (storedData: unknown): boolean =>
   isRecord(storedData) &&
-  JSON.stringify(storedData) ===
+  (typeof storedData.version === "number" || PROJECT_SYNC_FOLDER_OWNERSHIP_DATA_KEY in storedData);
+
+const hasCanonicalStoredSettings = (storedData: unknown, settings: Settings): boolean => {
+  if (!isRecord(storedData)) {
+    return false;
+  }
+  const folderOwnership = decodeProjectSyncFolderOwnershipRegistry(storedData);
+  return (
+    JSON.stringify(storedData) ===
     JSON.stringify(
-      withProjectCatalogCollection({ ...settings }, readProjectCatalogCollection(storedData)),
-    );
+      withProjectSyncFolderOwnershipRegistry(
+        withProjectCatalogCollection({ ...settings }, readProjectCatalogCollection(storedData)),
+        folderOwnership.registry,
+        folderOwnership.opaque,
+      ),
+    )
+  );
+};
 
 const hasDifferentCredentialSettings = (left: Settings, right: Settings): boolean =>
   left.apiTokenSecretId !== right.apiTokenSecretId || left.tokenStorage !== right.tokenStorage;
@@ -1003,6 +1361,7 @@ const mergeExternalStoredSettings = (
 
   const merged: Record<string, unknown> = { ...previousSettings, ...storedData };
   delete merged.projectSyncCatalogs;
+  delete merged[PROJECT_SYNC_FOLDER_OWNERSHIP_DATA_KEY];
   const externalVersion =
     typeof storedData.version === "number" && Number.isFinite(storedData.version)
       ? Math.max(0, Math.floor(storedData.version))
@@ -1025,11 +1384,13 @@ const mergeExternalStoredSettings = (
 
 const projectSyncConfigFromSettings = (settings: Settings): ProjectSyncConfig => ({
   enabled: settings.projectSyncEnabled,
+  preserveUnmanagedItems: settings.projectSyncPreserveUnmanagedItems,
   mappings: settings.projectSyncMappings,
 });
 
 const isSameProjectSyncConfig = (left: ProjectSyncConfig, right: ProjectSyncConfig): boolean =>
   left.enabled === right.enabled &&
+  left.preserveUnmanagedItems === right.preserveUnmanagedItems &&
   left.mappings.length === right.mappings.length &&
   left.mappings.every((mapping, index) => {
     const other = right.mappings[index];

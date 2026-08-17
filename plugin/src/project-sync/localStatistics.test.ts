@@ -157,7 +157,11 @@ const mapping: ProjectSyncMapping = {
   previousFolders: [],
 };
 
-const config: ProjectSyncConfig = { enabled: true, mappings: [mapping] };
+const config: ProjectSyncConfig = {
+  enabled: true,
+  preserveUnmanagedItems: true,
+  mappings: [mapping],
+};
 
 describe("ObsidianProjectSyncStatisticsRepository", () => {
   let vault: FakeVault;

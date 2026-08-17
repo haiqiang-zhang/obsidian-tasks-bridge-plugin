@@ -10,6 +10,7 @@ export type { ProjectSyncMapping } from "@/settings";
 
 export type ProjectSyncConfig = {
   enabled: boolean;
+  preserveUnmanagedItems: boolean;
   mappings: ProjectSyncMapping[];
 };
 
@@ -114,6 +115,8 @@ export type ProjectSyncMappingRoot = {
 
 export type ProjectSyncRunContext = {
   assertValid(): void;
+  /** Whether Vault entries not positively identified as Tasks Bridge-owned must be preserved. */
+  preserveUnmanagedItems?: boolean;
   mappingRoots?: readonly ProjectSyncMappingRoot[];
   /** Every task ID present in the complete multi-mapping Todoist snapshot for this run. */
   allSnapshotTaskIds?: ReadonlySet<string>;

@@ -25,6 +25,27 @@ export {
   readManagedNoteIdentity,
   replaceManagedBody,
 } from "./document";
+export {
+  cloneProjectSyncFolderOwnershipRegistry,
+  decodeProjectSyncFolderOwnershipRegistry,
+  emptyProjectSyncFolderOwnershipRegistry,
+  listOwnedFolders,
+  type ManagedFolderCreation,
+  type ManagedFolderOwnerKind,
+  type ManagedFolderOwnership,
+  type ManagedFolderPathTombstone,
+  mergeProjectSyncFolderOwnershipRegistries,
+  PROJECT_SYNC_FOLDER_OWNERSHIP_DATA_KEY,
+  PROJECT_SYNC_FOLDER_OWNERSHIP_SCHEMA_VERSION,
+  type ProjectSyncFolderOwnershipOpaqueData,
+  type ProjectSyncFolderOwnershipReadResult,
+  type ProjectSyncFolderOwnershipRegistry,
+  type ProjectSyncFolderOwnershipStorage,
+  readProjectSyncFolderOwnershipRegistry,
+  recordCreatedFolders,
+  releaseOwnedFolderPaths,
+  withProjectSyncFolderOwnershipRegistry,
+} from "./folderOwnership";
 export { projectNamePath, selectProjectHierarchy } from "./hierarchy";
 export {
   LEGACY_PROJECT_CATALOG_FOLDER,

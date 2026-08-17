@@ -8,6 +8,7 @@ export function makeSettings(overrides?: Partial<Settings>): Settings {
     autoRefreshToggle: false,
     autoRefreshInterval: 60,
     projectSyncEnabled: false,
+    projectSyncPreserveUnmanagedItems: true,
     projectSyncMappings: [],
     renderDateIcon: true,
     renderProjectIcon: true,

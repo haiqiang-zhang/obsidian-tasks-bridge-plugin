@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TodoistListActions, TodoistListTaskRecord } from "@/bases/todoist-list";
 import { makeSettings } from "@/factories/settings";
 import { OBSIDIAN_SYNC_SETTLE_MS } from "@/infra/obsidianSyncGate";
-import type { ProjectSyncResult } from "@/project-sync";
+import { PROJECT_SYNC_FOLDER_OWNERSHIP_DATA_KEY, type ProjectSyncResult } from "@/project-sync";
 import { ProjectTaskProjectionError } from "@/services/projectTaskCommands";
 
 const runtime = vi.hoisted(() => ({
@@ -215,11 +215,20 @@ const defaultSettings = (overrides: Record<string, unknown> = {}): Record<string
   autoRefreshInterval: 60,
   autoRefreshToggle: false,
   projectSyncEnabled: false,
+  projectSyncPreserveUnmanagedItems: true,
   projectSyncMappings: [],
   tokenStorage: "secrets",
   version: 1,
   ...overrides,
 });
+
+const workProjectSyncMapping = {
+  id: "mapping-work",
+  project: { projectId: "work", projectName: "Work" },
+  folder: "Task Projects/Work",
+  includeSubprojects: true,
+  previousFolders: [],
+};
 
 const emptyResult = (): ProjectSyncResult => ({
   conflicts: [],
@@ -244,6 +253,7 @@ const makeServices = () => ({
     dispose: vi.fn(),
     getConfig: vi.fn(() => ({
       enabled: false,
+      preserveUnmanagedItems: true,
       mappings: [],
     })),
     getStatus: vi.fn(() => ({ state: "disabled" as const })),
@@ -533,6 +543,7 @@ describe("TodoistPlugin async lifecycle", () => {
     expect(runtime.settings.current).not.toHaveProperty("removedLegacyOption");
     expect(services.projectSync.setConfig).toHaveBeenCalledWith({
       enabled: true,
+      preserveUnmanagedItems: true,
       mappings: [
         expect.objectContaining({
           id: expect.any(String),
@@ -568,6 +579,21 @@ describe("TodoistPlugin async lifecycle", () => {
     expect(runtime.saveLocalStorage).toHaveBeenCalledWith("tasks-bridge:query-cache:v2", {});
     const lastSave = runtime.saveData.mock.calls[runtime.saveData.mock.calls.length - 1]?.[0];
     expect(lastSave).not.toHaveProperty("queryCache");
+  });
+
+  it("propagates an explicit unmanaged-content opt-out into Project sync", async () => {
+    const services = makeServices();
+    runtime.loadData.mockResolvedValueOnce(
+      defaultSettings({ projectSyncPreserveUnmanagedItems: false }),
+    );
+    const plugin = makePlugin(services);
+
+    await plugin.loadOptions();
+
+    expect(runtime.settings.current.projectSyncPreserveUnmanagedItems).toBe(false);
+    expect(services.projectSync.setConfig).toHaveBeenLastCalledWith(
+      expect.objectContaining({ preserveUnmanagedItems: false }),
+    );
   });
 
   it("does not rewrite an already canonical settings file during startup", async () => {
@@ -673,6 +699,726 @@ describe("TodoistPlugin async lifecycle", () => {
     );
   });
 
+  it("loads folder ownership from plugin data and batches durable creation records", async () => {
+    const services = makeServices();
+    runtime.loadData.mockResolvedValueOnce({
+      ...makeSettings({ projectSyncMappings: [workProjectSyncMapping] }),
+      [PROJECT_SYNC_FOLDER_OWNERSHIP_DATA_KEY]: {
+        version: 1,
+        records: [
+          {
+            creationId: "created-child",
+            mappingId: "mapping-work",
+            rootProjectId: "work",
+            ownerKind: "project",
+            ownerId: "child",
+            path: "Task Projects/Work/Child",
+          },
+        ],
+        tombstones: [],
+      },
+    });
+    const plugin = makePlugin(services);
+    await plugin.loadOptions();
+    runtime.saveData.mockClear();
+
+    const listed = plugin.projectSyncFolderOwnershipStorage.listOwnedFolders("mapping-work");
+    expect(listed).toEqual([
+      expect.objectContaining({
+        creationId: "created-child",
+        path: "Task Projects/Work/Child",
+      }),
+    ]);
+    listed[0].path = "Changed by caller";
+    expect(plugin.projectSyncFolderOwnershipStorage.listOwnedFolders("mapping-work")[0]?.path).toBe(
+      "Task Projects/Work/Child",
+    );
+
+    await plugin.projectSyncFolderOwnershipStorage.recordCreatedFolders([
+      {
+        mappingId: "mapping-work",
+        rootProjectId: "work",
+        ownerKind: "project",
+        ownerId: "second",
+        path: "Task Projects/Work/Second",
+      },
+      {
+        mappingId: "mapping-work",
+        rootProjectId: "work",
+        ownerKind: "task",
+        ownerId: "parent-task",
+        path: "Task Projects/Work/Parent task",
+      },
+    ]);
+
+    expect(runtime.saveData).toHaveBeenCalledOnce();
+    expect(runtime.saveData).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        [PROJECT_SYNC_FOLDER_OWNERSHIP_DATA_KEY]: expect.objectContaining({
+          version: 2,
+          records: expect.arrayContaining([
+            expect.objectContaining({ path: "Task Projects/Work/Child" }),
+            expect.objectContaining({ path: "Task Projects/Work/Second" }),
+            expect.objectContaining({ path: "Task Projects/Work/Parent task" }),
+          ]),
+        }),
+      }),
+    );
+
+    runtime.saveData.mockClear();
+    await plugin.projectSyncFolderOwnershipStorage.recordCreatedFolder({
+      mappingId: "mapping-work",
+      rootProjectId: "work",
+      ownerKind: "project",
+      ownerId: "second",
+      path: "task projects/work/second",
+    });
+    expect(runtime.saveData).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["is no longer configured", []],
+    [
+      "now points at a different Todoist root",
+      [
+        {
+          ...workProjectSyncMapping,
+          project: { projectId: "personal", projectName: "Personal" },
+        },
+      ],
+    ],
+  ])("revokes loaded folder ownership when its mapping %s", async (_label, mappings) => {
+    const services = makeServices();
+    runtime.loadData.mockResolvedValueOnce({
+      ...makeSettings({ projectSyncMappings: mappings }),
+      [PROJECT_SYNC_FOLDER_OWNERSHIP_DATA_KEY]: {
+        version: 1,
+        records: [
+          {
+            creationId: "created-child",
+            mappingId: "mapping-work",
+            rootProjectId: "work",
+            ownerKind: "project",
+            ownerId: "child",
+            path: "Task Projects/Work/Child",
+          },
+        ],
+        tombstones: [],
+      },
+    });
+    const plugin = makePlugin(services);
+
+    await plugin.loadOptions();
+
+    expect(plugin.projectSyncFolderOwnershipStorage.listOwnedFolders("mapping-work")).toEqual([]);
+    expect(runtime.saveData).toHaveBeenCalledWith(
+      expect.objectContaining({
+        [PROJECT_SYNC_FOLDER_OWNERSHIP_DATA_KEY]: expect.objectContaining({
+          records: [],
+          pathTombstones: [
+            expect.objectContaining({
+              mappingId: "mapping-work",
+              path: "Task Projects/Work/Child",
+            }),
+          ],
+        }),
+      }),
+    );
+  });
+
+  it("keeps current folder ownership when an older external payload omits the registry", async () => {
+    const services = makeServices();
+    runtime.loadData.mockResolvedValueOnce({
+      ...makeSettings({ projectSyncMappings: [workProjectSyncMapping] }),
+      [PROJECT_SYNC_FOLDER_OWNERSHIP_DATA_KEY]: {
+        version: 1,
+        records: [
+          {
+            creationId: "created-child",
+            mappingId: "mapping-work",
+            rootProjectId: "work",
+            ownerKind: "project",
+            ownerId: "child",
+            path: "Task Projects/Work/Child",
+          },
+        ],
+        tombstones: [],
+      },
+    });
+    const plugin = makePlugin(services);
+    await plugin.loadOptions();
+    runtime.saveData.mockClear();
+    runtime.loadData.mockResolvedValueOnce(
+      makeSettings({
+        debugLogging: true,
+        projectSyncMappings: [workProjectSyncMapping],
+      }),
+    );
+
+    await plugin.onExternalSettingsChange();
+
+    expect(plugin.projectSyncFolderOwnershipStorage.listOwnedFolders("mapping-work")).toEqual([
+      expect.objectContaining({ creationId: "created-child" }),
+    ]);
+    expect(runtime.saveData).toHaveBeenCalledWith(
+      expect.objectContaining({
+        debugLogging: true,
+        [PROJECT_SYNC_FOLDER_OWNERSHIP_DATA_KEY]: expect.objectContaining({
+          records: [expect.objectContaining({ creationId: "created-child" })],
+        }),
+      }),
+    );
+  });
+
+  it.each([
+    ["removes the mapping", []],
+    [
+      "changes the mapping's Todoist root",
+      [
+        {
+          ...workProjectSyncMapping,
+          project: { projectId: "personal", projectName: "Personal" },
+        },
+      ],
+    ],
+  ])("revokes ownership when synchronized settings %s", async (_label, mappings) => {
+    const services = makeServices();
+    runtime.loadData.mockResolvedValueOnce({
+      ...makeSettings({ projectSyncMappings: [workProjectSyncMapping] }),
+      [PROJECT_SYNC_FOLDER_OWNERSHIP_DATA_KEY]: {
+        version: 1,
+        records: [
+          {
+            creationId: "created-child",
+            mappingId: "mapping-work",
+            rootProjectId: "work",
+            ownerKind: "project",
+            ownerId: "child",
+            path: "Task Projects/Work/Child",
+          },
+        ],
+        tombstones: [],
+      },
+    });
+    const plugin = makePlugin(services);
+    await plugin.loadOptions();
+    runtime.saveData.mockClear();
+    runtime.loadData.mockResolvedValueOnce(
+      makeSettings({ debugLogging: true, projectSyncMappings: mappings }),
+    );
+
+    await plugin.onExternalSettingsChange();
+
+    expect(plugin.projectSyncFolderOwnershipStorage.listOwnedFolders("mapping-work")).toEqual([]);
+    expect(runtime.saveData).toHaveBeenCalledWith(
+      expect.objectContaining({
+        debugLogging: true,
+        [PROJECT_SYNC_FOLDER_OWNERSHIP_DATA_KEY]: expect.objectContaining({
+          records: [],
+          pathTombstones: [
+            expect.objectContaining({
+              mappingId: "mapping-work",
+              path: "Task Projects/Work/Child",
+            }),
+          ],
+        }),
+      }),
+    );
+  });
+
+  it("restores folder ownership when external data arrives during its queued save", async () => {
+    const services = makeServices();
+    runtime.loadData.mockResolvedValueOnce(
+      makeSettings({ projectSyncMappings: [workProjectSyncMapping] }),
+    );
+    const plugin = makePlugin(services);
+    await plugin.loadOptions();
+    runtime.saveData.mockClear();
+    const firstSave = deferred<void>();
+    runtime.saveData
+      .mockImplementationOnce(async () => await firstSave.promise)
+      .mockResolvedValue(undefined);
+
+    const ownershipWrite = plugin.projectSyncFolderOwnershipStorage.recordCreatedFolder({
+      mappingId: "mapping-work",
+      rootProjectId: "work",
+      ownerKind: "project",
+      ownerId: "child",
+      path: "Task Projects/Work/Child",
+    });
+    await vi.waitFor(() => expect(runtime.saveData).toHaveBeenCalledOnce());
+
+    runtime.loadData.mockResolvedValueOnce(
+      makeSettings({
+        debugLogging: true,
+        projectSyncMappings: [workProjectSyncMapping],
+      }),
+    );
+    const externalReload = plugin.onExternalSettingsChange();
+    firstSave.resolve(undefined);
+    await Promise.all([ownershipWrite, externalReload]);
+
+    expect(runtime.saveData).toHaveBeenCalledTimes(2);
+    expect(runtime.saveData).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        debugLogging: true,
+        [PROJECT_SYNC_FOLDER_OWNERSHIP_DATA_KEY]: expect.objectContaining({
+          records: [expect.objectContaining({ path: "Task Projects/Work/Child" })],
+        }),
+      }),
+    );
+  });
+
+  it("does not let stale external plugin data resurrect released folder ownership", async () => {
+    const services = makeServices();
+    const staleData = {
+      ...makeSettings({ projectSyncMappings: [workProjectSyncMapping] }),
+      [PROJECT_SYNC_FOLDER_OWNERSHIP_DATA_KEY]: {
+        version: 1,
+        records: [
+          {
+            creationId: "created-child",
+            mappingId: "mapping-work",
+            rootProjectId: "work",
+            ownerKind: "project",
+            ownerId: "child",
+            path: "Task Projects/Work/Child",
+          },
+        ],
+        tombstones: [],
+      },
+    };
+    runtime.loadData.mockResolvedValueOnce(staleData);
+    const plugin = makePlugin(services);
+    await plugin.loadOptions();
+
+    await plugin.projectSyncFolderOwnershipStorage.releaseOwnedFolderPath(
+      "mapping-work",
+      "Task Projects/Work/Child",
+    );
+    expect(plugin.projectSyncFolderOwnershipStorage.listOwnedFolders("mapping-work")).toEqual([]);
+
+    runtime.saveData.mockClear();
+    runtime.loadData.mockResolvedValueOnce(staleData);
+    await plugin.onExternalSettingsChange();
+
+    expect(plugin.projectSyncFolderOwnershipStorage.listOwnedFolders("mapping-work")).toEqual([]);
+    expect(runtime.saveData).toHaveBeenCalledWith(
+      expect.objectContaining({
+        [PROJECT_SYNC_FOLDER_OWNERSHIP_DATA_KEY]: {
+          version: 2,
+          records: [],
+          tombstones: ["created-child"],
+          pathTombstones: [
+            {
+              mappingId: "mapping-work",
+              path: "Task Projects/Work/Child",
+              generation: 1,
+            },
+          ],
+        },
+      }),
+    );
+  });
+
+  it("retries a failed ownership save instead of treating the in-memory change as durable", async () => {
+    const services = makeServices();
+    const plugin = makePlugin(services);
+    await plugin.loadOptions();
+    runtime.saveData.mockClear();
+    runtime.saveData.mockRejectedValueOnce(new Error("disk unavailable"));
+
+    const creation = {
+      mappingId: "mapping-work",
+      rootProjectId: "work",
+      ownerKind: "project" as const,
+      ownerId: "child",
+      path: "Task Projects/Work/Child",
+    };
+    await expect(
+      plugin.projectSyncFolderOwnershipStorage.recordCreatedFolder(creation),
+    ).rejects.toThrow("disk unavailable");
+    expect(plugin.projectSyncFolderOwnershipStorage.listOwnedFolders("mapping-work")).toEqual([
+      expect.objectContaining({ path: creation.path }),
+    ]);
+
+    runtime.saveData.mockResolvedValue(undefined);
+    await plugin.projectSyncFolderOwnershipStorage.recordCreatedFolder(creation);
+
+    expect(runtime.saveData).toHaveBeenCalledTimes(2);
+    expect(runtime.saveData).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        [PROJECT_SYNC_FOLDER_OWNERSHIP_DATA_KEY]: expect.objectContaining({
+          records: [expect.objectContaining({ path: creation.path })],
+        }),
+      }),
+    );
+  });
+
+  it("automatically retries a failed ownership release without waiting for another sync", async () => {
+    vi.useFakeTimers();
+    const services = makeServices();
+    runtime.loadData.mockResolvedValueOnce({
+      ...makeSettings({ projectSyncMappings: [workProjectSyncMapping] }),
+      [PROJECT_SYNC_FOLDER_OWNERSHIP_DATA_KEY]: {
+        version: 1,
+        records: [
+          {
+            creationId: "created-child",
+            mappingId: "mapping-work",
+            rootProjectId: "work",
+            ownerKind: "project",
+            ownerId: "child",
+            path: "Task Projects/Work/Child",
+          },
+        ],
+        tombstones: [],
+      },
+    });
+    const plugin = makePlugin(services);
+    await plugin.loadOptions();
+    runtime.saveData.mockClear();
+    runtime.saveData
+      .mockRejectedValueOnce(new Error("sync file unavailable"))
+      .mockResolvedValue(undefined);
+
+    await expect(
+      plugin.projectSyncFolderOwnershipStorage.releaseOwnedFolderPath(
+        "mapping-work",
+        "Task Projects/Work/Child",
+      ),
+    ).rejects.toThrow("sync file unavailable");
+    expect(runtime.saveData).toHaveBeenCalledOnce();
+
+    await vi.advanceTimersByTimeAsync(999);
+    expect(runtime.saveData).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(runtime.saveData).toHaveBeenCalledTimes(2);
+    expect(runtime.saveData).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        [PROJECT_SYNC_FOLDER_OWNERSHIP_DATA_KEY]: expect.objectContaining({
+          records: [],
+          pathTombstones: [expect.objectContaining({ path: "Task Projects/Work/Child" })],
+        }),
+      }),
+    );
+  });
+
+  it("still saves authoritative ownership when the local safety journal is unavailable", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const plugin = makePlugin(makeServices());
+    await plugin.loadOptions();
+    runtime.saveData.mockClear();
+    runtime.saveLocalStorage.mockImplementationOnce(() => {
+      throw new Error("local storage quota exceeded");
+    });
+
+    await plugin.projectSyncFolderOwnershipStorage.recordCreatedFolder({
+      mappingId: "mapping-work",
+      rootProjectId: "work",
+      ownerKind: "project",
+      ownerId: "child",
+      path: "Task Projects/Work/Child",
+    });
+
+    expect(consoleError).toHaveBeenCalledWith(
+      "Failed to persist the Project sync folder safety journal:",
+      expect.any(Error),
+    );
+    expect(runtime.saveData).toHaveBeenCalledWith(
+      expect.objectContaining({
+        [PROJECT_SYNC_FOLDER_OWNERSHIP_DATA_KEY]: expect.objectContaining({
+          records: [expect.objectContaining({ path: "Task Projects/Work/Child" })],
+        }),
+      }),
+    );
+  });
+
+  it("restores a failed release from the device-local safety shadow after restart", async () => {
+    const services = makeServices();
+    const staleData = {
+      ...makeSettings({ projectSyncMappings: [workProjectSyncMapping] }),
+      [PROJECT_SYNC_FOLDER_OWNERSHIP_DATA_KEY]: {
+        version: 1,
+        records: [
+          {
+            creationId: "created-child",
+            mappingId: "mapping-work",
+            rootProjectId: "work",
+            ownerKind: "project",
+            ownerId: "child",
+            path: "Task Projects/Work/Child",
+          },
+        ],
+        tombstones: [],
+      },
+    };
+    runtime.loadData.mockResolvedValueOnce(staleData);
+    const plugin = makePlugin(services);
+    await plugin.loadOptions();
+    runtime.saveData.mockRejectedValueOnce(new Error("sync file unavailable"));
+
+    await expect(
+      plugin.projectSyncFolderOwnershipStorage.releaseOwnedFolderPath(
+        "mapping-work",
+        "Task Projects/Work/Child",
+      ),
+    ).rejects.toThrow("sync file unavailable");
+    const shadowWrites = runtime.saveLocalStorage.mock.calls.filter(
+      ([key]) => key === "tasks-bridge:project-sync-folder-ownership:v2",
+    );
+    const shadow = shadowWrites[shadowWrites.length - 1]?.[1];
+    expect(shadow).toEqual(
+      expect.objectContaining({
+        [PROJECT_SYNC_FOLDER_OWNERSHIP_DATA_KEY]: expect.objectContaining({ records: [] }),
+      }),
+    );
+
+    runtime.loadData.mockReset();
+    runtime.loadData.mockResolvedValueOnce(staleData);
+    runtime.loadLocalStorage.mockReset();
+    runtime.loadLocalStorage.mockReturnValueOnce(null).mockReturnValueOnce(shadow);
+    runtime.saveData.mockReset();
+    runtime.saveData.mockResolvedValue(undefined);
+    const restarted = makePlugin(makeServices());
+    await restarted.loadOptions();
+
+    expect(restarted.projectSyncFolderOwnershipStorage.listOwnedFolders("mapping-work")).toEqual(
+      [],
+    );
+    expect(runtime.saveData).toHaveBeenCalledWith(
+      expect.objectContaining({
+        [PROJECT_SYNC_FOLDER_OWNERSHIP_DATA_KEY]: expect.objectContaining({
+          records: [],
+          pathTombstones: [
+            expect.objectContaining({
+              mappingId: "mapping-work",
+              path: "Task Projects/Work/Child",
+            }),
+          ],
+        }),
+      }),
+    );
+  });
+
+  it("does not restore active folder deletion grants from the local safety shadow", async () => {
+    runtime.loadData.mockResolvedValueOnce(
+      makeSettings({ projectSyncMappings: [workProjectSyncMapping] }),
+    );
+    runtime.loadLocalStorage.mockReturnValueOnce(null).mockReturnValueOnce({
+      [PROJECT_SYNC_FOLDER_OWNERSHIP_DATA_KEY]: {
+        version: 2,
+        records: [
+          {
+            creationId: "stale-local-grant",
+            generation: 1,
+            mappingId: "mapping-work",
+            rootProjectId: "work",
+            ownerKind: "project",
+            ownerId: "child",
+            path: "Task Projects/Work/Child",
+          },
+        ],
+        tombstones: [],
+        pathTombstones: [],
+      },
+    });
+    const plugin = makePlugin(makeServices());
+
+    await plugin.loadOptions();
+
+    expect(plugin.projectSyncFolderOwnershipStorage.listOwnedFolders("mapping-work")).toEqual([]);
+    expect(runtime.saveLocalStorage).toHaveBeenCalledWith(
+      "tasks-bridge:project-sync-folder-ownership:v2",
+      {},
+    );
+    expect(runtime.saveData).not.toHaveBeenCalled();
+  });
+
+  it("treats missing plugin data as an ownership reset instead of restoring a stale grant", async () => {
+    runtime.loadData.mockResolvedValueOnce(null);
+    runtime.loadLocalStorage.mockReturnValueOnce(null).mockReturnValueOnce({
+      [PROJECT_SYNC_FOLDER_OWNERSHIP_DATA_KEY]: {
+        version: 2,
+        records: [
+          {
+            creationId: "stale-local-grant",
+            generation: 1,
+            mappingId: "mapping-work",
+            rootProjectId: "work",
+            ownerKind: "project",
+            ownerId: "child",
+            path: "Task Projects/Work/Child",
+          },
+        ],
+        tombstones: [],
+        pathTombstones: [],
+      },
+    });
+    const plugin = makePlugin(makeServices());
+
+    await plugin.loadOptions();
+
+    expect(plugin.projectSyncFolderOwnershipStorage.listOwnedFolders("mapping-work")).toEqual([]);
+    expect(runtime.saveLocalStorage).toHaveBeenCalledWith(
+      "tasks-bridge:project-sync-folder-ownership:v2",
+      {},
+    );
+    const lastSave = runtime.saveData.mock.calls[runtime.saveData.mock.calls.length - 1]?.[0];
+    expect(lastSave).not.toHaveProperty(PROJECT_SYNC_FOLDER_OWNERSHIP_DATA_KEY);
+  });
+
+  it("preserves an unsupported local ownership shadow and disables folder cleanup", async () => {
+    const synchronizedOwnership = {
+      version: 1,
+      records: [
+        {
+          creationId: "created-child",
+          mappingId: "mapping-work",
+          rootProjectId: "work",
+          ownerKind: "project",
+          ownerId: "child",
+          path: "Task Projects/Work/Child",
+        },
+      ],
+      tombstones: [],
+    };
+    const futureShadow = {
+      [PROJECT_SYNC_FOLDER_OWNERSHIP_DATA_KEY]: {
+        version: 99,
+        records: [{ future: true }],
+        tombstones: ["future-revocation"],
+      },
+    };
+    runtime.loadData.mockResolvedValueOnce({
+      ...makeSettings({ projectSyncMappings: [workProjectSyncMapping] }),
+      [PROJECT_SYNC_FOLDER_OWNERSHIP_DATA_KEY]: synchronizedOwnership,
+    });
+    runtime.loadLocalStorage.mockReturnValueOnce(null).mockReturnValueOnce(futureShadow);
+    const plugin = makePlugin(makeServices());
+
+    await plugin.loadOptions();
+    await plugin.projectSyncFolderOwnershipStorage.releaseOwnedFolderPath(
+      "mapping-work",
+      "Task Projects/Work/Child",
+    );
+    await plugin.writeOptions({ debugLogging: true });
+
+    expect(plugin.projectSyncFolderOwnershipStorage.listOwnedFolders("mapping-work")).toEqual([]);
+    expect(runtime.saveLocalStorage).not.toHaveBeenCalled();
+    expect(runtime.saveData).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        debugLogging: true,
+        [PROJECT_SYNC_FOLDER_OWNERSHIP_DATA_KEY]: expect.objectContaining({
+          records: [expect.objectContaining({ creationId: "created-child" })],
+        }),
+      }),
+    );
+  });
+
+  it("preserves an unsupported ownership envelope and disables its deletion authority", async () => {
+    const services = makeServices();
+    const futureOwnership = {
+      version: 99,
+      records: [{ future: true }],
+      tombstones: ["future-revocation"],
+    };
+    runtime.loadData.mockResolvedValueOnce({
+      ...makeSettings(),
+      [PROJECT_SYNC_FOLDER_OWNERSHIP_DATA_KEY]: futureOwnership,
+    });
+    const plugin = makePlugin(services);
+
+    await plugin.loadOptions();
+
+    expect(plugin.projectSyncFolderOwnershipStorage.listOwnedFolders("mapping-work")).toEqual([]);
+    expect(runtime.saveData).not.toHaveBeenCalled();
+    await plugin.writeOptions({ debugLogging: true });
+    expect(runtime.saveData).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        debugLogging: true,
+        [PROJECT_SYNC_FOLDER_OWNERSHIP_DATA_KEY]: futureOwnership,
+      }),
+    );
+  });
+
+  it("revokes ownership when a local settings edit removes its mapping", async () => {
+    const services = makeServices();
+    runtime.loadData.mockResolvedValueOnce({
+      ...makeSettings({ projectSyncMappings: [workProjectSyncMapping] }),
+      [PROJECT_SYNC_FOLDER_OWNERSHIP_DATA_KEY]: {
+        version: 1,
+        records: [
+          {
+            creationId: "created-child",
+            mappingId: "mapping-work",
+            rootProjectId: "work",
+            ownerKind: "project",
+            ownerId: "child",
+            path: "Task Projects/Work/Child",
+          },
+        ],
+        tombstones: [],
+      },
+    });
+    const plugin = makePlugin(services);
+    await plugin.loadOptions();
+    runtime.saveData.mockClear();
+
+    await plugin.writeOptions({ projectSyncMappings: [] });
+
+    expect(plugin.projectSyncFolderOwnershipStorage.listOwnedFolders("mapping-work")).toEqual([]);
+    expect(runtime.saveData).toHaveBeenCalledWith(
+      expect.objectContaining({
+        projectSyncMappings: [],
+        [PROJECT_SYNC_FOLDER_OWNERSHIP_DATA_KEY]: expect.objectContaining({
+          records: [],
+          pathTombstones: [
+            expect.objectContaining({ path: "Task Projects/Work/Child", generation: 1 }),
+          ],
+        }),
+      }),
+    );
+  });
+
+  it("releases an owned path when a Vault delete or rename event replaces its folder", async () => {
+    const services = makeServices();
+    runtime.loadData.mockResolvedValueOnce({
+      ...makeSettings({ projectSyncMappings: [workProjectSyncMapping] }),
+      [PROJECT_SYNC_FOLDER_OWNERSHIP_DATA_KEY]: {
+        version: 1,
+        records: [
+          {
+            creationId: "created-child",
+            mappingId: "mapping-work",
+            rootProjectId: "work",
+            ownerKind: "project",
+            ownerId: "child",
+            path: "Task Projects/Work/Child",
+          },
+        ],
+        tombstones: [],
+      },
+    });
+    const plugin = makePlugin(services);
+    await plugin.onload();
+    runtime.saveData.mockClear();
+
+    vaultActivityListener("delete")({ path: "Task Projects/Work/Child" });
+    await vi.waitFor(() =>
+      expect(plugin.projectSyncFolderOwnershipStorage.listOwnedFolders("mapping-work")).toEqual([]),
+    );
+    vaultActivityListener("create")({ path: "Task Projects/Work/Child" });
+
+    expect(plugin.projectSyncFolderOwnershipStorage.listOwnedFolders("mapping-work")).toEqual([]);
+    expect(runtime.saveData).toHaveBeenCalledWith(
+      expect.objectContaining({
+        [PROJECT_SYNC_FOLDER_OWNERSHIP_DATA_KEY]: expect.objectContaining({ records: [] }),
+      }),
+    );
+  });
+
   it("prefers the device-local query cache over a legacy cache received through Sync", async () => {
     const services = makeServices();
     const localQueryCache = { version: 2, credentialFingerprint: "local", entries: {} };
@@ -745,6 +1491,7 @@ describe("TodoistPlugin async lifecycle", () => {
     });
     expect(services.projectSync.setConfig).toHaveBeenLastCalledWith({
       enabled: true,
+      preserveUnmanagedItems: true,
       mappings: [
         expect.objectContaining({
           id: "mapping-work",
@@ -765,6 +1512,7 @@ describe("TodoistPlugin async lifecycle", () => {
     const plugin = makePlugin(services);
     runtime.settings.current = defaultSettings({
       debugLogging: false,
+      projectSyncPreserveUnmanagedItems: false,
       renderLabelsIcon: false,
       version: 5,
     });
@@ -784,11 +1532,16 @@ describe("TodoistPlugin async lifecycle", () => {
       autoRefreshInterval: 45,
       autoRefreshToggle: true,
       debugLogging: true,
+      projectSyncPreserveUnmanagedItems: false,
       renderLabelsIcon: false,
       version: 5,
     });
     const lastSave = runtime.saveData.mock.calls[runtime.saveData.mock.calls.length - 1]?.[0];
-    expect(lastSave).toMatchObject({ renderLabelsIcon: false, version: 5 });
+    expect(lastSave).toMatchObject({
+      projectSyncPreserveUnmanagedItems: false,
+      renderLabelsIcon: false,
+      version: 5,
+    });
   });
 
   it("drops a legacy Project sync writer assignment received from another device", async () => {
@@ -1054,7 +1807,11 @@ describe("TodoistPlugin async lifecycle", () => {
 
   it("reports an interrupted manual Project sync separately from a disabled configuration", async () => {
     const services = makeServices();
-    services.projectSync.getConfig.mockReturnValue({ enabled: true, mappings: [] });
+    services.projectSync.getConfig.mockReturnValue({
+      enabled: true,
+      preserveUnmanagedItems: true,
+      mappings: [],
+    });
     services.projectSync.sync.mockResolvedValueOnce(null);
     const plugin = makePlugin(services);
 
@@ -2003,5 +2760,28 @@ describe("TodoistPlugin async lifecycle", () => {
 
     expect(services.token.read).not.toHaveBeenCalled();
     expect(services.todoist.initialize).not.toHaveBeenCalled();
+  });
+
+  it("migrates version 5 settings to the fail-safe unmanaged-content default", async () => {
+    const services = makeServices();
+    const onLayoutReady = vi.fn();
+    const stored = defaultSettings({ version: 5 });
+    delete stored.projectSyncPreserveUnmanagedItems;
+    runtime.loadData.mockResolvedValueOnce(stored);
+    const plugin = makePlugin(services, onLayoutReady);
+
+    await plugin.onload();
+    const [layoutReady] = onLayoutReady.mock.calls[0] as [() => Promise<void>];
+    await layoutReady();
+
+    expect(runtime.settings.current).toMatchObject({
+      projectSyncPreserveUnmanagedItems: true,
+      version: 6,
+    });
+    const lastSave = runtime.saveData.mock.calls[runtime.saveData.mock.calls.length - 1]?.[0];
+    expect(lastSave).toMatchObject({
+      projectSyncPreserveUnmanagedItems: true,
+      version: 6,
+    });
   });
 });

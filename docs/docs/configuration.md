@@ -19,11 +19,17 @@ Changing this setting will automatically migrate your token to the new storage l
 
 ## Project sync
 
-Project sync is an independent, one-way Todoist-to-Vault projection. You can configure multiple Todoist-project-to-Vault-folder mappings. Each current active mapping folder is a dedicated, exclusive mirror: after a complete successful fetch, Tasks Bridge moves every file, attachment, and subfolder not represented by that Todoist snapshot to the trash configured in Obsidian. Its controls remain available while the mode is disabled, so you can prepare every destination and scope before enabling it. See the [project sync guide](./project-mode) for the folder layout, task properties, and complete safety behavior.
+Project sync is an independent, one-way Todoist-to-Vault projection. You can configure multiple Todoist-project-to-Vault-folder mappings. By default, ownership rather than location controls cleanup: task notes are managed through `todoist_task_id`, and folders are eligible for cleanup only when Tasks Bridge created and recorded them. Other Vault content inside a mapping remains untouched. Its controls remain available while the mode is disabled, so you can prepare every destination and scope before enabling it. See the [project sync guide](./project-mode) for the folder layout, task properties, and complete safety behavior.
 
 ### Enable project sync
 
 Enables synchronization for every valid project mapping. An enabled configuration can be synchronized manually at any time and participates in periodic synchronization when global **Auto-refresh** is enabled. Tasks Bridge waits for the configured interval instead of writing Project sync notes immediately at startup. Disabling the mode stops synchronization and leaves existing Markdown files in place.
+
+### Preserve unmanaged Vault content
+
+Enabled by default. Files without a managed Todoist task ID and folders not recorded as Tasks Bridge-created are left untouched. Todoist changes still update, move, and remove managed task notes, and obsolete recorded folders are removed after they become empty.
+
+Turn this off only when every current mapping folder is a dedicated exclusive mirror. In that legacy mode, unrelated entries inside current active mapping roots may be moved to the trash configured in Obsidian.
 
 ### Project mappings
 
@@ -35,9 +41,9 @@ Select the root project to synchronize. Projects are displayed hierarchically wi
 
 #### Vault folder
 
-Select or enter an empty, dedicated Vault folder. This is the selected Todoist project's **exact root folder**, not a parent destination. Tasks belonging directly to the selected project are written into this folder. The plugin does not add another folder named after the selected project. Do not store independent notes or attachments anywhere inside the mapped folder.
+Select or enter an existing Vault folder. This is the selected Todoist project's **exact root folder**, not a parent destination. Tasks belonging directly to the selected project are written into this folder. The plugin does not add another folder named after the selected project. With unmanaged-content protection enabled, independent `.base` files, notes, attachments, and user-created folders may coexist there without being adopted or deleted.
 
-If you later change this folder, only the new current folder is used for the exclusive projection. Registered previous folders are never swept; Tasks Bridge may inspect them only to locate a positively identified, already tracked task note and move that note into its new canonical path. Other content in a previous folder is not touched. Inactive or unavailable mappings are not treated as empty Todoist snapshots.
+If you later change this folder, Tasks Bridge may inspect the registered previous root to locate positively identified task notes and move them into their new canonical paths. Other content in a previous folder is not touched. Empty folders recorded as plugin-created remain eligible for safe cleanup; inactive or unavailable mappings are not treated as empty Todoist snapshots.
 
 #### Include child projects
 
