@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v2.9.19 (2026-08-17)
+
 ### 🐛 Bug Fixes
 
 - Project sync now preserves every legitimate same-level Todoist item with a duplicate portable name. Colliding tasks or projects use readable UTC creation times, adding a typed short ID only when time is missing or still identical, while non-colliding names and displayed titles remain unchanged; legacy numeric and ID-only paths migrate to the new canonical layout.
