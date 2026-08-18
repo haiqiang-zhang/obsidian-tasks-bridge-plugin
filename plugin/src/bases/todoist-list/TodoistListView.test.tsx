@@ -3,7 +3,6 @@ import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { makeProject } from "@/factories/data";
-import type { ProjectSyncStatisticsSnapshot, ProjectSyncStatus } from "@/project-sync";
 
 import type { TodoistListProps } from "./TodoistList";
 import {
@@ -15,7 +14,8 @@ import {
 import type {
   TodoistListActions,
   TodoistListModel,
-  TodoistListProjectStatisticsSource,
+  TodoistListProjectContext,
+  TodoistListProjectContextSource,
 } from "./types";
 
 const runtime = vi.hoisted(() => ({
@@ -70,46 +70,33 @@ const actions = (): TodoistListActions => ({
   editTask: vi.fn(),
 });
 
-const projectStatistics = (): TodoistListProjectStatisticsSource => ({
+const projectContext = (): TodoistListProjectContextSource => ({
   getConfig: vi.fn(() => ({ enabled: true, preserveUnmanagedItems: true, mappings: [] })),
   getProjects: vi.fn(() => []),
-  getSnapshot: vi.fn(() => null),
-  getStatus: vi.fn((): ProjectSyncStatus => ({ state: "idle" })),
-  isConfigured: vi.fn(() => true),
-  subscribe: vi.fn(() => () => undefined),
+  getContext: vi.fn(() => null),
+  subscribeContext: vi.fn(() => () => undefined),
 });
 
-const observableProjectStatistics = (
-  initialSnapshot: ProjectSyncStatisticsSnapshot | null = null,
-) => {
-  let snapshot = initialSnapshot;
-  let status: ProjectSyncStatus = { state: "idle" };
-  let listener: (() => void) | undefined;
-  const unsubscribe = vi.fn(() => {
-    listener = undefined;
-  });
-  const source: TodoistListProjectStatisticsSource = {
+const mutableProjectContext = (initialContext: TodoistListProjectContext | null = null) => {
+  let context = initialContext;
+  const listeners = new Set<() => void>();
+  const source: TodoistListProjectContextSource = {
     getConfig: vi.fn(() => ({ enabled: true, preserveUnmanagedItems: true, mappings: [] })),
     getProjects: vi.fn(() => []),
-    getSnapshot: vi.fn(() => snapshot),
-    getStatus: vi.fn(() => status),
-    isConfigured: vi.fn(() => true),
-    subscribe: vi.fn((nextListener) => {
-      listener = nextListener;
-      return unsubscribe;
+    getContext: vi.fn(() => context),
+    subscribeContext: vi.fn((listener: () => void) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
     }),
   };
 
   return {
     source,
-    unsubscribe,
-    publish: (
-      nextSnapshot: ProjectSyncStatisticsSnapshot | null,
-      nextStatus: ProjectSyncStatus = status,
-    ) => {
-      snapshot = nextSnapshot;
-      status = nextStatus;
-      listener?.();
+    publish: (nextContext: TodoistListProjectContext | null) => {
+      context = nextContext;
+      for (const listener of listeners) {
+        listener();
+      }
     },
   };
 };
@@ -167,7 +154,7 @@ describe("TasksListView", () => {
   });
 
   it("registers an official Bases view with Tasks-prefixed identity and native options", () => {
-    const registration = createTasksListViewRegistration(actions(), projectStatistics());
+    const registration = createTasksListViewRegistration(actions(), projectContext());
 
     expect(TASKS_LIST_VIEW_ID).toBe("tasks-list");
     expect(TASKS_LIST_VIEW_NAME).toBe("Tasks List");
@@ -202,38 +189,33 @@ describe("TasksListView", () => {
     ]);
   });
 
-  it("builds stable root options with full hierarchy labels from the last snapshot", () => {
-    const statistics = projectStatistics();
-    vi.mocked(statistics.getSnapshot).mockReturnValue({
-      syncedAt: "2026-08-12T00:00:00.000Z",
+  it("builds stable root options with full hierarchy labels from project context", () => {
+    const context = projectContext();
+    vi.mocked(context.getContext).mockReturnValue({
       scopes: [
         {
           mappingId: "mapping",
           rootProjectId: "root",
-          includeSubprojects: true,
           projects: [
             {
               id: "root",
               parentId: null,
               name: "Work",
               childOrder: 0,
-              directCounts: { active: 1, completed: 0 },
-              directCompletionEvents: [],
             },
             {
               id: "child",
               parentId: "root",
               name: "Planning",
               childOrder: 0,
-              directCounts: { active: 1, completed: 1 },
-              directCompletionEvents: [],
             },
           ],
+          tasks: [],
         },
       ],
     });
 
-    const registration = createTasksListViewRegistration(actions(), statistics);
+    const registration = createTasksListViewRegistration(actions(), context);
     const options = registration.options?.({} as BasesViewConfig) ?? [];
     const rootDropdown = (options[0] as { items: BasesAllOptions[] }).items[0] as {
       options: Record<string, string>;
@@ -246,8 +228,8 @@ describe("TasksListView", () => {
     });
   });
 
-  it("falls back to configured live hierarchies before the first statistics snapshot", () => {
-    const statistics = projectStatistics();
+  it("falls back to configured live hierarchies before project context is available", () => {
+    const context = projectContext();
     const root = makeProject("root", { name: "Work", childOrder: 0 });
     const child = makeProject("child", {
       name: "Planning",
@@ -255,8 +237,8 @@ describe("TasksListView", () => {
       childOrder: 0,
     });
     const unrelated = makeProject("other", { name: "Personal", childOrder: 1 });
-    vi.mocked(statistics.getProjects).mockReturnValue([unrelated, child, root]);
-    vi.mocked(statistics.getConfig).mockReturnValue({
+    vi.mocked(context.getProjects).mockReturnValue([unrelated, child, root]);
+    vi.mocked(context.getConfig).mockReturnValue({
       enabled: true,
       preserveUnmanagedItems: true,
       mappings: [
@@ -270,7 +252,7 @@ describe("TasksListView", () => {
       ],
     });
 
-    const registration = createTasksListViewRegistration(actions(), statistics);
+    const registration = createTasksListViewRegistration(actions(), context);
     const options = registration.options?.({} as BasesViewConfig) ?? [];
     const rootDropdown = (options[0] as { items: BasesAllOptions[] }).items[0] as {
       options: Record<string, string>;
@@ -284,7 +266,7 @@ describe("TasksListView", () => {
   });
 
   it("keeps an unavailable saved project visible when Obsidian supplies the latest config", () => {
-    const registration = createTasksListViewRegistration(actions(), projectStatistics());
+    const registration = createTasksListViewRegistration(actions(), projectContext());
     const optionsCallback = registration.options as unknown as (
       config?: BasesViewConfig,
     ) => BasesAllOptions[];
@@ -301,7 +283,7 @@ describe("TasksListView", () => {
   it("consumes grouped Base data and persists its root through the view config", async () => {
     const { config, controller, groupedData, workspace } = makeController(true);
     const parentEl = document.createElement("div");
-    const registration = createTasksListViewRegistration(actions(), projectStatistics());
+    const registration = createTasksListViewRegistration(actions(), projectContext());
     const view = registration.factory(controller, parentEl) as TasksListView;
 
     view.onDataUpdated();
@@ -310,7 +292,7 @@ describe("TasksListView", () => {
     expect(runtime.buildModel).toHaveBeenCalledWith(groupedData, {
       order: ["note.todoist_priority"],
       getDisplayName: expect.any(Function),
-      projectStatisticsSnapshot: null,
+      projectContext: null,
     });
     const element = runtime.render.mock.calls[0]?.[0] as ReactElement<TodoistListProps>;
     expect(element.props.options).toEqual({
@@ -320,8 +302,6 @@ describe("TasksListView", () => {
     });
     expect(element.props.projectOverviewCollapsed).toBe(true);
     expect(element.props.completionHeatmapRange).toBe("last-3-months");
-    expect(element.props.projectSyncConfigured).toBe(true);
-    expect(element.props.projectSyncStatus).toEqual({ state: "idle" });
 
     element.props.onProjectOverviewCollapsedChange(true);
     expect(config.set).toHaveBeenCalledWith("tasksProjectOverviewCollapsed", true);
@@ -356,7 +336,7 @@ describe("TasksListView", () => {
       "__tasks_bridge_all_synchronized_projects__",
     );
     const parentEl = document.createElement("div");
-    const view = createTasksListViewRegistration(actions(), projectStatistics()).factory(
+    const view = createTasksListViewRegistration(actions(), projectContext()).factory(
       controller,
       parentEl,
     ) as TasksListView;
@@ -369,11 +349,11 @@ describe("TasksListView", () => {
     view.onunload();
   });
 
-  it("rerenders a data-ready view with the latest statistics and unsubscribes on unload", async () => {
-    const { controller } = makeController();
+  it("rerenders the existing Base result when project context becomes available", async () => {
+    const { controller, groupedData } = makeController();
     const parentEl = document.createElement("div");
-    const statistics = observableProjectStatistics();
-    const view = createTasksListViewRegistration(actions(), statistics.source).factory(
+    const context = mutableProjectContext();
+    const view = createTasksListViewRegistration(actions(), context.source).factory(
       controller,
       parentEl,
     ) as TasksListView;
@@ -382,60 +362,62 @@ describe("TasksListView", () => {
     await Promise.resolve();
 
     expect(runtime.render).toHaveBeenCalledOnce();
-    const initialElement = runtime.render.mock.calls[0]?.[0] as ReactElement<TodoistListProps>;
-    expect(initialElement.props.projectStatisticsSnapshot).toBeNull();
+    expect(runtime.buildModel).toHaveBeenLastCalledWith(
+      groupedData,
+      expect.objectContaining({ projectContext: null }),
+    );
 
-    const firstSnapshot: ProjectSyncStatisticsSnapshot = {
-      syncedAt: "2026-08-10T06:00:00.000Z",
+    const nextContext: TodoistListProjectContext = {
       scopes: [],
     };
-    const latestSnapshot: ProjectSyncStatisticsSnapshot = {
-      syncedAt: "2026-08-10T07:00:00.000Z",
-      scopes: [],
-    };
-    statistics.publish(firstSnapshot, {
-      state: "syncing",
-      startedAt: "2026-08-10T06:00:00.000Z",
-    });
-    statistics.publish(latestSnapshot, {
-      state: "success",
-      completedAt: "2026-08-10T07:00:00.000Z",
-      result: {
-        created: 0,
-        updated: 0,
-        moved: 0,
-        unchanged: 0,
-        deleted: 0,
-        outOfScope: 0,
-        deferred: 0,
-        conflicts: [],
-        pausedMappingIds: [],
-        settledMappingIds: [],
-      },
-    });
+    context.publish(nextContext);
     await Promise.resolve();
 
     expect(runtime.render).toHaveBeenCalledTimes(2);
-    const updatedElement = runtime.render.mock.calls[1]?.[0] as ReactElement<TodoistListProps>;
-    expect(updatedElement.props.projectStatisticsSnapshot).toBe(latestSnapshot);
-    expect(updatedElement.props.projectSyncStatus.state).toBe("success");
+    expect(runtime.buildModel).toHaveBeenLastCalledWith(
+      groupedData,
+      expect.objectContaining({ projectContext: nextContext }),
+    );
 
     view.onunload();
-    expect(statistics.unsubscribe).toHaveBeenCalledOnce();
-
-    statistics.publish({
-      syncedAt: "2026-08-10T08:00:00.000Z",
-      scopes: [],
-    });
+    context.publish(null);
     await Promise.resolve();
 
     expect(runtime.render).toHaveBeenCalledTimes(2);
   });
 
+  it("waits for the first Base result before rendering a context update", async () => {
+    const { controller, groupedData } = makeController();
+    const parentEl = document.createElement("div");
+    const context = mutableProjectContext();
+    const view = createTasksListViewRegistration(actions(), context.source).factory(
+      controller,
+      parentEl,
+    ) as TasksListView;
+    const nextContext: TodoistListProjectContext = { scopes: [] };
+
+    context.publish(nextContext);
+    await Promise.resolve();
+
+    expect(runtime.render).not.toHaveBeenCalled();
+    expect(runtime.buildModel).not.toHaveBeenCalled();
+
+    view.onDataUpdated();
+    await Promise.resolve();
+
+    expect(runtime.render).toHaveBeenCalledOnce();
+    expect(runtime.buildModel).toHaveBeenCalledWith(
+      groupedData,
+      expect.objectContaining({ projectContext: nextContext }),
+    );
+
+    view.onunload();
+  });
+
   it("falls back to Last year when the persisted heatmap range is invalid", async () => {
     const { controller } = makeController(false, "unsupported-range");
     const parentEl = document.createElement("div");
-    const view = createTasksListViewRegistration(actions(), projectStatistics()).factory(
+    const view = createTasksListViewRegistration(actions(), projectContext()).factory(
       controller,
       parentEl,
     ) as TasksListView;
@@ -451,7 +433,7 @@ describe("TasksListView", () => {
   it("coalesces pending updates and skips a queued render after unload", async () => {
     const { controller } = makeController();
     const parentEl = document.createElement("div");
-    const view = createTasksListViewRegistration(actions(), projectStatistics()).factory(
+    const view = createTasksListViewRegistration(actions(), projectContext()).factory(
       controller,
       parentEl,
     ) as TasksListView;

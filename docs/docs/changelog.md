@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### 🐛 Bug Fixes
+
+- Unified Tasks List statistics with the current Obsidian Base result. Native Base filters and the result limit, together with the selected root project, now govern task rows, toolbar counts, Project overview totals, the completion heatmap, and per-project progress as one scope.
+
 ## v2.10.1 (2026-08-18)
 
 ### 🔁 Changes
@@ -230,7 +234,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added safe, resumable projections that preserve user content, defer open notes and conflicts, retain stale or out-of-scope tasks, and preserve notes during folder or cross-mapping moves.
 - Added hierarchical project selection, Obsidian's folder selector, inline validation, **Sync now**, the **Sync Todoist projects** command, startup sync, and shared periodic refresh.
 - Added the **Tasks List** Bases view with Project → Section → Task → Subtask hierarchy, arbitrary roots, native Base controls, note navigation, and Todoist-backed edit, complete, and reopen actions.
-- Added a collapsible **Project overview** with complete selected-root, descendant, zero-task-project, and multi-mapping statistics independent of Base-filtered rows.
+- Added a collapsible **Project overview** with selected-root, descendant, zero-task-project, and multi-mapping statistics.
 
 ### 🔁 Changes
 

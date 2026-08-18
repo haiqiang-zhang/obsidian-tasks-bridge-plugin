@@ -1,8 +1,6 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { ProjectSyncStatisticsSnapshot, ProjectSyncStatus } from "@/project-sync";
-
 import { todoistListProjectScopeKey } from "./model";
 import { TodoistList } from "./TodoistList";
 import type {
@@ -11,6 +9,7 @@ import type {
   TodoistListMutationResult,
   TodoistListNavigation,
   TodoistListProject,
+  TodoistListProjectOption,
   TodoistListTaskNode,
   TodoistListTaskStatus,
 } from "./types";
@@ -150,37 +149,12 @@ const makeNavigation = (): TodoistListNavigation => ({
   hoverFile: vi.fn(),
 });
 
-type ProjectStatistics = ProjectSyncStatisticsSnapshot["scopes"][number]["projects"][number];
-
-const makeProjectStatistics = (
-  id: string,
-  parentId: string | null,
-  childOrder: number,
-  active: number,
-  completed: number,
-  name = id,
-): ProjectStatistics => ({
+const makeProjectOption = (id: string, name = id): TodoistListProjectOption => ({
   id,
-  parentId,
+  scopeKey: todoistListProjectScopeKey("mapping-root", "root", id),
   name,
-  childOrder,
-  directCounts: { active, completed },
-  directCompletionEvents: [],
-});
-
-const makeStatisticsSnapshot = (
-  projects: ProjectStatistics[],
-  syncedAt = "2026-08-10T06:30:00.000Z",
-): ProjectSyncStatisticsSnapshot => ({
-  syncedAt,
-  scopes: [
-    {
-      mappingId: "mapping-root",
-      rootProjectId: "root",
-      includeSubprojects: true,
-      projects,
-    },
-  ],
+  pathIds: [id],
+  pathNames: [name],
 });
 
 const renderList = (
@@ -188,16 +162,14 @@ const renderList = (
   actions = makeActions(),
   navigation = makeNavigation(),
   rootProjectId: string | null = null,
-  projectStatisticsSnapshot: ProjectSyncStatisticsSnapshot | null = null,
+  rootProjectOptions: readonly TodoistListProjectOption[] | null = null,
   projectOverviewCollapsed = false,
   onProjectOverviewCollapsedChange = vi.fn(),
-  projectSyncStatus: ProjectSyncStatus = { state: "idle" },
-  projectSyncConfigured = true,
   expandProjectTasks = true,
 ) => {
   const makeElement = (
     currentModel: TodoistListModel,
-    currentSnapshot = projectStatisticsSnapshot,
+    currentRootProjectOptions = rootProjectOptions,
     currentOverviewCollapsed = projectOverviewCollapsed,
     currentRootProjectId = rootProjectId,
   ) => (
@@ -210,9 +182,7 @@ const renderList = (
       onProjectOverviewCollapsedChange={onProjectOverviewCollapsedChange}
       options={{ density: "comfortable", showDescriptions: true, showSections: true }}
       projectOverviewCollapsed={currentOverviewCollapsed}
-      projectSyncConfigured={projectSyncConfigured}
-      projectSyncStatus={projectSyncStatus}
-      projectStatisticsSnapshot={currentSnapshot}
+      rootProjectOptions={currentRootProjectOptions ?? currentModel.projects}
       rootProjectId={currentRootProjectId}
     />
   );
@@ -227,12 +197,12 @@ const renderList = (
     onProjectOverviewCollapsedChange,
     rerenderList: (
       nextModel: TodoistListModel,
-      nextSnapshot = projectStatisticsSnapshot,
+      nextRootProjectOptions = rootProjectOptions,
       nextOverviewCollapsed = projectOverviewCollapsed,
       nextRootProjectId = rootProjectId,
     ) =>
       rendered.rerender(
-        makeElement(nextModel, nextSnapshot, nextOverviewCollapsed, nextRootProjectId),
+        makeElement(nextModel, nextRootProjectOptions, nextOverviewCollapsed, nextRootProjectId),
       ),
   };
 };
@@ -243,65 +213,70 @@ describe("TodoistList", () => {
 
     expect(screen.queryByRole("button", { name: /^Root:/ })).not.toBeInTheDocument();
     expect(
+      screen.getByText("Current Base result", {
+        selector: ".todoist-bases-project-overview-scope",
+      }),
+    ).toBeInTheDocument();
+    expect(
       screen.getByLabelText("Visible in Base: 1 active, 0 completed, 0 unavailable"),
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Expand all project tasks" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Collapse all project tasks" })).toBeInTheDocument();
   });
 
-  it("renders snapshot totals for the complete selected root hierarchy", () => {
-    const snapshot = makeStatisticsSnapshot([
-      makeProjectStatistics("grandchild", "child", 0, 0, 2, "Grandchild"),
-      makeProjectStatistics("root", null, 0, 1, 0, "Root"),
-      makeProjectStatistics("empty-child", "root", 2, 0, 0, "Empty child"),
-      makeProjectStatistics("child", "root", 1, 0, 1, "Child"),
-    ]);
+  it("uses only Base-result tasks for overview and project-row statistics", () => {
+    const contextProjects = [
+      makeProjectOption("grandchild", "Grandchild"),
+      makeProjectOption("root", "Root"),
+      makeProjectOption("empty-child", "Empty child"),
+      makeProjectOption("child", "Child"),
+    ];
     renderList(
       makeModel(makeProject("root", "Root", [makeTask("root-task")])),
       makeActions(),
       makeNavigation(),
       "root",
-      snapshot,
+      contextProjects,
     );
 
     const overview = screen.getByRole("region", { name: "Project overview" });
-    expect(overview).toHaveTextContent("4 projects · 4 tasks · 75% complete");
+    expect(overview).toHaveTextContent("1 project · 1 task · 0% complete");
     expect(
       screen.getByLabelText("Visible in Base: 1 active, 0 completed, 0 unavailable"),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("img", { name: "75% complete, 3 completed of 4 tasks" }),
+      screen.getByRole("img", { name: "0% complete, 0 completed of 1 tasks" }),
     ).toBeInTheDocument();
 
     const rootRow = screen
       .getByText("Root", { selector: ".todoist-bases-project-name" })
       .closest(".todoist-bases-project-row");
-    expect(rootRow).toHaveTextContent("3 / 4 completed·75%");
+    expect(rootRow).toHaveTextContent("0 / 1 completed·0%");
     expect(screen.getByRole("progressbar", { name: "Root completion" })).toHaveAttribute(
       "value",
-      "3",
+      "0",
     );
     expect(screen.getByRole("progressbar", { name: "Root completion" })).toHaveAttribute(
       "max",
-      "4",
+      "1",
     );
   });
 
-  it("renders a configured zero-task child exposed only by the statistics snapshot", () => {
-    const snapshot = makeStatisticsSnapshot([
-      makeProjectStatistics("root", null, 0, 1, 0, "Root"),
-      makeProjectStatistics("empty-child", "root", 0, 0, 0, "Empty child"),
-    ]);
+  it("keeps a configured root available without injecting its zero-task project", () => {
+    const contextProjects = [
+      makeProjectOption("root", "Root"),
+      makeProjectOption("empty-child", "Empty child"),
+    ];
     renderList(
       makeModel(makeProject("root", "Root", [makeTask("root-task")])),
       makeActions(),
       makeNavigation(),
       "empty-child",
-      snapshot,
+      contextProjects,
     );
 
     const overview = screen.getByRole("region", { name: "Project overview" });
-    expect(overview).toHaveTextContent("1 project · No tasks");
+    expect(overview).toHaveTextContent("0 projects · No tasks");
     expect(screen.getByRole("img", { name: "No tasks to calculate completion" })).toBeVisible();
     expect(
       screen.queryByText("The selected root project is no longer available."),
@@ -313,14 +288,14 @@ describe("TodoistList", () => {
 
   it("forwards the controlled Project Overview collapse state", () => {
     const onProjectOverviewCollapsedChange = vi.fn();
-    const snapshot = makeStatisticsSnapshot([makeProjectStatistics("root", null, 0, 1, 0, "Root")]);
+    const contextProjects = [makeProjectOption("root", "Root")];
     const model = makeModel(makeProject("root", "Root", [makeTask("root-task")]));
     const { rerenderList } = renderList(
       model,
       makeActions(),
       makeNavigation(),
       "root",
-      snapshot,
+      contextProjects,
       false,
       onProjectOverviewCollapsedChange,
     );
@@ -331,41 +306,35 @@ describe("TodoistList", () => {
     expect(onProjectOverviewCollapsedChange).toHaveBeenCalledWith(true);
     expect(toggle).toHaveAttribute("aria-expanded", "false");
 
-    rerenderList(model, snapshot, true, "root");
+    rerenderList(model, contextProjects, true, "root");
     expect(toggle).toHaveAttribute("aria-expanded", "false");
   });
 
-  it("refreshes Project Overview when a newer statistics snapshot arrives", () => {
-    const initialSnapshot = makeStatisticsSnapshot(
-      [makeProjectStatistics("root", null, 0, 1, 0, "Root")],
-      "2026-08-10T06:30:00.000Z",
-    );
-    const refreshedSnapshot = makeStatisticsSnapshot(
-      [
-        makeProjectStatistics("root", null, 0, 0, 1, "Root"),
-        makeProjectStatistics("new-child", "root", 0, 0, 1, "New child"),
-      ],
-      "2026-08-10T06:45:00.000Z",
-    );
+  it("does not change Project Overview totals from a newer context snapshot", () => {
+    const initialContextProjects = [makeProjectOption("root", "Root")];
+    const refreshedContextProjects = [
+      makeProjectOption("root", "Root"),
+      makeProjectOption("new-child", "New child"),
+    ];
     const model = makeModel(makeProject("root", "Root", [makeTask("root-task")]));
     const { rerenderList } = renderList(
       model,
       makeActions(),
       makeNavigation(),
       "root",
-      initialSnapshot,
+      initialContextProjects,
     );
 
     const overview = screen.getByRole("region", { name: "Project overview" });
     expect(overview).toHaveTextContent("1 project · 1 task · 0% complete");
-    expect(overview.querySelector('time[datetime="2026-08-10T06:30:00.000Z"]')).not.toBeNull();
+    expect(overview.querySelector("time")).toBeNull();
 
-    rerenderList(model, refreshedSnapshot, false, "root");
-    expect(overview).toHaveTextContent("2 projects · 2 tasks · 100% complete");
+    rerenderList(model, refreshedContextProjects, false, "root");
+    expect(overview).toHaveTextContent("1 project · 1 task · 0% complete");
     expect(
-      screen.getByRole("img", { name: "100% complete, 2 completed of 2 tasks" }),
+      screen.getByRole("img", { name: "0% complete, 0 completed of 1 tasks" }),
     ).toBeInTheDocument();
-    expect(overview.querySelector('time[datetime="2026-08-10T06:45:00.000Z"]')).not.toBeNull();
+    expect(overview.querySelector("time")).toBeNull();
   });
 
   it("follows an externally changed root across statistics and Base rows", () => {
@@ -378,14 +347,20 @@ describe("TodoistList", () => {
     const child = makeProject("child-project", "Child", [childTask]);
     const root = makeProject("root", "Root", [makeTask("root-task")], [child]);
     const model = makeModel(root);
-    const snapshot = makeStatisticsSnapshot([
-      makeProjectStatistics("root", null, 0, 1, 0, "Root"),
-      makeProjectStatistics("child-project", "root", 0, 1, 0, "Child"),
-    ]);
-    const { rerenderList } = renderList(model, makeActions(), makeNavigation(), "root", snapshot);
+    const contextProjects = [
+      makeProjectOption("root", "Root"),
+      makeProjectOption("child-project", "Child"),
+    ];
+    const { rerenderList } = renderList(
+      model,
+      makeActions(),
+      makeNavigation(),
+      "root",
+      contextProjects,
+    );
 
     expect(screen.getByText("Task root-task")).toBeInTheDocument();
-    rerenderList(model, snapshot, false, "child-project");
+    rerenderList(model, contextProjects, false, "child-project");
 
     expect(screen.queryByText("Task root-task")).not.toBeInTheDocument();
     expect(screen.getByText("Task child-task")).toBeInTheDocument();
@@ -431,8 +406,6 @@ describe("TodoistList", () => {
       null,
       false,
       vi.fn(),
-      { state: "idle" },
-      true,
       false,
     );
 
@@ -479,8 +452,6 @@ describe("TodoistList", () => {
       null,
       false,
       vi.fn(),
-      { state: "idle" },
-      true,
       false,
     );
 
@@ -498,18 +469,7 @@ describe("TodoistList", () => {
   it("does not offer a task disclosure for a project that only contains child projects", () => {
     const child = makeProject("child", "Child", [makeTask("child-task")]);
     const root = makeProject("root", "Root", [], [child]);
-    renderList(
-      makeModel(root),
-      makeActions(),
-      makeNavigation(),
-      null,
-      null,
-      false,
-      vi.fn(),
-      { state: "idle" },
-      true,
-      false,
-    );
+    renderList(makeModel(root), makeActions(), makeNavigation(), null, null, false, vi.fn(), false);
 
     expect(screen.getByText("Child", { selector: ".todoist-bases-project-name" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Show tasks in project Root" })).toBeDisabled();
@@ -518,9 +478,7 @@ describe("TodoistList", () => {
 
   it("shows an empty project statistic without exposing a misleading progress value", () => {
     const empty = makeProject("empty", "Empty", []);
-    renderList(makeModel(empty), makeActions(), makeNavigation(), null, null, false, vi.fn(), {
-      state: "idle",
-    });
+    renderList(makeModel(empty), makeActions(), makeNavigation(), null, null, false, vi.fn());
 
     const row = screen
       .getByText("Empty", { selector: ".todoist-bases-project-name" })
@@ -530,39 +488,58 @@ describe("TodoistList", () => {
     expect(screen.queryByRole("progressbar", { name: "Empty completion" })).not.toBeInTheDocument();
   });
 
-  it("renders a snapshot-only project hierarchy even when the Base has no task rows", () => {
-    const scopeKey = (id: string) => todoistListProjectScopeKey("mapping-root", "root", id);
-    const emptyChild = makeProject("empty-child", "Empty child", []);
-    emptyChild.scopeKey = scopeKey("empty-child");
-    emptyChild.pathIds = ["root", "empty-child"];
-    emptyChild.pathNames = ["Root", "Empty child"];
-    const root = makeProject("root", "Root", [], [emptyChild]);
-    root.scopeKey = scopeKey("root");
-    const model = makeModel(root);
+  it("shows unavailable-only project rows as unavailable instead of empty", () => {
+    const unavailable = makeTask("unavailable", "stale");
+    renderList(makeModel(makeProject("root", "Root", [unavailable])));
+
+    const row = screen
+      .getByText("Root", { selector: ".todoist-bases-project-name" })
+      .closest(".todoist-bases-project-row");
+    expect(row).toHaveTextContent("1 unavailable");
+    expect(row).not.toHaveTextContent("No tasks");
+    expect(screen.queryByRole("progressbar", { name: /Root completion/ })).not.toBeInTheDocument();
+  });
+
+  it("shows unavailable tasks beside project progress without changing its denominator", () => {
+    const root = makeProject("root", "Root", [
+      makeTask("active"),
+      makeTask("completed", "completed"),
+      makeTask("unavailable", "out_of_scope"),
+    ]);
+    renderList(makeModel(root));
+
+    const row = screen
+      .getByText("Root", { selector: ".todoist-bases-project-name" })
+      .closest(".todoist-bases-project-row");
+    expect(row).toHaveTextContent("1 / 2 completed·50%·1 unavailable");
+    const progress = screen.getByRole("progressbar", {
+      name: "Root completion, 1 unavailable task",
+    });
+    expect(progress).toHaveAttribute("max", "2");
+    expect(progress).toHaveAttribute("value", "1");
+  });
+
+  it("does not render a context-only project hierarchy when the Base has no task rows", () => {
+    const model = makeModel(makeProject("root", "Root", []));
     model.groups[0] = {
-      key: "group:snapshot:ungrouped",
-      synthetic: true,
-      projects: [root],
+      key: "group:0:all",
+      projects: [],
       counts: { active: 0, completed: 0, unavailable: 0 },
     };
     model.taskCount = 0;
     model.counts = { active: 0, completed: 0, unavailable: 0 };
-    const snapshot = makeStatisticsSnapshot([
-      makeProjectStatistics("root", null, 0, 0, 0, "Root"),
-      makeProjectStatistics("empty-child", "root", 0, 0, 0, "Empty child"),
-    ]);
+    const contextProjects = [
+      makeProjectOption("root", "Root"),
+      makeProjectOption("empty-child", "Empty child"),
+    ];
 
-    renderList(model, makeActions(), makeNavigation(), null, snapshot, false, vi.fn(), {
-      state: "idle",
-    });
+    renderList(model, makeActions(), makeNavigation(), null, contextProjects, false, vi.fn());
 
-    expect(screen.getByText("Root", { selector: ".todoist-bases-project-name" })).toBeVisible();
     expect(
-      screen.getByText("Empty child", { selector: ".todoist-bases-project-name" }),
-    ).toBeVisible();
-    expect(
-      screen.queryByText("No Todoist Project Sync tasks were found in this Base."),
-    ).not.toBeInTheDocument();
+      screen.getByText("No Todoist Project Sync tasks were found in this Base."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Root", { selector: ".todoist-bases-project-name" })).toBeNull();
+    expect(screen.queryByText("Empty child")).toBeNull();
   });
 
   it("renders mixed hierarchy branches in the Base-provided order", () => {

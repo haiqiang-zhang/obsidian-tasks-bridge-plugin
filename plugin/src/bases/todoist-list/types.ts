@@ -1,11 +1,7 @@
 import type { BasesPropertyId } from "obsidian";
 
 import type { Project } from "@/api/domain/project";
-import type {
-  ProjectSyncConfig,
-  ProjectSyncStatisticsSnapshot,
-  ProjectSyncStatus,
-} from "@/project-sync";
+import type { ProjectSyncConfig } from "@/project-sync";
 
 export type TodoistListTaskStatus = "active" | "completed" | "stale" | "out_of_scope";
 
@@ -60,6 +56,7 @@ export type TodoistListTaskRecord = {
   durationUnit?: string;
   order?: number;
   url?: string;
+  completedAt?: string;
   metadata: TodoistListMetadata[];
 };
 
@@ -100,8 +97,6 @@ export type TodoistListProjectItem =
 export type TodoistListGroup = {
   key: string;
   label?: string;
-  /** A hierarchy-only bucket for synchronized scopes with no entry in any Base group. */
-  synthetic?: true;
   projects: TodoistListProject[];
   counts: TodoistListCounts;
 };
@@ -145,13 +140,32 @@ export interface TodoistListNavigation {
   hoverFile(filePath: string, targetEl: HTMLElement, event: MouseEvent): void;
 }
 
-export interface TodoistListProjectStatisticsSource {
+export type TodoistListProjectContext = {
+  scopes: readonly {
+    mappingId: string;
+    rootProjectId: string;
+    projects: readonly {
+      id: string;
+      parentId: string | null;
+      name: string;
+      childOrder: number;
+    }[];
+    tasks: readonly {
+      id: string;
+      projectId: string;
+      parentId?: string;
+      sectionId?: string;
+      order: number;
+    }[];
+  }[];
+};
+
+export interface TodoistListProjectContextSource {
   getConfig(): ProjectSyncConfig;
   getProjects(): readonly Project[];
-  getSnapshot(): ProjectSyncStatisticsSnapshot | null;
-  getStatus(): ProjectSyncStatus;
-  isConfigured(): boolean;
-  subscribe(listener: () => void): () => void;
+  getContext(): TodoistListProjectContext | null;
+  /** Subscribe to hierarchy-metadata changes without supplying an alternate task result set. */
+  subscribeContext(listener: () => void): () => void;
 }
 
 export type TodoistListViewOptions = {

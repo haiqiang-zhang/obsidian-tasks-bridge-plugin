@@ -1,18 +1,15 @@
 import type React from "react";
 import { type CSSProperties, useId } from "react";
 
-import type { ProjectSyncStatus } from "@/project-sync";
-import { ObsidianIcon, ObsidianLoadingIcon } from "@/ui/components/obsidian-icon";
+import { ObsidianIcon } from "@/ui/components/obsidian-icon";
 
 import { CompletionHeatmap } from "./CompletionHeatmap";
 import type { CompletionHeatmapRange } from "./completionHeatmapModel";
 import type { ProjectOverviewModel } from "./projectOverviewModel";
 
 export type ProjectOverviewProps = {
-  model: ProjectOverviewModel | null;
+  model: ProjectOverviewModel;
   scopeLabel: string;
-  status: ProjectSyncStatus;
-  configured: boolean;
   collapsed: boolean;
   completionHeatmapRange: CompletionHeatmapRange;
   onCollapsedChange: (collapsed: boolean) => void;
@@ -28,8 +25,6 @@ const percentageScale = 100;
 export const ProjectOverview: React.FC<ProjectOverviewProps> = ({
   model,
   scopeLabel,
-  status,
-  configured,
   collapsed,
   completionHeatmapRange,
   onCollapsedChange,
@@ -38,17 +33,12 @@ export const ProjectOverview: React.FC<ProjectOverviewProps> = ({
   const instanceId = useId();
   const headingId = `${instanceId}-heading`;
   const bodyId = `${instanceId}-body`;
-  const loading = model === null && configured && isWaitingForInitialSync(status);
-  const available = model?.rootAvailable ?? true;
-  const summary = projectSummaryLabel(model, status, configured);
 
   return (
     <section
-      aria-busy={loading || undefined}
       aria-labelledby={headingId}
       className="todoist-bases-project-overview"
       data-collapsed={collapsed || undefined}
-      data-loading={loading || undefined}
     >
       <button
         aria-controls={bodyId}
@@ -73,133 +63,21 @@ export const ProjectOverview: React.FC<ProjectOverviewProps> = ({
             </span>
           </span>
         </span>
-        <span className="todoist-bases-project-overview-header-meta">
-          <span className="todoist-bases-project-overview-header-summary">{summary}</span>
-          <LastSynced syncedAt={model?.syncedAt ?? null} />
+        <span className="todoist-bases-project-overview-header-summary">
+          {projectSummaryLabel(model)}
         </span>
       </button>
 
       <div className="todoist-bases-project-overview-content" hidden={collapsed} id={bodyId}>
-        {model === null && <ProjectOverviewState configured={configured} status={status} />}
-        {model !== null && !available && <UnavailableRoot />}
-        {model !== null && available && (
-          <ProjectOverviewBody
-            completionHeatmapRange={completionHeatmapRange}
-            model={model}
-            onCompletionHeatmapRangeChange={onCompletionHeatmapRangeChange}
-          />
-        )}
+        <ProjectOverviewBody
+          completionHeatmapRange={completionHeatmapRange}
+          model={model}
+          onCompletionHeatmapRangeChange={onCompletionHeatmapRangeChange}
+        />
       </div>
     </section>
   );
 };
-
-const LastSynced: React.FC<{ syncedAt: string | null }> = ({ syncedAt }) => {
-  if (syncedAt === null) {
-    return (
-      <span className="todoist-bases-project-overview-last-synced">
-        <ObsidianIcon aria-hidden="true" id="lucide-refresh-cw" size="xs" />
-        <span className="todoist-bases-project-overview-last-synced-label">Not synced yet</span>
-      </span>
-    );
-  }
-
-  return (
-    <time
-      className="todoist-bases-project-overview-last-synced"
-      dateTime={syncedAt}
-      title={syncedAt}
-    >
-      <ObsidianIcon aria-hidden="true" id="lucide-refresh-cw" size="xs" />
-      <span className="todoist-bases-project-overview-last-synced-label">
-        Last synced {formatSyncedAt(syncedAt)}
-      </span>
-    </time>
-  );
-};
-
-const ProjectOverviewState: React.FC<{
-  configured: boolean;
-  status: ProjectSyncStatus;
-}> = ({ configured, status }) => {
-  if (!configured) {
-    return (
-      <output className="todoist-bases-project-overview-state">
-        <ObsidianIcon id="lucide-settings" size="l" />
-        <span className="todoist-bases-project-overview-state-copy">
-          <strong>Project Sync is not configured.</strong>
-          <span>Add a project mapping in Tasks Bridge settings to enable complete statistics.</span>
-        </span>
-      </output>
-    );
-  }
-
-  if (status.state === "disabled") {
-    return (
-      <output className="todoist-bases-project-overview-state">
-        <ObsidianIcon id="lucide-circle-pause" size="l" />
-        <span className="todoist-bases-project-overview-state-copy">
-          <strong>Project Sync is disabled.</strong>
-          <span>Enable and configure Project Sync to see complete project statistics.</span>
-        </span>
-      </output>
-    );
-  }
-
-  if (status.state === "error") {
-    return (
-      <output className="todoist-bases-project-overview-state">
-        <ObsidianIcon id="lucide-circle-alert" size="l" />
-        <span className="todoist-bases-project-overview-state-copy">
-          <strong>Project overview is unavailable.</strong>
-          <span>{status.message}</span>
-        </span>
-      </output>
-    );
-  }
-
-  if (status.state === "disposed") {
-    return (
-      <output className="todoist-bases-project-overview-state">
-        <ObsidianIcon id="lucide-circle-alert" size="l" />
-        <span className="todoist-bases-project-overview-state-copy">
-          <strong>Project overview is unavailable.</strong>
-          <span>Reload Tasks Bridge to reconnect Project Sync.</span>
-        </span>
-      </output>
-    );
-  }
-
-  return (
-    <output
-      aria-live="polite"
-      className="todoist-bases-project-overview-state todoist-bases-project-overview-loading"
-    >
-      <ObsidianLoadingIcon size="l" />
-      <span className="todoist-bases-project-overview-state-copy">
-        <strong>Preparing project overview</strong>
-        <span>
-          {status.state === "syncing"
-            ? "Loading the complete Project Sync snapshot."
-            : "Waiting for the initial Project Sync."}
-        </span>
-      </span>
-    </output>
-  );
-};
-
-const UnavailableRoot: React.FC = () => (
-  <output className="todoist-bases-project-overview-state">
-    <ObsidianIcon id="lucide-circle-alert" size="l" />
-    <span className="todoist-bases-project-overview-state-copy">
-      <strong>The selected root project is unavailable.</strong>
-      <span>
-        It is not part of the synchronized project hierarchy. Choose another root project to see its
-        statistics.
-      </span>
-    </span>
-  </output>
-);
 
 const ProjectOverviewBody: React.FC<{
   model: ProjectOverviewModel;
@@ -211,7 +89,8 @@ const ProjectOverviewBody: React.FC<{
       <CompletionRing
         completed={model.counts.completed}
         rate={model.completionRate}
-        total={model.taskCount}
+        total={model.counts.active + model.counts.completed}
+        unavailable={model.counts.unavailable}
       />
       <OverviewMetrics model={model} />
     </div>
@@ -227,12 +106,19 @@ const CompletionRing: React.FC<{
   completed: number;
   rate: number | null;
   total: number;
-}> = ({ completed, rate, total }) => {
+  unavailable: number;
+}> = ({ completed, rate, total, unavailable }) => {
   const rateLabel = formatCompletionRate(rate);
-  const accessibleLabel =
-    rate === null
-      ? "No tasks to calculate completion"
-      : `${rateLabel} complete, ${completed} completed of ${total} tasks`;
+  let accessibleLabel: string;
+  if (rate === null) {
+    accessibleLabel =
+      unavailable > 0
+        ? "No available tasks to calculate completion"
+        : "No tasks to calculate completion";
+  } else {
+    const availabilityLabel = unavailable > 0 ? "available " : "";
+    accessibleLabel = `${rateLabel} complete, ${completed} completed of ${total} ${availabilityLabel}tasks`;
+  }
 
   return (
     <div
@@ -272,6 +158,7 @@ const OverviewMetrics: React.FC<{ model: ProjectOverviewModel }> = ({ model }) =
       <Metric label="Total" value={model.taskCount} />
       <Metric label="Active" value={model.counts.active} />
       <Metric label="Completed" value={model.counts.completed} />
+      <Metric label="Unavailable" value={model.counts.unavailable} />
       <Metric label="Projects" value={model.projectCount} />
     </dl>
   </fieldset>
@@ -284,34 +171,15 @@ const Metric: React.FC<{ label: string; value: number }> = ({ label, value }) =>
   </div>
 );
 
-const projectSummaryLabel = (
-  model: ProjectOverviewModel | null,
-  status: ProjectSyncStatus,
-  configured: boolean,
-): string => {
-  if (model === null) {
-    if (!configured) {
-      return "Project Sync not configured";
-    }
-    if (status.state === "disabled") {
-      return "Project Sync disabled";
-    }
-    if (status.state === "error" || status.state === "disposed") {
-      return "Project statistics unavailable";
-    }
-    return status.state === "syncing" ? "Syncing projects" : "Waiting for Project Sync";
-  }
-  if (!model.rootAvailable) {
-    return "Project statistics unavailable";
-  }
+const projectSummaryLabel = (model: ProjectOverviewModel): string => {
   if (model.taskCount === 0) {
     return `${pluralize(model.projectCount, "project")} · No tasks`;
   }
+  if (model.completionRate === null) {
+    return `${pluralize(model.projectCount, "project")} · ${pluralize(model.taskCount, "task")} · ${model.counts.unavailable} unavailable`;
+  }
   return `${pluralize(model.projectCount, "project")} · ${pluralize(model.taskCount, "task")} · ${formatCompletionRate(model.completionRate)} complete`;
 };
-
-const isWaitingForInitialSync = (status: ProjectSyncStatus): boolean =>
-  status.state === "idle" || status.state === "syncing" || status.state === "success";
 
 const formatCompletionRate = (rate: number | null): string =>
   rate === null ? "—" : `${Math.round(clampRate(rate) * percentageScale)}%`;
@@ -324,14 +192,3 @@ const clampRate = (rate: number): number => Math.max(0, Math.min(1, rate));
 
 const pluralize = (count: number, noun: string): string =>
   `${count} ${count === 1 ? noun : `${noun}s`}`;
-
-const formatSyncedAt = (syncedAt: string): string => {
-  const date = new Date(syncedAt);
-  if (Number.isNaN(date.valueOf())) {
-    return syncedAt;
-  }
-  return new Intl.DateTimeFormat("en-US", {
-    dateStyle: "medium",
-    timeStyle: "short",
-  }).format(date);
-};

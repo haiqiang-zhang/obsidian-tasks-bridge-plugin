@@ -1,131 +1,56 @@
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import type { ComponentProps } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { ProjectSyncStatus } from "@/project-sync";
-
 import { ProjectOverview } from "./ProjectOverview";
-import type { ProjectOverviewModel, ProjectOverviewNode } from "./projectOverviewModel";
+import type { ProjectOverviewModel } from "./projectOverviewModel";
 
 afterEach(cleanup);
 
-const idleStatus: ProjectSyncStatus = { state: "idle" };
+const makeModel = (overrides: Partial<ProjectOverviewModel> = {}): ProjectOverviewModel => ({
+  counts: { active: 1, completed: 2, unavailable: 0 },
+  taskCount: 3,
+  projectCount: 2,
+  completionRate: 2 / 3,
+  completionEvents: [],
+  ...overrides,
+});
 
-const makeNode = (
-  id: string,
-  name: string,
-  active: number,
-  completed: number,
-  children: ProjectOverviewNode[] = [],
-  pathNames: string[] = [name],
-): ProjectOverviewNode => {
-  const taskCount = active + completed;
-  const childCounts = children.reduce(
-    (counts, child) => ({
-      active: counts.active + child.counts.active,
-      completed: counts.completed + child.counts.completed,
-    }),
-    { active: 0, completed: 0 },
+const renderOverview = (
+  model: ProjectOverviewModel = makeModel(),
+  overrides: Partial<ComponentProps<typeof ProjectOverview>> = {},
+) =>
+  render(
+    <ProjectOverview
+      collapsed={false}
+      completionHeatmapRange="last-year"
+      model={model}
+      onCollapsedChange={vi.fn()}
+      onCompletionHeatmapRangeChange={vi.fn()}
+      scopeLabel="Root"
+      {...overrides}
+    />,
   );
-  return {
-    id,
-    scopeKey: `project:${id}`,
-    name,
-    pathIds: pathNames.map((_, index) => `${id}-${index}`),
-    pathNames,
-    directCounts: {
-      active: active - childCounts.active,
-      completed: completed - childCounts.completed,
-    },
-    directCompletionEvents: [],
-    counts: { active, completed },
-    children,
-    taskCount,
-    projectCount: 1 + children.reduce((count, child) => count + child.projectCount, 0),
-    completionRate: taskCount === 0 ? null : completed / taskCount,
-  };
-};
-
-const makeModel = (overrides: Partial<ProjectOverviewModel> = {}): ProjectOverviewModel => {
-  const grandchild = makeNode(
-    "grandchild",
-    "Grandchild",
-    0,
-    1,
-    [],
-    ["Root", "Child", "Grandchild"],
-  );
-  const child = makeNode("child", "Child", 1, 1, [grandchild], ["Root", "Child"]);
-  const root = makeNode("root", "Root", 1, 2, [child], ["Root"]);
-  return {
-    syncedAt: "2026-08-10T06:00:00.000Z",
-    rootProjectId: "root",
-    rootAvailable: true,
-    projectOptions: [
-      {
-        id: "root",
-        scopeKey: "project:root",
-        name: "Root",
-        pathIds: ["root"],
-        pathNames: ["Root"],
-      },
-      {
-        id: "child",
-        scopeKey: "project:child",
-        name: "Child",
-        pathIds: ["root", "child"],
-        pathNames: ["Root", "Child"],
-      },
-      {
-        id: "grandchild",
-        scopeKey: "project:grandchild",
-        name: "Grandchild",
-        pathIds: ["root", "child", "grandchild"],
-        pathNames: ["Root", "Child", "Grandchild"],
-      },
-    ],
-    roots: [root],
-    counts: { active: 1, completed: 2 },
-    taskCount: 3,
-    projectCount: 3,
-    completionRate: 2 / 3,
-    completionEvents: [],
-    ...overrides,
-  };
-};
 
 describe("ProjectOverview", () => {
-  it("exposes an accessible controlled disclosure with only percentage and activity modules", () => {
-    render(
-      <ProjectOverview
-        collapsed={false}
-        completionHeatmapRange="last-year"
-        configured={true}
-        model={makeModel()}
-        onCollapsedChange={vi.fn()}
-        onCompletionHeatmapRangeChange={vi.fn()}
-        scopeLabel="Root"
-        status={idleStatus}
-      />,
-    );
+  it("renders percentage, activity, and metrics from the current Base result", () => {
+    renderOverview();
 
     const region = screen.getByRole("region", { name: "Project overview" });
     const toggle = within(region).getByRole("button", { name: /Project overview/ });
     const leading = toggle.querySelector(".todoist-bases-project-overview-header-leading");
-    const metadata = toggle.querySelector(".todoist-bases-project-overview-header-meta");
+    const summary = toggle.querySelector(".todoist-bases-project-overview-header-summary");
     const bodyId = toggle.getAttribute("aria-controls");
     expect(toggle.children).toHaveLength(2);
     expect(toggle.children[0]).toBe(leading);
-    expect(toggle.children[1]).toBe(metadata);
+    expect(toggle.children[1]).toBe(summary);
     expect(leading).toContainElement(
       toggle.querySelector(".todoist-bases-project-overview-disclosure"),
     );
     expect(leading).toContainElement(
       toggle.querySelector(".todoist-bases-project-overview-title-group"),
     );
-    expect(metadata).toContainElement(
-      toggle.querySelector(".todoist-bases-project-overview-header-summary"),
-    );
-    expect(metadata).toContainElement(toggle.querySelector("time"));
+    expect(toggle.querySelector("time")).not.toBeInTheDocument();
     expect(toggle).toHaveAttribute("aria-expanded", "true");
     expect(bodyId).not.toBeNull();
     expect(document.getElementById(bodyId ?? "")).toBeVisible();
@@ -135,34 +60,18 @@ describe("ProjectOverview", () => {
       }),
     ).toBeInTheDocument();
     expect(within(region).getByRole("region", { name: "Completion activity" })).toBeInTheDocument();
-    expect(within(region).queryByText("Project breakdown")).not.toBeInTheDocument();
-    expect(
-      within(region).queryByRole("list", { name: "Project statistics" }),
-    ).not.toBeInTheDocument();
-    expect(
-      within(region).queryByRole("list", { name: "Task status legend" }),
-    ).not.toBeInTheDocument();
+
     const metrics = within(region).getByRole("group", { name: "Project completion totals" });
     expect(within(metrics).getByText("Total").nextElementSibling).toHaveTextContent("3");
     expect(within(metrics).getByText("Active").nextElementSibling).toHaveTextContent("1");
     expect(within(metrics).getByText("Completed").nextElementSibling).toHaveTextContent("2");
-    expect(within(metrics).getByText("Projects").nextElementSibling).toHaveTextContent("3");
+    expect(within(metrics).getByText("Unavailable").nextElementSibling).toHaveTextContent("0");
+    expect(within(metrics).getByText("Projects").nextElementSibling).toHaveTextContent("2");
   });
 
   it("requests a collapsed-state change and follows the controlled prop", () => {
     const onCollapsedChange = vi.fn();
-    const { rerender } = render(
-      <ProjectOverview
-        collapsed={false}
-        completionHeatmapRange="last-year"
-        configured={true}
-        model={makeModel()}
-        onCollapsedChange={onCollapsedChange}
-        onCompletionHeatmapRangeChange={vi.fn()}
-        scopeLabel="Root"
-        status={idleStatus}
-      />,
-    );
+    const { rerender } = renderOverview(makeModel(), { onCollapsedChange });
 
     const toggle = screen.getByRole("button", { name: /Project overview/ });
     fireEvent.click(toggle);
@@ -173,200 +82,106 @@ describe("ProjectOverview", () => {
       <ProjectOverview
         collapsed={true}
         completionHeatmapRange="last-year"
-        configured={true}
         model={makeModel()}
         onCollapsedChange={onCollapsedChange}
         onCompletionHeatmapRangeChange={vi.fn()}
         scopeLabel="Root"
-        status={idleStatus}
       />,
     );
     expect(toggle).toHaveAttribute("aria-expanded", "false");
     expect(document.getElementById(toggle.getAttribute("aria-controls") ?? "")).not.toBeVisible();
-    expect(screen.getByText("3 projects · 3 tasks · 67% complete")).toBeVisible();
+    expect(screen.getByText("2 projects · 3 tasks · 67% complete")).toBeVisible();
   });
 
-  it("does not duplicate project hierarchy details in the overview", () => {
-    render(
-      <ProjectOverview
-        collapsed={false}
-        completionHeatmapRange="last-year"
-        configured={true}
-        model={makeModel()}
-        onCollapsedChange={vi.fn()}
-        onCompletionHeatmapRangeChange={vi.fn()}
-        scopeLabel="Root"
-        status={idleStatus}
-      />,
-    );
+  it("does not expose a separate Project Sync status or hierarchy source", () => {
+    renderOverview();
 
-    expect(screen.queryByText("Child")).not.toBeInTheDocument();
-    expect(screen.queryByText("Grandchild")).not.toBeInTheDocument();
-    expect(screen.queryByText("2 / 3 completed · 67%")).not.toBeInTheDocument();
-    expect(screen.getByText(/^Last synced /)).toBeInTheDocument();
-  });
-
-  it("shows a unified loading state before the initial Project Sync", () => {
-    render(
-      <ProjectOverview
-        collapsed={false}
-        completionHeatmapRange="last-year"
-        configured={true}
-        model={null}
-        onCollapsedChange={vi.fn()}
-        onCompletionHeatmapRangeChange={vi.fn()}
-        scopeLabel="All synchronized projects"
-        status={idleStatus}
-      />,
-    );
-
-    expect(screen.getByRole("region", { name: "Project overview" })).toHaveAttribute(
-      "aria-busy",
-      "true",
-    );
-    expect(screen.getByText("All synchronized projects")).toBeInTheDocument();
-    expect(screen.getByText("Waiting for Project Sync")).toBeInTheDocument();
-    const status = screen.getByRole("status");
-    expect(status).toHaveTextContent(
-      "Preparing project overviewWaiting for the initial Project Sync.",
-    );
-    expect(status.querySelector(".loader-spinner")).toBeInTheDocument();
-    expect(status.querySelector(".is-loading")).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Last synced /)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Waiting for Project Sync/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Project Sync disabled/)).not.toBeInTheDocument();
+    expect(screen.queryByText("Project breakdown")).not.toBeInTheDocument();
     expect(screen.queryByRole("list", { name: "Project statistics" })).not.toBeInTheDocument();
   });
 
-  it("explains when Project Sync has no mapping instead of showing an indefinite spinner", () => {
-    render(
-      <ProjectOverview
-        collapsed={false}
-        completionHeatmapRange="last-year"
-        configured={false}
-        model={null}
-        onCollapsedChange={vi.fn()}
-        onCompletionHeatmapRangeChange={vi.fn()}
-        scopeLabel="All synchronized projects"
-        status={{ state: "disabled" }}
-      />,
+  it("renders a zero-result model instead of an initial-sync loading state", () => {
+    renderOverview(
+      makeModel({
+        counts: { active: 0, completed: 0, unavailable: 0 },
+        taskCount: 0,
+        projectCount: 0,
+        completionRate: null,
+        completionEvents: [],
+      }),
+      { scopeLabel: "Root" },
     );
 
-    expect(screen.getByText("Project Sync not configured")).toBeInTheDocument();
-    expect(screen.getByRole("status")).toHaveTextContent("Project Sync is not configured.");
-    expect(screen.queryByText("Preparing project overview")).not.toBeInTheDocument();
-  });
-
-  it("explains when Project Sync is disabled instead of showing an indefinite spinner", () => {
-    render(
-      <ProjectOverview
-        collapsed={false}
-        completionHeatmapRange="last-year"
-        configured={true}
-        model={null}
-        onCollapsedChange={vi.fn()}
-        onCompletionHeatmapRangeChange={vi.fn()}
-        scopeLabel="All synchronized projects"
-        status={{ state: "disabled" }}
-      />,
-    );
-
-    expect(screen.getByRole("region", { name: "Project overview" })).not.toHaveAttribute(
-      "aria-busy",
-    );
-    expect(screen.getByText("Project Sync disabled")).toBeInTheDocument();
-    expect(screen.getByRole("status")).toHaveTextContent("Project Sync is disabled.");
-    expect(screen.queryByText("Preparing project overview")).not.toBeInTheDocument();
-  });
-
-  it("shows the initial Project Sync error when no last-good snapshot exists", () => {
-    render(
-      <ProjectOverview
-        collapsed={false}
-        completionHeatmapRange="last-year"
-        configured={true}
-        model={null}
-        onCollapsedChange={vi.fn()}
-        onCompletionHeatmapRangeChange={vi.fn()}
-        scopeLabel="All synchronized projects"
-        status={{
-          state: "error",
-          completedAt: "2026-08-10T06:00:00.000Z",
-          message: "Todoist request failed",
-        }}
-      />,
-    );
-
-    expect(screen.getByText("Project statistics unavailable")).toBeInTheDocument();
-    expect(screen.getByRole("status")).toHaveTextContent(
-      "Project overview is unavailable.Todoist request failed",
-    );
-  });
-
-  it("explains when the selected root is no longer synchronized", () => {
-    render(
-      <ProjectOverview
-        collapsed={false}
-        completionHeatmapRange="last-year"
-        configured={true}
-        model={makeModel({
-          rootProjectId: "removed-root",
-          rootAvailable: false,
-          projectOptions: [],
-          roots: [],
-          counts: { active: 0, completed: 0 },
-          taskCount: 0,
-          projectCount: 0,
-          completionRate: null,
-        })}
-        onCollapsedChange={vi.fn()}
-        onCompletionHeatmapRangeChange={vi.fn()}
-        scopeLabel="Selected root project"
-        status={idleStatus}
-      />,
-    );
-
-    expect(screen.getByText("Selected root project")).toBeInTheDocument();
-    expect(screen.getByText("Project statistics unavailable")).toBeInTheDocument();
-    expect(screen.getByRole("status")).toHaveTextContent(
-      "The selected root project is unavailable.",
-    );
-    expect(screen.queryByRole("img", { name: /complete/ })).not.toBeInTheDocument();
-  });
-
-  it("renders a zero-task percentage without project statistics", () => {
-    const emptyRoot = makeNode("empty", "Empty project", 0, 0, [], ["Empty project"]);
-    render(
-      <ProjectOverview
-        collapsed={false}
-        completionHeatmapRange="last-year"
-        configured={true}
-        model={makeModel({
-          rootProjectId: "empty",
-          projectOptions: [
-            {
-              id: "empty",
-              scopeKey: "project:empty",
-              name: "Empty project",
-              pathIds: ["empty"],
-              pathNames: ["Empty project"],
-            },
-          ],
-          roots: [emptyRoot],
-          counts: { active: 0, completed: 0 },
-          taskCount: 0,
-          projectCount: 1,
-          completionRate: null,
-        })}
-        onCollapsedChange={vi.fn()}
-        onCompletionHeatmapRangeChange={vi.fn()}
-        scopeLabel="Empty project"
-        status={idleStatus}
-      />,
-    );
-
-    expect(screen.getByText("1 project · No tasks")).toBeInTheDocument();
+    expect(screen.getByText("0 projects · No tasks")).toBeInTheDocument();
     expect(screen.getByRole("img", { name: "No tasks to calculate completion" })).toHaveTextContent(
       "—Complete",
     );
-    expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
-    expect(screen.queryByRole("list", { name: "Project statistics" })).not.toBeInTheDocument();
+    expect(
+      screen
+        .getByRole("region", { name: "Project overview" })
+        .querySelector(".todoist-bases-project-overview-state"),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("Preparing project overview")).not.toBeInTheDocument();
+  });
+
+  it("shows exactly the filtered Base totals supplied by its model", () => {
+    renderOverview(
+      makeModel({
+        counts: { active: 1, completed: 0, unavailable: 0 },
+        taskCount: 1,
+        projectCount: 1,
+        completionRate: 0,
+      }),
+    );
+
+    expect(screen.getByText("1 project · 1 task · 0% complete")).toBeInTheDocument();
+    const metrics = screen.getByRole("group", { name: "Project completion totals" });
+    expect(within(metrics).getByText("Total").nextElementSibling).toHaveTextContent("1");
+    expect(within(metrics).getByText("Active").nextElementSibling).toHaveTextContent("1");
+    expect(within(metrics).getByText("Completed").nextElementSibling).toHaveTextContent("0");
+    expect(within(metrics).getByText("Unavailable").nextElementSibling).toHaveTextContent("0");
+  });
+
+  it("counts unavailable Base rows in Total while excluding them from completion progress", () => {
+    renderOverview(
+      makeModel({
+        counts: { active: 1, completed: 2, unavailable: 3 },
+        taskCount: 6,
+        projectCount: 2,
+        completionRate: 2 / 3,
+      }),
+    );
+
+    expect(screen.getByText("2 projects · 6 tasks · 67% complete")).toBeInTheDocument();
+    expect(
+      screen.getByRole("img", {
+        name: "67% complete, 2 completed of 3 available tasks",
+      }),
+    ).toBeInTheDocument();
+    const metrics = screen.getByRole("group", { name: "Project completion totals" });
+    expect(within(metrics).getByText("Total").nextElementSibling).toHaveTextContent("6");
+    expect(within(metrics).getByText("Unavailable").nextElementSibling).toHaveTextContent("3");
+  });
+
+  it("reports unavailable-only results without treating them as no Base tasks", () => {
+    renderOverview(
+      makeModel({
+        counts: { active: 0, completed: 0, unavailable: 2 },
+        taskCount: 2,
+        projectCount: 1,
+        completionRate: null,
+      }),
+    );
+
+    expect(screen.getByText("1 project · 2 tasks · 2 unavailable")).toBeInTheDocument();
+    expect(
+      screen.getByRole("img", { name: "No available tasks to calculate completion" }),
+    ).toBeInTheDocument();
+    const metrics = screen.getByRole("group", { name: "Project completion totals" });
+    expect(within(metrics).getByText("Total").nextElementSibling).toHaveTextContent("2");
+    expect(within(metrics).getByText("Unavailable").nextElementSibling).toHaveTextContent("2");
   });
 });

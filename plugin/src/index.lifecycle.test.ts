@@ -4,7 +4,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TodoistListActions, TodoistListTaskRecord } from "@/bases/todoist-list";
 import { makeSettings } from "@/factories/settings";
 import { OBSIDIAN_SYNC_SETTLE_MS } from "@/infra/obsidianSyncGate";
-import { PROJECT_SYNC_FOLDER_OWNERSHIP_DATA_KEY, type ProjectSyncResult } from "@/project-sync";
+import {
+  PROJECT_SYNC_FOLDER_OWNERSHIP_DATA_KEY,
+  type ProjectSyncConfig,
+  type ProjectSyncResult,
+} from "@/project-sync";
 import { ProjectTaskProjectionError } from "@/services/projectTaskCommands";
 
 const runtime = vi.hoisted(() => ({
@@ -102,10 +106,10 @@ vi.mock("@/commands", () => ({
 
 vi.mock("@/bases/todoist-list", () => ({
   TASKS_LIST_VIEW_ID: "tasks-list",
-  createTasksListViewRegistration: (actions: unknown, projectStatistics: unknown) => ({
+  createTasksListViewRegistration: (actions: unknown, projectContext: unknown) => ({
     name: "Tasks List",
     actions,
-    projectStatistics,
+    projectContext,
   }),
 }));
 
@@ -252,11 +256,13 @@ const makeServices = () => ({
   projectSync: {
     clearStatisticsSnapshot: vi.fn(),
     dispose: vi.fn(),
-    getConfig: vi.fn(() => ({
-      enabled: false,
-      preserveUnmanagedItems: true,
-      mappings: [],
-    })),
+    getConfig: vi.fn(
+      (): ProjectSyncConfig => ({
+        enabled: false,
+        preserveUnmanagedItems: true,
+        mappings: [],
+      }),
+    ),
     getStatus: vi.fn(() => ({ state: "disabled" as const })),
     getStatisticsSnapshot: vi.fn(() => null),
     invalidate: vi.fn(),
@@ -264,7 +270,7 @@ const makeServices = () => ({
     reloadStatisticsCatalogs: vi.fn(),
     refreshStatisticsFromLocalProjection: vi.fn(async () => undefined),
     setConfig: vi.fn(),
-    subscribe: vi.fn(() => () => undefined),
+    subscribe: vi.fn<(listener: () => void) => () => void>(() => () => undefined),
     sync: vi.fn(async (): Promise<ProjectSyncResult | null> => null),
   },
   projectTasks: {
@@ -414,6 +420,8 @@ describe("TodoistPlugin async lifecycle", () => {
 
   it("registers the Tasks List Bases view", async () => {
     const services = makeServices();
+    const unsubscribe = vi.fn();
+    services.projectSync.subscribe.mockReturnValueOnce(unsubscribe);
     const plugin = makePlugin(services);
 
     await plugin.onload();
@@ -423,17 +431,94 @@ describe("TodoistPlugin async lifecycle", () => {
       expect.objectContaining({ name: "Tasks List" }),
     );
     const registration = runtime.registerBasesView.mock.calls[0]?.[1] as {
-      projectStatistics: {
-        getSnapshot(): unknown;
-        getStatus(): unknown;
-        isConfigured(): boolean;
-        subscribe(listener: () => void): () => void;
+      projectContext: {
+        getConfig(): unknown;
+        getContext(): unknown;
+        subscribeContext(listener: () => void): () => void;
       };
     };
-    expect(registration.projectStatistics.getSnapshot()).toBeNull();
-    expect(registration.projectStatistics.getStatus()).toEqual({ state: "disabled" });
-    expect(registration.projectStatistics.isConfigured()).toBe(false);
-    expect(services.projectSync.getStatisticsSnapshot).toHaveBeenCalledOnce();
+    expect(registration.projectContext.getConfig()).toEqual({
+      enabled: false,
+      preserveUnmanagedItems: true,
+      mappings: [],
+    });
+    expect(registration.projectContext.getContext()).toBeNull();
+    expect(services.projectSync.getStatisticsSnapshot).not.toHaveBeenCalled();
+
+    const listener = vi.fn();
+    expect(registration.projectContext.subscribeContext(listener)).toBe(unsubscribe);
+    expect(services.projectSync.subscribe).toHaveBeenCalledOnce();
+    const notifyContext = services.projectSync.subscribe.mock.calls[0]?.[0];
+    expect(notifyContext).toBeTypeOf("function");
+    notifyContext?.();
+    expect(listener).toHaveBeenCalledOnce();
+  });
+
+  it("builds Tasks List hierarchy context directly from the persisted Project catalog", async () => {
+    const services = makeServices();
+    vi.mocked(services.projectSync.getConfig).mockReturnValue({
+      enabled: true,
+      preserveUnmanagedItems: true,
+      mappings: [workProjectSyncMapping],
+    });
+    runtime.loadData.mockResolvedValueOnce({
+      ...defaultSettings({
+        projectSyncEnabled: true,
+        projectSyncMappings: [workProjectSyncMapping],
+      }),
+      projectSyncCatalogs: {
+        version: 2,
+        items: [
+          {
+            mappingId: "mapping-work",
+            rootProjectId: "work",
+            includeSubprojects: true,
+            syncedAt: "2026-08-18T08:00:00.000Z",
+            projects: [
+              { id: "work", parentId: null, name: "Work", childOrder: 0 },
+              { id: "child", parentId: "work", name: "Child", childOrder: 1 },
+            ],
+            tasks: [
+              {
+                id: "task-1",
+                projectId: "child",
+                parentId: "parent-task",
+                order: 2,
+              },
+            ],
+            completionEvents: [],
+          },
+        ],
+      },
+    });
+    const plugin = makePlugin(services);
+
+    await plugin.onload();
+
+    const registration = runtime.registerBasesView.mock.calls[0]?.[1] as {
+      projectContext: { getContext(): unknown };
+    };
+    expect(registration.projectContext.getContext()).toEqual({
+      scopes: [
+        {
+          mappingId: "mapping-work",
+          rootProjectId: "work",
+          projects: [
+            { id: "work", parentId: null, name: "Work", childOrder: 0 },
+            { id: "child", parentId: "work", name: "Child", childOrder: 1 },
+          ],
+          tasks: [
+            {
+              id: "task-1",
+              projectId: "child",
+              parentId: "parent-task",
+              order: 2,
+            },
+          ],
+        },
+      ],
+    });
+    expect(services.projectSync.getStatisticsSnapshot).not.toHaveBeenCalled();
   });
 
   it("registers canonical block names before their compatibility aliases", async () => {

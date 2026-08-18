@@ -10,7 +10,7 @@ import {
   createTasksListViewRegistration,
   TASKS_LIST_VIEW_ID,
   type TodoistListActions,
-  type TodoistListProjectStatisticsSource,
+  type TodoistListProjectContextSource,
 } from "@/bases/todoist-list";
 import { registerCommands } from "@/commands";
 import { QueryCache } from "@/data/queryCache";
@@ -144,7 +144,7 @@ export default class TodoistPlugin extends Plugin {
       TASKS_LIST_VIEW_ID,
       createTasksListViewRegistration(
         this.makeTodoistListActions(),
-        this.makeTodoistListProjectStatisticsSource(),
+        this.makeTodoistListProjectContextSource(),
       ),
     );
     this.registerMarkdownCodeBlockProcessor(
@@ -255,14 +255,35 @@ export default class TodoistPlugin extends Plugin {
     };
   }
 
-  private makeTodoistListProjectStatisticsSource(): TodoistListProjectStatisticsSource {
+  private makeTodoistListProjectContextSource(): TodoistListProjectContextSource {
     return {
       getConfig: () => this.services.projectSync.getConfig(),
       getProjects: () => this.services.projectSync.listProjects(),
-      getSnapshot: () => this.services.projectSync.getStatisticsSnapshot(),
-      getStatus: () => this.services.projectSync.getStatus(),
-      isConfigured: () => this.services.projectSync.getConfig().mappings.length > 0,
-      subscribe: (listener) => this.services.projectSync.subscribe(() => listener()),
+      getContext: () => {
+        const config = this.services.projectSync.getConfig();
+        const scopes = config.mappings.flatMap((mapping) => {
+          const catalog = this.projectCatalogStorage.getCatalog(mapping.id);
+          if (
+            mapping.project === null ||
+            catalog === null ||
+            catalog.rootProjectId !== mapping.project.projectId ||
+            catalog.includeSubprojects !== mapping.includeSubprojects
+          ) {
+            return [];
+          }
+
+          return [
+            {
+              mappingId: catalog.mappingId,
+              rootProjectId: catalog.rootProjectId,
+              projects: catalog.projects.map((project) => ({ ...project })),
+              tasks: catalog.tasks.map((task) => ({ ...task })),
+            },
+          ];
+        });
+        return scopes.length === 0 ? null : { scopes };
+      },
+      subscribeContext: (listener) => this.services.projectSync.subscribe(() => listener()),
     };
   }
 

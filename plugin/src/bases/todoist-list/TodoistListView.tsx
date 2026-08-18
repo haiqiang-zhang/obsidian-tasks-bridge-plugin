@@ -9,7 +9,6 @@ import {
 } from "obsidian";
 import { createRoot, type Root } from "react-dom/client";
 
-import type { ProjectSyncStatisticsSnapshot } from "@/project-sync";
 import { selectProjectHierarchy } from "@/project-sync";
 
 import { type CompletionHeatmapRange, isCompletionHeatmapRange } from "./completionHeatmapModel";
@@ -18,8 +17,9 @@ import { TodoistList } from "./TodoistList";
 import type {
   TodoistListActions,
   TodoistListNavigation,
+  TodoistListProjectContext,
+  TodoistListProjectContextSource,
   TodoistListProjectOption,
-  TodoistListProjectStatisticsSource,
   TodoistListViewOptions,
 } from "./types";
 import "./styles.scss";
@@ -37,7 +37,7 @@ const defaultCompletionHeatmapRange: CompletionHeatmapRange = "last-year";
 const allSynchronizedProjectsValue = "__tasks_bridge_all_synchronized_projects__";
 
 export const tasksListViewOptions = (
-  projectStatistics: TodoistListProjectStatisticsSource,
+  projectContext: TodoistListProjectContextSource,
   config?: BasesViewConfig,
 ): BasesAllOptions[] => [
   {
@@ -49,7 +49,7 @@ export const tasksListViewOptions = (
         key: rootProjectConfigKey,
         displayName: "Root project",
         default: allSynchronizedProjectsValue,
-        options: buildRootProjectDropdownOptions(projectStatistics, config),
+        options: buildRootProjectDropdownOptions(projectContext, config),
       },
     ],
   },
@@ -85,16 +85,16 @@ export const tasksListViewOptions = (
 
 export const createTasksListViewRegistration = (
   actions: TodoistListActions,
-  projectStatistics: TodoistListProjectStatisticsSource,
+  projectContext: TodoistListProjectContextSource,
 ): BasesViewRegistration => ({
   name: TASKS_LIST_VIEW_NAME,
   icon: "lucide-list-tree",
   factory: (controller, containerEl) =>
-    new TasksListView(controller, containerEl, actions, projectStatistics),
+    new TasksListView(controller, containerEl, actions, projectContext),
   // Obsidian 1.11.4 declares this callback without an argument, while newer API declarations pass
   // the current view config. An optional argument supports both and lets us preserve an unavailable
   // saved selection in newer Obsidian versions.
-  options: (config: BasesViewConfig) => tasksListViewOptions(projectStatistics, config),
+  options: (config: BasesViewConfig) => tasksListViewOptions(projectContext, config),
 });
 
 export class TasksListView extends BasesView implements HoverParent {
@@ -103,11 +103,10 @@ export class TasksListView extends BasesView implements HoverParent {
 
   private readonly actions: TodoistListActions;
   private readonly containerEl: HTMLDivElement;
-  private readonly projectStatistics: TodoistListProjectStatisticsSource;
+  private readonly projectContext: TodoistListProjectContextSource;
   private readonly reactRoot: Root;
-  private readonly unsubscribeProjectStatistics: () => void;
+  private readonly unsubscribeProjectContext: () => void;
   private readonly viewWindow: Window;
-  private projectStatisticsSnapshot: ProjectSyncStatisticsSnapshot | null;
   private dataAvailable = false;
   private renderQueued = false;
   private unloaded = false;
@@ -116,17 +115,15 @@ export class TasksListView extends BasesView implements HoverParent {
     controller: QueryController,
     parentEl: HTMLElement,
     actions: TodoistListActions,
-    projectStatistics: TodoistListProjectStatisticsSource,
+    projectContext: TodoistListProjectContextSource,
   ) {
     super(controller);
     this.actions = actions;
-    this.projectStatistics = projectStatistics;
-    this.projectStatisticsSnapshot = projectStatistics.getSnapshot();
+    this.projectContext = projectContext;
     this.viewWindow = parentEl.ownerDocument.defaultView ?? window;
     this.containerEl = parentEl.createDiv({ cls: "todoist-bases-list-container" });
     this.reactRoot = createRoot(this.containerEl);
-    this.unsubscribeProjectStatistics = projectStatistics.subscribe(() => {
-      this.projectStatisticsSnapshot = this.projectStatistics.getSnapshot();
+    this.unsubscribeProjectContext = projectContext.subscribeContext(() => {
       if (this.dataAvailable) {
         this.queueRender();
       }
@@ -156,16 +153,17 @@ export class TasksListView extends BasesView implements HoverParent {
 
   public override onunload(): void {
     this.unloaded = true;
-    this.unsubscribeProjectStatistics();
+    this.unsubscribeProjectContext();
     this.reactRoot.unmount();
     this.containerEl.remove();
   }
 
   private renderCurrentData(): void {
+    const projectContext = this.projectContext.getContext();
     const model = buildTodoistListModel(this.data.groupedData, {
       order: this.config.getOrder(),
       getDisplayName: (propertyId) => this.config.getDisplayName(propertyId),
-      projectStatisticsSnapshot: this.projectStatisticsSnapshot,
+      projectContext,
     });
     const rootProjectId = readRootProjectId(this.config.get(rootProjectConfigKey));
     const projectOverviewCollapsed = this.config.get(projectOverviewCollapsedConfigKey) === true;
@@ -202,9 +200,7 @@ export class TasksListView extends BasesView implements HoverParent {
         }
         options={options}
         projectOverviewCollapsed={projectOverviewCollapsed}
-        projectSyncConfigured={this.projectStatistics.isConfigured()}
-        projectSyncStatus={this.projectStatistics.getStatus()}
-        projectStatisticsSnapshot={this.projectStatisticsSnapshot}
+        rootProjectOptions={collectRootProjectOptions(this.projectContext, projectContext)}
         rootProjectId={rootProjectId}
       />,
     );
@@ -229,13 +225,13 @@ const readRootProjectId = (value: unknown): string | null => {
 };
 
 const buildRootProjectDropdownOptions = (
-  projectStatistics: TodoistListProjectStatisticsSource,
+  projectContext: TodoistListProjectContextSource,
   config?: BasesViewConfig,
 ): Record<string, string> => {
   const options: Record<string, string> = {
     [allSynchronizedProjectsValue]: "All synchronized projects",
   };
-  const projects = collectRootProjectOptions(projectStatistics);
+  const projects = collectRootProjectOptions(projectContext);
   for (const project of projects) {
     options[project.id] = project.pathNames.join(" / ");
   }
@@ -251,15 +247,15 @@ const buildRootProjectDropdownOptions = (
 };
 
 const collectRootProjectOptions = (
-  projectStatistics: TodoistListProjectStatisticsSource,
+  projectContext: TodoistListProjectContextSource,
+  currentContext: TodoistListProjectContext | null = projectContext.getContext(),
 ): TodoistListProjectOption[] => {
-  const liveProjects = [...projectStatistics.getProjects()];
-  const snapshot = projectStatistics.getSnapshot();
-  if (snapshot !== null) {
+  const liveProjects = [...projectContext.getProjects()];
+  if (currentContext !== null) {
     const liveById = new Map(liveProjects.map((project) => [project.id, project]));
     const result: TodoistListProjectOption[] = [];
     const seen = new Set<string>();
-    for (const scope of snapshot.scopes) {
+    for (const scope of currentContext.scopes) {
       const scopeById = new Map(scope.projects.map((project) => [project.id, project]));
       for (const project of scope.projects) {
         if (seen.has(project.id)) {
@@ -279,7 +275,7 @@ const collectRootProjectOptions = (
     return result;
   }
 
-  const configured = projectStatistics.getConfig().mappings;
+  const configured = projectContext.getConfig().mappings;
   const liveById = new Map(liveProjects.map((project) => [project.id, project]));
   const result: TodoistListProjectOption[] = [];
   const seen = new Set<string>();

@@ -9,13 +9,11 @@ import {
   useState,
 } from "react";
 
-import type { ProjectSyncStatisticsSnapshot, ProjectSyncStatus } from "@/project-sync";
 import { ObsidianIcon, ObsidianLoadingIcon } from "@/ui/components/obsidian-icon";
 
 import type { CompletionHeatmapRange } from "./completionHeatmapModel";
 import { scopeTodoistListGroups } from "./model";
 import { ProjectOverview } from "./ProjectOverview";
-import type { ProjectOverviewNode } from "./projectOverviewModel";
 import { buildProjectOverviewModel } from "./projectOverviewModel";
 import type {
   TodoistListActions,
@@ -42,9 +40,7 @@ export type TodoistListProps = {
   options: TodoistListViewOptions;
   actions: TodoistListActions;
   navigation: TodoistListNavigation;
-  projectStatisticsSnapshot: ProjectSyncStatisticsSnapshot | null;
-  projectSyncConfigured: boolean;
-  projectSyncStatus: ProjectSyncStatus;
+  rootProjectOptions: readonly TodoistListProjectOption[];
   projectOverviewCollapsed: boolean;
   completionHeatmapRange: CompletionHeatmapRange;
   onProjectOverviewCollapsedChange: (collapsed: boolean) => void;
@@ -57,9 +53,7 @@ export const TodoistList: React.FC<TodoistListProps> = ({
   options,
   actions,
   navigation,
-  projectStatisticsSnapshot,
-  projectSyncConfigured,
-  projectSyncStatus,
+  rootProjectOptions,
   projectOverviewCollapsed,
   completionHeatmapRange,
   onProjectOverviewCollapsedChange,
@@ -82,28 +76,24 @@ export const TodoistList: React.FC<TodoistListProps> = ({
     return () => ownerWindow.clearInterval(interval);
   }, [actions]);
 
-  const projectOverviewModel = useMemo(
-    () => buildProjectOverviewModel(projectStatisticsSnapshot, rootProjectId),
-    [projectStatisticsSnapshot, rootProjectId],
-  );
-  const projectStatisticsByScopeKey = useMemo(
-    () => indexProjectStatistics(projectOverviewModel?.roots ?? []),
-    [projectOverviewModel],
-  );
   const projectOptions = useMemo(
-    () => mergeProjectOptions(projectOverviewModel?.projectOptions ?? [], model.projects),
-    [projectOverviewModel, model.projects],
+    () => mergeProjectOptions(rootProjectOptions, model.projects),
+    [rootProjectOptions, model.projects],
   );
   const rootAvailable =
     rootProjectId === null || projectOptions.some((project) => project.id === rootProjectId);
   const projectOverviewScopeLabel =
     rootProjectId === null
-      ? "All synchronized projects"
+      ? "Current Base result"
       : (projectOptions.find((project) => project.id === rootProjectId)?.pathNames.join(" / ") ??
         "Selected root project");
   const scopedGroups = useMemo(
     () => scopeTodoistListGroups(model.groups, rootProjectId),
     [model.groups, rootProjectId],
+  );
+  const projectOverviewModel = useMemo(
+    () => buildProjectOverviewModel(scopedGroups),
+    [scopedGroups],
   );
   const scopedCounts = useMemo(
     () =>
@@ -205,12 +195,10 @@ export const TodoistList: React.FC<TodoistListProps> = ({
       <ProjectOverview
         collapsed={overviewCollapsed}
         completionHeatmapRange={heatmapRange}
-        configured={projectSyncConfigured}
         model={projectOverviewModel}
         onCollapsedChange={changeOverviewCollapsed}
         onCompletionHeatmapRangeChange={changeHeatmapRange}
         scopeLabel={projectOverviewScopeLabel}
-        status={projectSyncStatus}
       />
 
       {!rootAvailable && (
@@ -251,7 +239,6 @@ export const TodoistList: React.FC<TodoistListProps> = ({
               key={group.key}
               navigation={navigation}
               options={options}
-              projectStatistics={projectStatisticsByScopeKey}
               ready={ready}
               rootIsSelected={rootProjectId !== null}
               toggleCollapsed={toggleCollapsed}
@@ -275,7 +262,6 @@ type BranchProps = {
 
 type ProjectContentProps = {
   expandedProjectTasks: ReadonlySet<string>;
-  projectStatistics: ReadonlyMap<string, ProjectOverviewNode>;
   toggleProjectTasks: (key: string) => void;
 };
 
@@ -330,7 +316,6 @@ const ProjectBranch: React.FC<
   navigation,
   options,
   project,
-  projectStatistics,
   ready,
   rootIsSelected,
   toggleCollapsed,
@@ -344,7 +329,7 @@ const ProjectBranch: React.FC<
   const visibleItems = childItems.filter((item) => item.kind === "project" || tasksExpanded);
   const taskDepth = depth + 1;
   const childProjectDepth = depth + 1;
-  const statistics = projectRowStatistics(project, projectStatistics.get(project.scopeKey));
+  const statistics = projectRowStatistics(project);
 
   return (
     <div
@@ -381,7 +366,6 @@ const ProjectBranch: React.FC<
               key={projectItemKey(item)}
               navigation={navigation}
               options={options}
-              projectStatistics={projectStatistics}
               projectDepth={childProjectDepth}
               projectScopeKey={project.scopeKey}
               ready={ready}
@@ -416,7 +400,6 @@ const ProjectItemBranch: React.FC<
   navigation,
   options,
   projectDepth,
-  projectStatistics,
   projectScopeKey,
   ready,
   rootIsSelected,
@@ -435,7 +418,6 @@ const ProjectItemBranch: React.FC<
         navigation={navigation}
         options={options}
         project={item.project}
-        projectStatistics={projectStatistics}
         ready={ready}
         rootIsSelected={rootIsSelected}
         toggleCollapsed={toggleCollapsed}
@@ -478,6 +460,7 @@ type ProjectRowStatisticsModel = {
   completed: number;
   rate: number | null;
   total: number;
+  unavailable: number;
 };
 
 const ProjectRowStatistics: React.FC<{
@@ -485,23 +468,34 @@ const ProjectRowStatistics: React.FC<{
   statistics: ProjectRowStatisticsModel;
 }> = ({ name, statistics }) => {
   if (statistics.rate === null) {
+    const hasUnavailable = statistics.unavailable > 0;
     return (
       <span
         className="todoist-bases-project-statistics"
         data-empty="true"
-        title={`${name}: No tasks, including child projects`}
+        title={
+          hasUnavailable
+            ? `${name}: ${statistics.unavailable} unavailable ${statistics.unavailable === 1 ? "task" : "tasks"}, including child projects`
+            : `${name}: No tasks, including child projects`
+        }
       >
-        <span className="todoist-bases-project-statistics-label">No tasks</span>
+        <span className="todoist-bases-project-statistics-label">
+          {hasUnavailable ? `${statistics.unavailable} unavailable` : "No tasks"}
+        </span>
         <span aria-hidden="true" className="todoist-bases-project-progress" />
       </span>
     );
   }
 
   const percentage = Math.round(statistics.rate * percentageScale);
+  const unavailableLabel =
+    statistics.unavailable > 0
+      ? `, ${statistics.unavailable} unavailable ${statistics.unavailable === 1 ? "task" : "tasks"}`
+      : "";
   return (
     <span
       className="todoist-bases-project-statistics"
-      title={`${name}: ${statistics.completed} of ${statistics.total} tasks completed, ${percentage}%, including child projects`}
+      title={`${name}: ${statistics.completed} of ${statistics.total} available tasks completed, ${percentage}%${unavailableLabel}, including child projects`}
     >
       <span aria-hidden="true" className="todoist-bases-project-statistics-label">
         <span>
@@ -509,9 +503,15 @@ const ProjectRowStatistics: React.FC<{
         </span>
         <span className="todoist-bases-project-statistics-separator">·</span>
         <strong>{percentage}%</strong>
+        {statistics.unavailable > 0 && (
+          <>
+            <span className="todoist-bases-project-statistics-separator">·</span>
+            <span>{statistics.unavailable} unavailable</span>
+          </>
+        )}
       </span>
       <progress
-        aria-label={`${name} completion`}
+        aria-label={`${name} completion${unavailableLabel}`}
         className="todoist-bases-project-progress"
         max={statistics.total}
         value={statistics.completed}
@@ -999,12 +999,12 @@ const makeDiagnosticsMessage = (model: TodoistListModel): string | null => {
 const pluralize = (word: string, count: number): string => (count === 1 ? word : `${word}s`);
 
 const mergeProjectOptions = (
-  snapshotProjects: readonly TodoistListProjectOption[],
+  contextProjects: readonly TodoistListProjectOption[],
   baseProjects: readonly TodoistListProjectOption[],
 ): TodoistListProjectOption[] => {
   const merged: TodoistListProjectOption[] = [];
   const seen = new Set<string>();
-  for (const project of [...snapshotProjects, ...baseProjects]) {
+  for (const project of [...contextProjects, ...baseProjects]) {
     if (seen.has(project.scopeKey)) {
       continue;
     }
@@ -1014,39 +1014,13 @@ const mergeProjectOptions = (
   return merged;
 };
 
-const indexProjectStatistics = (
-  roots: readonly ProjectOverviewNode[],
-): Map<string, ProjectOverviewNode> => {
-  const result = new Map<string, ProjectOverviewNode>();
-  const visit = (project: ProjectOverviewNode): void => {
-    result.set(project.scopeKey, project);
-    for (const child of project.children) {
-      visit(child);
-    }
-  };
-  for (const root of roots) {
-    visit(root);
-  }
-  return result;
-};
-
-const projectRowStatistics = (
-  project: TodoistListProject,
-  snapshot: ProjectOverviewNode | undefined,
-): ProjectRowStatisticsModel => {
-  if (snapshot !== undefined) {
-    return {
-      completed: snapshot.counts.completed,
-      rate: snapshot.completionRate,
-      total: snapshot.taskCount,
-    };
-  }
-
+const projectRowStatistics = (project: TodoistListProject): ProjectRowStatisticsModel => {
   const total = project.counts.active + project.counts.completed;
   return {
     completed: project.counts.completed,
     rate: total === 0 ? null : project.counts.completed / total,
     total,
+    unavailable: project.counts.unavailable,
   };
 };
 

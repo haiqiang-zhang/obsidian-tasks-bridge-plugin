@@ -1,7 +1,5 @@
 import type { BasesEntry, BasesEntryGroup, BasesPropertyId, Value } from "obsidian";
 
-import type { ProjectSyncStatisticsSnapshot } from "@/project-sync";
-
 import type {
   TodoistListCounts,
   TodoistListDiagnostics,
@@ -10,6 +8,7 @@ import type {
   TodoistListMetadataKind,
   TodoistListModel,
   TodoistListProject,
+  TodoistListProjectContext,
   TodoistListProjectItem,
   TodoistListProjectOption,
   TodoistListSection,
@@ -46,6 +45,7 @@ const properties = {
   durationUnit: "note.todoist_duration_unit",
   order: "note.todoist_order",
   url: "note.todoist_url",
+  completedAt: "note.todoist_completed_at",
 } as const satisfies Record<string, BasesPropertyId>;
 
 const hiddenMetadataProperties = new Set<BasesPropertyId>([
@@ -71,7 +71,7 @@ const hiddenMetadataProperties = new Set<BasesPropertyId>([
 type BuildOptions = {
   order: BasesPropertyId[];
   getDisplayName?: (propertyId: BasesPropertyId) => string;
-  projectStatisticsSnapshot?: ProjectSyncStatisticsSnapshot | null;
+  projectContext?: TodoistListProjectContext | null;
 };
 
 type CatalogTaskContext = {
@@ -103,27 +103,10 @@ type OrderedProjectItem = {
 type GroupBuildResult = {
   key: string;
   label?: string;
-  synthetic?: true;
   projectsById: Map<string, MutableProject>;
   projectOrder: MutableProject[];
-  observedScopeKeys: Set<string>;
   taskCount: number;
   diagnostics: TodoistListDiagnostics;
-};
-
-type SnapshotProjectDescriptor = {
-  id: string;
-  scopeKey: string;
-  name: string;
-  parentScopeKey?: string;
-  pathIds: string[];
-  pathNames: string[];
-};
-
-type SnapshotScopeHierarchy = {
-  scopeKey: string;
-  projects: SnapshotProjectDescriptor[];
-  projectsByScopeKey: ReadonlyMap<string, SnapshotProjectDescriptor>;
 };
 
 type TaskIdentityState = {
@@ -156,11 +139,10 @@ export const buildTodoistListModel = (
     occurrencesByTaskKey: new Map(),
     seenFilePaths: new Set(),
   };
-  const catalogTasks = makeCatalogTaskContexts(options.projectStatisticsSnapshot ?? null);
+  const catalogTasks = makeCatalogTaskContexts(options.projectContext ?? null);
   const groupResults = groups.map((sourceGroup, index) =>
     buildGroup(sourceGroup, index, options, taskIdentities, catalogTasks),
   );
-  mergeSnapshotProjectHierarchy(groupResults, options.projectStatisticsSnapshot ?? null);
 
   const modelGroups: TodoistListGroup[] = [];
   const projectOptions: TodoistListProjectOption[] = [];
@@ -207,7 +189,6 @@ const buildGroup = (
   };
   const projectsById = new Map<string, MutableProject>();
   const projectOrder: MutableProject[] = [];
-  const observedScopeKeys = new Set<string>();
   let acceptedTaskCount = 0;
 
   for (const [sourceOrder, entry] of sourceGroup.entries.entries()) {
@@ -260,7 +241,6 @@ const buildGroup = (
       continue;
     }
     taskIdentities.acceptedTaskKeys.add(task.scopeKey);
-    observedScopeKeys.add(makeScopeKey(task.mappingId, task.rootProjectId));
     project.directTasks.push({ sourceOrder, task });
     acceptedTaskCount++;
   }
@@ -271,246 +251,9 @@ const buildGroup = (
     ...(label === undefined ? {} : { label }),
     projectsById,
     projectOrder,
-    observedScopeKeys,
     taskCount: acceptedTaskCount,
     diagnostics,
   };
-};
-
-const mergeSnapshotProjectHierarchy = (
-  groups: GroupBuildResult[],
-  snapshot: ProjectSyncStatisticsSnapshot | null,
-): void => {
-  const hierarchies = buildSnapshotScopeHierarchies(snapshot);
-  let syntheticGroup: GroupBuildResult | undefined;
-
-  for (const hierarchy of hierarchies) {
-    const observedGroups = groups.filter((group) =>
-      group.observedScopeKeys.has(hierarchy.scopeKey),
-    );
-    if (observedGroups.length > 0) {
-      for (const group of observedGroups) {
-        const existingProjects = hierarchy.projects
-          .filter((project) => group.projectsById.has(project.scopeKey))
-          .map((project) => project.scopeKey);
-        mergeSnapshotScopeIntoGroup(
-          group,
-          hierarchy,
-          withSnapshotAncestors(existingProjects, hierarchy),
-        );
-      }
-
-      const represented = new Set(groups.flatMap((group) => [...group.projectsById.keys()]));
-      const missingProjects = hierarchy.projects
-        .filter((project) => !represented.has(project.scopeKey))
-        .map((project) => project.scopeKey);
-      mergeSnapshotScopeIntoGroup(
-        observedGroups[0] as GroupBuildResult,
-        hierarchy,
-        withSnapshotAncestors(missingProjects, hierarchy),
-      );
-      continue;
-    }
-
-    syntheticGroup ??= makeSyntheticGroup();
-    mergeSnapshotScopeIntoGroup(
-      syntheticGroup,
-      hierarchy,
-      new Set(hierarchy.projects.map((project) => project.scopeKey)),
-    );
-  }
-
-  if (syntheticGroup !== undefined) {
-    groups.push(syntheticGroup);
-  }
-};
-
-const makeSyntheticGroup = (): GroupBuildResult => ({
-  key: "group:snapshot:ungrouped",
-  synthetic: true,
-  projectsById: new Map(),
-  projectOrder: [],
-  observedScopeKeys: new Set(),
-  taskCount: 0,
-  diagnostics: {
-    ignoredNonManaged: 0,
-    ignoredDuplicateTaskNotes: 0,
-    ignoredInvalid: 0,
-    hierarchyWarnings: 0,
-  },
-});
-
-const buildSnapshotScopeHierarchies = (
-  snapshot: ProjectSyncStatisticsSnapshot | null,
-): SnapshotScopeHierarchy[] => {
-  const result: SnapshotScopeHierarchy[] = [];
-  for (const scope of snapshot?.scopes ?? []) {
-    const projectsById = new Map<string, (typeof scope.projects)[number]>();
-    for (const project of scope.projects) {
-      if (!projectsById.has(project.id)) {
-        projectsById.set(project.id, project);
-      }
-    }
-    const root = projectsById.get(scope.rootProjectId);
-    if (root === undefined) {
-      continue;
-    }
-
-    const childrenByParentId = new Map<string, (typeof scope.projects)[number][]>();
-    for (const project of projectsById.values()) {
-      if (project.id === root.id || project.parentId === null) {
-        continue;
-      }
-      const children = childrenByParentId.get(project.parentId) ?? [];
-      children.push(project);
-      childrenByParentId.set(project.parentId, children);
-    }
-    for (const children of childrenByParentId.values()) {
-      children.sort(compareSnapshotProjects);
-    }
-
-    const scopeKey = makeScopeKey(scope.mappingId, scope.rootProjectId);
-    const projects: SnapshotProjectDescriptor[] = [];
-    const descriptorsByScopeKey = new Map<string, SnapshotProjectDescriptor>();
-    const visiting = new Set<string>();
-    const visited = new Set<string>();
-    const visit = (
-      project: (typeof scope.projects)[number],
-      pathIds: readonly string[],
-      pathNames: readonly string[],
-      parentScopeKey?: string,
-    ): void => {
-      if (visiting.has(project.id) || visited.has(project.id)) {
-        return;
-      }
-      visiting.add(project.id);
-      const projectScopeKey = todoistListProjectScopeKey(
-        scope.mappingId,
-        scope.rootProjectId,
-        project.id,
-      );
-      const descriptor: SnapshotProjectDescriptor = {
-        id: project.id,
-        scopeKey: projectScopeKey,
-        name: project.name,
-        ...(parentScopeKey === undefined ? {} : { parentScopeKey }),
-        pathIds: [...pathIds, project.id],
-        pathNames: [...pathNames, project.name],
-      };
-      projects.push(descriptor);
-      descriptorsByScopeKey.set(projectScopeKey, descriptor);
-      for (const child of childrenByParentId.get(project.id) ?? []) {
-        visit(child, descriptor.pathIds, descriptor.pathNames, projectScopeKey);
-      }
-      visiting.delete(project.id);
-      visited.add(project.id);
-    };
-    visit(root, [], []);
-
-    result.push({
-      scopeKey,
-      projects,
-      projectsByScopeKey: descriptorsByScopeKey,
-    });
-  }
-  return result;
-};
-
-const compareSnapshotProjects = (
-  left: ProjectSyncStatisticsSnapshot["scopes"][number]["projects"][number],
-  right: ProjectSyncStatisticsSnapshot["scopes"][number]["projects"][number],
-): number => {
-  const byOrder = left.childOrder - right.childOrder;
-  if (byOrder !== 0) {
-    return byOrder;
-  }
-  const byName = left.name.localeCompare(right.name);
-  return byName !== 0 ? byName : left.id.localeCompare(right.id);
-};
-
-const mergeSnapshotScopeIntoGroup = (
-  group: GroupBuildResult,
-  hierarchy: SnapshotScopeHierarchy,
-  selected: ReadonlySet<string>,
-): void => {
-  for (const descriptor of hierarchy.projects) {
-    if (!selected.has(descriptor.scopeKey)) {
-      continue;
-    }
-    let project = group.projectsById.get(descriptor.scopeKey);
-    if (project === undefined) {
-      const parent =
-        descriptor.parentScopeKey === undefined
-          ? undefined
-          : hierarchy.projectsByScopeKey.get(descriptor.parentScopeKey);
-      project = {
-        id: descriptor.id,
-        scopeKey: descriptor.scopeKey,
-        name: descriptor.name,
-        ...(parent === undefined ? {} : { parentId: parent.id }),
-        pathIds: [...descriptor.pathIds],
-        pathNames: [...descriptor.pathNames],
-        projects: [],
-        tasks: [],
-        sections: [],
-        items: [],
-        flatItems: [],
-        counts: emptyCounts(),
-        directTasks: [],
-        firstSourceOrder: Number.POSITIVE_INFINITY,
-      };
-      group.projectsById.set(descriptor.scopeKey, project);
-      group.projectOrder.push(project);
-    }
-
-    const parent =
-      descriptor.parentScopeKey === undefined
-        ? undefined
-        : group.projectsById.get(descriptor.parentScopeKey);
-    if (descriptor.parentScopeKey !== undefined && parent === undefined) {
-      group.diagnostics.hierarchyWarnings++;
-      continue;
-    }
-    const expectedParentId = parent?.id;
-    if (project.parentId !== expectedParentId) {
-      detachProject(group.projectOrder, project.scopeKey);
-      project.parentId = expectedParentId;
-    }
-    project.pathIds = [...descriptor.pathIds];
-    project.pathNames = [...descriptor.pathNames];
-    if (parent === undefined) {
-      continue;
-    }
-    if (!parent.projects.some((child) => child.scopeKey === project.scopeKey)) {
-      parent.projects.push(project);
-    }
-  }
-};
-
-const withSnapshotAncestors = (
-  scopeKeys: readonly string[],
-  hierarchy: SnapshotScopeHierarchy,
-): Set<string> => {
-  const result = new Set<string>();
-  for (const scopeKey of scopeKeys) {
-    let project = hierarchy.projectsByScopeKey.get(scopeKey);
-    const visiting = new Set<string>();
-    while (project !== undefined && !visiting.has(project.scopeKey)) {
-      visiting.add(project.scopeKey);
-      result.add(project.scopeKey);
-      project =
-        project.parentScopeKey === undefined
-          ? undefined
-          : hierarchy.projectsByScopeKey.get(project.parentScopeKey);
-    }
-  }
-  return result;
-};
-
-const detachProject = (projects: readonly MutableProject[], projectScopeKey: string): void => {
-  for (const candidate of projects) {
-    candidate.projects = candidate.projects.filter((child) => child.scopeKey !== projectScopeKey);
-  }
 };
 
 const finalizeGroup = (result: GroupBuildResult): TodoistListGroup => {
@@ -528,7 +271,6 @@ const finalizeGroup = (result: GroupBuildResult): TodoistListGroup => {
   return {
     key: result.key,
     ...(result.label === undefined ? {} : { label: result.label }),
-    ...(result.synthetic === true ? { synthetic: true as const } : {}),
     projects: roots,
     counts,
   };
@@ -844,9 +586,11 @@ const readTask = (
     return null;
   }
 
+  const scopeKey = todoistListTaskScopeKey(mappingId, rootProjectId, id);
+  const completedAt = readString(entry, properties.completedAt);
   return {
     id,
-    scopeKey: todoistListTaskScopeKey(mappingId, rootProjectId, id),
+    scopeKey,
     mappingId,
     rootProjectId,
     filePath: entry.file.path,
@@ -873,18 +617,19 @@ const readTask = (
     durationUnit: readString(entry, properties.durationUnit),
     order: context?.order ?? readNumber(entry, properties.order),
     url: readString(entry, properties.url),
+    completedAt,
     metadata: readMetadata(entry, options),
   };
 };
 
 const makeCatalogTaskContexts = (
-  snapshot: ProjectSyncStatisticsSnapshot | null,
+  context: TodoistListProjectContext | null,
 ): Map<string, CatalogTaskContext> => {
   const result = new Map<string, CatalogTaskContext>();
   const duplicates = new Set<string>();
-  for (const scope of snapshot?.scopes ?? []) {
+  for (const scope of context?.scopes ?? []) {
     const projects = new Map(scope.projects.map((project) => [project.id, project]));
-    for (const task of scope.tasks ?? []) {
+    for (const task of scope.tasks) {
       if (result.has(task.id)) {
         duplicates.add(task.id);
         continue;

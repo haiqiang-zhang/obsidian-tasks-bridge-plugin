@@ -167,7 +167,7 @@ Project
     └── Task
 ```
 
-Project and section headers, nested task indentation, descriptions, status counts, and compact property badges make a large hierarchy easier to scan. A collapsible **Project overview** summarizes the synchronized hierarchy above the task rows. Its flat, Notion-inspired workspace uses Obsidian's theme variables, so it follows the active theme and remains consistent with native Bases controls.
+Project and section headers, nested task indentation, descriptions, status counts, and compact property badges make a large hierarchy easier to scan. A collapsible **Project overview** summarizes the current Base result above the task rows. Its flat, Notion-inspired workspace uses Obsidian's theme variables, so it follows the active theme and remains consistent with native Bases controls.
 
 ### Create the view
 
@@ -200,32 +200,33 @@ Projects with the same name are distinguished by their complete parent path. Tas
 
 If a saved root becomes unavailable after a project is removed, a mapping is paused, or the Todoist account changes, Tasks List keeps the saved scope and reports it explicitly. Open **Configure view** and choose another **Root project**; it never silently expands the view to unrelated projects.
 
-The selected root controls both the complete Project overview and the filtered task rows. It cannot add a filtered task row back to the Base result.
+The selected root narrows the current Base result for the entire Tasks List view. It cannot add a task excluded by the Base filters or result limit.
 
-### Review the complete Project overview
+### Review the Project overview
 
-Expand **Project overview** above the task list to see statistics for the selected root project and every synchronized descendant below it. Choose **All synchronized projects** in **Configure view** to combine every synchronized mapping. The overview includes:
+Expand **Project overview** above the task list to summarize the tasks in the current Base result under the selected root. Choose **All synchronized projects** in **Configure view** to include matching tasks from every synchronized mapping. The overview includes:
 
-![Tasks List Project overview showing completion statistics, the daily completion heatmap, and the hierarchical project breakdown](./project-overview.png)
+![Tasks List showing the Base-result Project overview, daily completion heatmap, and filtered project rows](./project-overview.png)
 
-- total, active, and completed task counts;
+- total, active, completed, and unavailable task counts;
 - completion percentage and a status breakdown;
 - a GitHub-style heatmap of daily completion activity;
-- the number of projects in the selected hierarchy;
-- the time of the latest complete Project sync; and
-- a nested project breakdown in which each project's counts include all of its descendants.
+- the number of projects represented by the matching tasks;
+- per-project progress in which each project row includes matching tasks from its visible descendants.
 
-These statistics come from the complete local Project Sync projection, not from the files currently visible after Base filters are applied. Task Markdown stores the current user-facing state. Tasks Bridge stores each mapping's complete project hierarchy, task relationships, and every completion occurrence—including projects with no tasks—in the plugin's own `data.json`. Project Overview reads that local projection immediately when the Vault opens and rebuilds after local or synchronized file changes. A failed or interrupted Todoist refresh leaves the last complete local projection available.
+Every statistic uses the same current result supplied by Obsidian Bases. Native Base filters and the result limit are applied first, then **Root project** narrows those matching tasks. Task rows, toolbar counts, the Project overview, the heatmap, and every project row therefore describe one consistent set of tasks. Synchronized tasks and projects outside that result do not contribute.
 
-Select the **Project overview** header to collapse or expand the panel. That choice is saved for the individual Base view. Before the first complete Project sync has created the local catalog, the panel displays a waiting state instead of partial statistics. If Project Sync is not configured, disabled, or the initial sync fails, the panel reports that state directly.
+Unavailable rows remain part of the total and the matching project row. Because they no longer have a reliable active-or-completed state, the completion percentage uses only active and completed tasks as its denominator.
 
-The completion heatmap initially shows the last year. Use its Obsidian range menu to switch among the last 4 weeks, 3 months, 6 months, the last year, or any calendar year from the earliest synchronized completion through the current year. The menu follows Obsidian's **Native menus** preference, and the chosen range is saved for the individual Base view. Month and weekday labels, Obsidian tooltips, a Less-to-More intensity legend, horizontal scrolling on narrow screens, and keyboard navigation follow the familiar GitHub contribution-calendar interaction. Select one day to inspect its count, or select a second day while holding **Shift** to summarize the complete date range between them.
+Select the **Project overview** header to collapse or expand the panel. That choice is saved for the individual Base view. When no managed task matches the current Base result and selected root, the view reports the empty result instead of substituting whole-project statistics.
 
-The heatmap counts completion occurrences for the selected root and all of its synchronized descendants. A recurring task completed several times therefore contributes once for each completion event, and a reopened task keeps its earlier completion activity. The completion ring is intentionally different: it summarizes the tasks that are currently completed in the latest snapshot. Choosing **All synchronized projects** combines completion events from every synchronized mapping and deduplicates them by Todoist event ID.
+The completion heatmap initially shows the last year. Use its Obsidian range menu to switch among the last 4 weeks, 3 months, 6 months, the last year, or any calendar year represented by the current Base result. The menu follows Obsidian's **Native menus** preference, and the chosen range is saved for the individual Base view. Month and weekday labels, Obsidian tooltips, a Less-to-More intensity legend, horizontal scrolling on narrow screens, and keyboard navigation follow the familiar GitHub contribution-calendar interaction. Select one day to inspect its count, or select a second day while holding **Shift** to summarize the complete date range between them.
 
-:::info Project statistics and Base results use different scopes
+The heatmap reads `todoist_completed_at` from tasks in the current Base result and selected root. Each matching task with a completion timestamp contributes one completion on that day. Tasks excluded by a Base filter, the result limit, or **Root project** do not contribute.
 
-The Project overview always describes the complete synchronized subtree for the selected root. Task rows and the active, completed, and unavailable counts in the Tasks List toolbar still respect the current Base filters. The overview totals can therefore be larger than the number of task rows on screen. This is intentional: use the overview to understand the whole synchronized project, and use native Base filters to create the working list you need.
+:::info One Base result, one statistics scope
+
+Native Base filters and the result limit, together with **Root project**, govern the task rows, toolbar counts, Project overview, completion heatmap, and per-project progress. Adjusting any of these controls updates the entire Tasks List workspace to the same scope.
 
 :::
 
@@ -233,12 +234,13 @@ The Project overview always describes the complete synchronized subtree for the 
 
 Tasks List is an additional layout for the official Bases query system, not a separate task query engine. Configure the Base with the same native controls used by table, cards, and list views:
 
-- **Filters** decide which managed task notes and toolbar counts appear. They do not reduce the complete Project overview. For example, create separate views for active work, completed work, or a particular mapping folder.
+- **Filters** decide which managed task notes contribute to the rows and every statistic. For example, create separate views for active work, completed work, or a particular mapping folder.
+- **Limit** caps the Base result and therefore caps the tasks included in the rows, Project overview, heatmap, toolbar counts, and per-project progress.
 - **Sort** determines the order supplied by Bases. Tasks List preserves that order among projects, sections, and sibling tasks while rebuilding parent-child relationships.
 - **Group** remains visible as separate Base groups. Todoist hierarchy is reconstructed independently inside each group.
 - **Properties** controls the task metadata shown in each row and the order in which it appears. Identity and hierarchy properties are used internally and are not repeated as badges.
 
-Because filtering happens before the hierarchy is rebuilt, a filtered-out parent task cannot contain its visible subtasks in the result. Such subtasks remain visible at the nearest safe level rather than disappearing.
+Because filtering and limiting happen before the hierarchy is rebuilt, an excluded parent task cannot contain its visible subtasks in the result. Such subtasks remain visible at the nearest safe level rather than disappearing.
 
 ### Open, complete, reopen, and edit tasks
 

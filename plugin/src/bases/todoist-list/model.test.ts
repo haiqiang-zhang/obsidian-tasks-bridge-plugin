@@ -1,9 +1,8 @@
 import type { BasesEntry, BasesEntryGroup, BasesPropertyId, Value } from "obsidian";
 import { describe, expect, it } from "vitest";
 
-import type { ProjectSyncStatisticsSnapshot } from "@/project-sync";
-
 import { buildTodoistListModel, scopeTodoistListGroups } from "./model";
+import type { TodoistListProjectContext } from "./types";
 
 type EntryOptions = {
   taskId?: string | null;
@@ -25,6 +24,7 @@ type EntryOptions = {
   labels?: string[];
   priority?: string;
   dueDate?: string;
+  completedAt?: string;
 };
 
 const primitive = (value: string | number | boolean): Value =>
@@ -85,6 +85,7 @@ const makeEntry = (id: string, options: EntryOptions = {}): BasesEntry => {
     ["note.todoist_section", options.sectionName],
     ["note.todoist_priority", options.priority],
     ["note.todoist_due_date", options.dueDate],
+    ["note.todoist_completed_at", options.completedAt],
   ];
   for (const [property, value] of optionalValues) {
     if (value !== undefined) {
@@ -124,104 +125,91 @@ const build = (groups: BasesEntryGroup[], order: BasesPropertyId[] = []) =>
     getDisplayName: (propertyId) => `Display ${propertyId.split(".")[1]}`,
   });
 
-type StatisticsProject = ProjectSyncStatisticsSnapshot["scopes"][number]["projects"][number];
+type ContextProject = TodoistListProjectContext["scopes"][number]["projects"][number];
 
-const statisticsProject = (
+const contextProject = (
   id: string,
   name: string,
   parentId: string | null,
   childOrder = 0,
-): StatisticsProject => ({
+): ContextProject => ({
   id,
   name,
   parentId,
   childOrder,
-  directCounts: { active: 0, completed: 0 },
-  directCompletionEvents: [],
 });
 
-const statisticsSnapshot = (
+const projectContext = (
   scopes: {
     mappingId: string;
     rootProjectId: string;
-    projects: StatisticsProject[];
+    projects: ContextProject[];
   }[],
-): ProjectSyncStatisticsSnapshot => ({
-  syncedAt: "2026-08-13T12:00:00.000Z",
-  scopes: scopes.map((scope) => ({ ...scope, includeSubprojects: true })),
-});
+): TodoistListProjectContext => ({ scopes: scopes.map((scope) => ({ ...scope, tasks: [] })) });
 
-const buildWithSnapshot = (
-  groups: BasesEntryGroup[],
-  projectStatisticsSnapshot: ProjectSyncStatisticsSnapshot,
-) =>
+const buildWithContext = (groups: BasesEntryGroup[], context: TodoistListProjectContext) =>
   buildTodoistListModel(groups, {
     order: [],
-    projectStatisticsSnapshot,
+    projectContext: context,
   });
 
 describe("buildTodoistListModel", () => {
-  it("merges a zero-task snapshot child into the first Base group that observes its scope", () => {
-    const model = buildWithSnapshot(
+  it("does not inject context-only projects into a Base group", () => {
+    const model = buildWithContext(
       [makeGroup([makeEntry("root-task", { mappingId: "mapping" })], "Active")],
-      statisticsSnapshot([
+      projectContext([
         {
           mappingId: "mapping",
           rootProjectId: "root",
           projects: [
-            statisticsProject("root", "Root", null),
-            statisticsProject("empty-child", "Empty child", "root"),
+            contextProject("root", "Root", null),
+            contextProject("empty-child", "Empty child", "root"),
           ],
         },
       ]),
     );
 
     expect(model.groups).toHaveLength(1);
-    expect(model.groups[0]?.projects[0]?.projects).toMatchObject([
-      { id: "empty-child", name: "Empty child", counts: { active: 0, completed: 0 } },
-    ]);
+    expect(model.groups[0]?.projects[0]?.projects).toEqual([]);
+    expect(model.projects.map(({ id }) => id)).toEqual(["root"]);
     expect(model.taskCount).toBe(1);
     expect(model.groups[0]?.counts).toEqual({ active: 1, completed: 0, unavailable: 0 });
   });
 
-  it("creates one synthetic hierarchy group for snapshot scopes with no Base entries", () => {
-    const model = buildWithSnapshot(
+  it("does not create a synthetic hierarchy when the Base result is empty", () => {
+    const model = buildWithContext(
       [makeGroup([], "Active")],
-      statisticsSnapshot([
+      projectContext([
         {
           mappingId: "mapping",
           rootProjectId: "root",
           projects: [
-            statisticsProject("root", "Root", null),
-            statisticsProject("empty-child", "Empty child", "root"),
+            contextProject("root", "Root", null),
+            contextProject("empty-child", "Empty child", "root"),
           ],
         },
       ]),
     );
 
-    expect(model.groups).toHaveLength(2);
+    expect(model.groups).toHaveLength(1);
     expect(model.groups[0]).toMatchObject({ label: "Active", projects: [] });
-    expect(model.groups[1]).toMatchObject({
-      key: "group:snapshot:ungrouped",
-      synthetic: true,
-      counts: { active: 0, completed: 0, unavailable: 0 },
-    });
-    expect(model.groups[1]?.projects[0]?.projects[0]?.id).toBe("empty-child");
+    expect(model.projects).toEqual([]);
+    expect(model.counts).toEqual({ active: 0, completed: 0, unavailable: 0 });
     expect(model.taskCount).toBe(0);
   });
 
-  it("assigns snapshot-only descendants once without copying them across Base groups", () => {
-    const snapshot = statisticsSnapshot([
+  it("keeps every group hierarchy limited to files returned by that Base group", () => {
+    const context = projectContext([
       {
         mappingId: "mapping",
         rootProjectId: "root",
         projects: [
-          statisticsProject("root", "Root", null),
-          statisticsProject("empty-child", "Empty child", "root"),
+          contextProject("root", "Root", null),
+          contextProject("empty-child", "Empty child", "root"),
         ],
       },
     ]);
-    const model = buildWithSnapshot(
+    const model = buildWithContext(
       [
         makeGroup([makeEntry("active", { mappingId: "mapping" })], "Active"),
         makeGroup(
@@ -229,116 +217,16 @@ describe("buildTodoistListModel", () => {
           "Completed",
         ),
       ],
-      snapshot,
+      context,
     );
 
-    expect(model.groups[0]?.projects[0]?.projects.map(({ id }) => id)).toEqual(["empty-child"]);
+    expect(model.groups[0]?.projects[0]?.projects).toEqual([]);
     expect(model.groups[1]?.projects[0]?.projects).toEqual([]);
     expect(model.groups.map(({ counts }) => counts)).toEqual([
       { active: 1, completed: 0, unavailable: 0 },
       { active: 0, completed: 1, unavailable: 0 },
     ]);
     expect(model.taskCount).toBe(2);
-  });
-
-  it("does not inject a project into an earlier group when that project has tasks in a later group", () => {
-    const model = buildWithSnapshot(
-      [
-        makeGroup([makeEntry("root-task", { mappingId: "mapping" })], "Root tasks"),
-        makeGroup(
-          [
-            makeEntry("child-task", {
-              mappingId: "mapping",
-              projectId: "child",
-              projectName: "Child",
-              projectIdPath: ["root", "child"],
-              projectPath: ["Root", "Child"],
-            }),
-          ],
-          "Child tasks",
-        ),
-      ],
-      statisticsSnapshot([
-        {
-          mappingId: "mapping",
-          rootProjectId: "root",
-          projects: [
-            statisticsProject("root", "Root", null),
-            statisticsProject("child", "Child", "root"),
-          ],
-        },
-      ]),
-    );
-
-    expect(model.groups[0]?.projects[0]?.projects).toEqual([]);
-    expect(model.groups[1]?.projects[0]?.projects[0]?.tasks.map(({ id }) => id)).toEqual([
-      "child-task",
-    ]);
-    expect(model.groups.map(({ counts }) => counts)).toEqual([
-      { active: 1, completed: 0, unavailable: 0 },
-      { active: 1, completed: 0, unavailable: 0 },
-    ]);
-  });
-
-  it("inserts missing snapshot ancestors around a Base task whose local path is incomplete", () => {
-    const model = buildWithSnapshot(
-      [
-        makeGroup([
-          makeEntry("child-task", {
-            mappingId: "mapping",
-            rootProjectId: "root",
-            projectId: "child",
-            projectName: "Child",
-            projectIdPath: ["child"],
-            projectPath: ["Child"],
-          }),
-        ]),
-      ],
-      statisticsSnapshot([
-        {
-          mappingId: "mapping",
-          rootProjectId: "root",
-          projects: [
-            statisticsProject("root", "Root", null),
-            statisticsProject("child", "Child", "root"),
-          ],
-        },
-      ]),
-    );
-
-    const root = model.groups[0]?.projects[0];
-    expect(root?.id).toBe("root");
-    expect(root?.projects[0]).toMatchObject({
-      id: "child",
-      pathIds: ["root", "child"],
-      pathNames: ["Root", "Child"],
-    });
-    expect(root?.projects[0]?.tasks.map(({ id }) => id)).toEqual(["child-task"]);
-    expect(model.taskCount).toBe(1);
-  });
-
-  it("keeps duplicate raw project IDs distinct by mapping scope when merging snapshots", () => {
-    const model = buildWithSnapshot(
-      [makeGroup([])],
-      statisticsSnapshot([
-        {
-          mappingId: "first",
-          rootProjectId: "shared",
-          projects: [statisticsProject("shared", "First shared", null)],
-        },
-        {
-          mappingId: "second",
-          rootProjectId: "shared",
-          projects: [statisticsProject("shared", "Second shared", null)],
-        },
-      ]),
-    );
-
-    const projects = model.groups.find(({ synthetic }) => synthetic)?.projects ?? [];
-    expect(projects.map(({ id }) => id)).toEqual(["shared", "shared"]);
-    expect(projects.map(({ name }) => name)).toEqual(["First shared", "Second shared"]);
-    expect(new Set(projects.map(({ scopeKey }) => scopeKey)).size).toBe(2);
-    expect(model.projects).toHaveLength(2);
   });
 
   it("builds project, section, task, and subtask hierarchy with recursive counts", () => {
@@ -388,6 +276,24 @@ describe("buildTodoistListModel", () => {
 
     expect(explicitFalse.groups[0]?.projects[0]?.tasks[0]?.completed).toBe(false);
     expect(missingProperty.groups[0]?.projects[0]?.tasks[0]?.completed).toBe(true);
+  });
+
+  it("reads the Base-visible completion timestamp without consulting project context", () => {
+    const completedAt = "2026-08-18T09:15:00.000Z";
+    const model = build([
+      makeGroup([
+        makeEntry("completed", {
+          status: "completed",
+          completed: true,
+          completedAt,
+        }),
+        makeEntry("active"),
+      ]),
+    ]);
+
+    const tasks = model.groups[0]?.projects[0]?.tasks ?? [];
+    expect(tasks.find(({ id }) => id === "completed")?.completedAt).toBe(completedAt);
+    expect(tasks.find(({ id }) => id === "active")?.completedAt).toBeUndefined();
   });
 
   it("uses project IDs rather than duplicate names and exposes arbitrary roots", () => {
