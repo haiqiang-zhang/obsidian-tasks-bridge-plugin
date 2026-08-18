@@ -128,6 +128,7 @@ vi.mock("@/i18n", () => ({
     },
     notices: {
       migrationFailed: "Migration failed",
+      querySyncFailed: (message: string) => `Query sync failed: ${message}`,
       projectSyncComplete: (
         created: number,
         updated: number,
@@ -135,7 +136,6 @@ vi.mock("@/i18n", () => ({
         deleted: number,
         conflicts: number,
       ) => `Project sync complete: ${created}/${updated}/${moved}/${deleted}/${conflicts}`,
-      projectSyncDisabled: "Project sync is disabled",
       projectSyncInterrupted: "Project sync was interrupted",
       projectSyncFailed: (message: string) => `Project sync failed: ${message}`,
     },
@@ -147,6 +147,8 @@ vi.mock("@/infra/time", () => ({
 }));
 
 vi.mock("@/query/injector", () => ({
+  LEGACY_QUERY_CODE_BLOCK: "todoist",
+  QUERY_CODE_BLOCK: "tasks-bridge-query",
   QueryInjector: class {
     public onNewBlock(): void {}
   },
@@ -433,6 +435,16 @@ describe("TodoistPlugin async lifecycle", () => {
     expect(registration.projectStatistics.getStatus()).toEqual({ state: "disabled" });
     expect(registration.projectStatistics.isConfigured()).toBe(false);
     expect(services.projectSync.getStatisticsSnapshot).toHaveBeenCalledOnce();
+  });
+
+  it("registers canonical block names before their compatibility aliases", async () => {
+    const plugin = makePlugin(makeServices());
+
+    await plugin.onload();
+
+    expect(
+      runtime.registerMarkdownCodeBlockProcessor.mock.calls.map(([language]) => language),
+    ).toEqual(["tasks-bridge-query", "tasks-bridge-project-task", "todoist", "tasks-bridge-task"]);
   });
 
   it("wires Tasks List actions through the managed-note command service and editor", async () => {
@@ -1785,6 +1797,11 @@ describe("TodoistPlugin async lifecycle", () => {
 
   it("logs the full task identity and path for manual conflicts", async () => {
     const services = makeServices();
+    services.projectSync.getConfig.mockReturnValue({
+      enabled: true,
+      preserveUnmanagedItems: true,
+      mappings: [],
+    });
     const result = emptyResult();
     result.conflicts.push({
       message: "The managed note changed locally",
@@ -1820,8 +1837,73 @@ describe("TodoistPlugin async lifecycle", () => {
     expect(runtime.notices).toEqual(["Project sync was interrupted"]);
   });
 
+  it("refreshes Query blocks without waiting for disabled Project sync", async () => {
+    const services = makeServices();
+    const plugin = makePlugin(services);
+
+    await expect(plugin.syncProjectFolderNow()).resolves.toBeNull();
+
+    expect(services.todoist.sync).toHaveBeenCalledOnce();
+    expect(services.projectSync.sync).not.toHaveBeenCalled();
+    expect(runtime.notices).toEqual([]);
+  });
+
+  it("continues Project sync when the Query refresh fails", async () => {
+    const services = makeServices();
+    services.projectSync.getConfig.mockReturnValue({
+      enabled: true,
+      preserveUnmanagedItems: true,
+      mappings: [],
+    });
+    const result = emptyResult();
+    services.todoist.sync.mockRejectedValueOnce(new Error("query unavailable"));
+    services.projectSync.sync.mockResolvedValueOnce(result);
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const plugin = makePlugin(services);
+
+    await expect(plugin.syncProjectFolderNow()).resolves.toBe(result);
+
+    expect(services.todoist.sync).toHaveBeenCalledOnce();
+    expect(services.projectSync.sync).toHaveBeenCalledOnce();
+    expect(error).toHaveBeenCalledWith(
+      "Failed to synchronize Todoist query blocks:",
+      expect.objectContaining({ message: "query unavailable" }),
+    );
+    expect(runtime.notices).toEqual([
+      "Query sync failed: query unavailable",
+      "Project sync complete: 0/0/0/0/0",
+    ]);
+  });
+
+  it("refreshes Query blocks exactly once when Project sync fails", async () => {
+    const services = makeServices();
+    services.projectSync.getConfig.mockReturnValue({
+      enabled: true,
+      preserveUnmanagedItems: true,
+      mappings: [],
+    });
+    services.projectSync.sync.mockRejectedValueOnce(new Error("project unavailable"));
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const plugin = makePlugin(services);
+
+    await expect(plugin.syncProjectFolderNow()).resolves.toBeNull();
+
+    expect(services.todoist.sync).toHaveBeenCalledOnce();
+    expect(services.projectSync.sync).toHaveBeenCalledOnce();
+    expect(error).toHaveBeenCalledWith(
+      "Failed to synchronize the Todoist project folder:",
+      expect.objectContaining({ message: "project unavailable" }),
+    );
+    expect(runtime.notices).toEqual(["Project sync failed: project unavailable"]);
+  });
+
   it("retains previous projection roots after migration to catch late Sync files", async () => {
     const services = makeServices();
+    services.projectSync.getConfig.mockReturnValue({
+      enabled: true,
+      preserveUnmanagedItems: true,
+      mappings: [],
+    });
     const stored = {
       ...defaultSettings(),
       projectSyncEnabled: true,
@@ -2624,6 +2706,11 @@ describe("TodoistPlugin async lifecycle", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-08-12T00:00:00.000Z"));
     const services = makeServices();
+    services.projectSync.getConfig.mockReturnValue({
+      enabled: true,
+      preserveUnmanagedItems: true,
+      mappings: [],
+    });
     const result = emptyResult();
     services.projectSync.sync.mockResolvedValue(result);
     runtime.settings.current = defaultSettings({

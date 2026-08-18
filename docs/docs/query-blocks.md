@@ -8,7 +8,7 @@ toc_max_heading_level: 4
 This plugin uses the concept of [filters](https://todoist.com/help/articles/introduction-to-filters-V98wIH) to fetch data from Todoist. To create a query block, insert a code block like the following in any note:
 
 ````
-```todoist
+```tasks-bridge-query
 filter: "today | overdue"
 ```
 ````
@@ -55,7 +55,7 @@ Completed tasks are rendered with a checked, read-only checkbox. They continue t
 For example:
 
 ````
-```todoist
+```tasks-bridge-query
 filter: "##Computer Networks"
 groupBy: "section"
 completedTasks: true
@@ -69,7 +69,7 @@ If you want to have an embedded header rendered with your query, you can use the
 For example:
 
 ````
-```todoist
+```tasks-bridge-query
 name: "Today & Overdue"
 filter: "today | overdue"
 ```
@@ -82,7 +82,7 @@ The `autorefresh` option allows you to specify the number of seconds between aut
 For example:
 
 ````
-```todoist
+```tasks-bridge-query
 filter: "today | overdue"
 autorefresh: 120
 ```
@@ -109,7 +109,7 @@ If no sorting option is provided, tasks will be sorted by their Todoist order.
 For example:
 
 ````
-```todoist
+```tasks-bridge-query
 filter: "today | overdue"
 sorting:
     - date
@@ -120,7 +120,7 @@ sorting:
 You can also sort tasks alphabetically:
 
 ````
-```todoist
+```tasks-bridge-query
 filter: "#work"
 sorting:
     - priority
@@ -141,7 +141,7 @@ The `groupBy` property controls how tasks are grouped when they are rendered. If
 For example:
 
 ````
-```todoist
+```tasks-bridge-query
 filter: "today | overdue"
 groupBy: project
 ```
@@ -170,7 +170,7 @@ If both `project` and `section` are specified, only `project` will be shown to a
 For example:
 
 ````
-```todoist
+```tasks-bridge-query
 filter: "today | overdue"
 show:
     - due
@@ -183,7 +183,7 @@ You can also set this to `none` to hide all task metadata.
 For example:
 
 ````
-```todoist
+```tasks-bridge-query
 filter: "today | overdue"
 show: none
 ```
@@ -200,7 +200,7 @@ The `noTasksMessage` property allows you to customize the message displayed when
 For example:
 
 ````
-```todoist
+```tasks-bridge-query
 filter: "today"
 view:
   noTasksMessage: "Nothing due today! Take a break."
@@ -214,7 +214,7 @@ The `hideNoTasks` property allows you to completely hide the query output when n
 For example:
 
 ````
-```todoist
+```tasks-bridge-query
 filter: "#work & today"
 view:
   hideNoTasks: true

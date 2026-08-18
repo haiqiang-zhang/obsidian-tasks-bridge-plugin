@@ -35,7 +35,7 @@ export default defineConfig({
           text: "Commands",
           items: [
             { text: "Add task", link: "/commands/add-task" },
-            { text: "Sync with Todoist", link: "/commands/sync-with-todoist" },
+            { text: "Sync", link: "/commands/sync" },
           ],
         },
         { text: "Changelog", link: "/changelog" },

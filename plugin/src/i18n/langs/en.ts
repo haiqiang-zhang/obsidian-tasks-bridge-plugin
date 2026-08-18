@@ -3,7 +3,7 @@ import type { Translations } from "@/i18n/translation";
 export const en: Translations = {
   notices: {
     migrationFailed: "Failed to apply migrations. Check the console for details.",
-    projectSyncDisabled: "Project sync is disabled or is not fully configured.",
+    querySyncFailed: (message) => `Query sync failed: ${message}`,
     projectSyncInterrupted:
       "Project sync paused because the mapped Vault folders changed. Wait for Obsidian Sync to settle, then try again.",
     projectSyncComplete: (created, updated, moved, deleted, conflicts) =>
@@ -374,8 +374,7 @@ export const en: Translations = {
     },
   },
   commands: {
-    sync: "Sync with Todoist",
-    projectSync: "Sync Todoist projects",
+    sync: "Sync",
     addTask: "Add task",
     addTaskPageContent: "Add task with current page in task content",
     addTaskPageDescription: "Add task with current page in task description",

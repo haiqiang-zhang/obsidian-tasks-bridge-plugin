@@ -11,6 +11,7 @@ import {
   makeManagedBody,
   makeTaskFrontmatter,
   readManagedNoteIdentity,
+  readProjectTaskBlockIdentity,
   readRecoverableManagedNoteIdentity,
   replaceManagedBody,
   replaceManagedTaskDocument,
@@ -242,9 +243,37 @@ describe("project task documents", () => {
     );
 
     expect(body).toBe(
-      `${MANAGED_BODY_START}\n\`\`\`tasks-bridge-task\n\`\`\`\n${MANAGED_BODY_END}`,
+      `${MANAGED_BODY_START}\n\`\`\`tasks-bridge-project-task\ntask_id: "task-1"\n\`\`\`\n${MANAGED_BODY_END}`,
     );
     expect(body).not.toContain("A title with");
+  });
+
+  it("quotes numeric-looking task IDs in the managed block", () => {
+    const body = makeManagedBody(makeTask("9007199254740993"));
+
+    expect(body).toContain('task_id: "9007199254740993"');
+    expect(readProjectTaskBlockIdentity('task_id: "9007199254740993"')).toEqual({
+      taskId: "9007199254740993",
+    });
+  });
+
+  it.each([
+    ['task_id: "6hGr78cXw24jQC7W"', { taskId: "6hGr78cXw24jQC7W" }],
+    ["task_id: task-1", { taskId: "task-1" }],
+    ["task_id: 9007199254740993", null],
+    ["task_id: true", null],
+    ['task_id: ""', null],
+    ["task_id: task.1", null],
+    ['task_id: " task-1"', null],
+    ['task_id: "task-1"\ntask_id: "task-2"', null],
+    ['task_id: "task-1"\nextra: value', null],
+    ["task: task-1", null],
+    ["task_id: [task-1]", null],
+    ["task_id: { value: task-1 }", null],
+    ["task_id: [", null],
+    ["", null],
+  ])("parses a project task block identity from %j", (source, expected) => {
+    expect(readProjectTaskBlockIdentity(source)).toEqual(expected);
   });
 
   it("rejects malformed or duplicate marker regions", () => {

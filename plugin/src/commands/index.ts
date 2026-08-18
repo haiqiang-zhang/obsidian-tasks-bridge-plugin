@@ -21,25 +21,14 @@ const syncCommand: MakeCommand = (plugin: TodoistPlugin, i18n: Translations["com
   return {
     name: i18n.sync,
     callback: async () => {
-      debug("Syncing with Todoist API");
-      await plugin.services.todoist.sync();
-    },
-  };
-};
-
-const projectSyncCommand: MakeCommand = (plugin: TodoistPlugin, i18n: Translations["commands"]) => {
-  return {
-    name: i18n.projectSync,
-    callback: async () => {
-      debug("Synchronizing Todoist projects");
+      debug("Synchronizing Todoist queries and projects");
       await plugin.syncProjectFolderNow();
     },
   };
 };
 
 const commands = {
-  "todoist-sync": syncCommand,
-  "todoist-project-sync": projectSyncCommand,
+  sync: syncCommand,
   "add-task": addTask,
   "add-task-page-content": addTaskWithPageInContent,
   "add-task-page-description": addTaskWithPageInDescription,

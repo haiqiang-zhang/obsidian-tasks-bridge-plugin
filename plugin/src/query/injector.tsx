@@ -12,6 +12,9 @@ import { PluginContext, RenderChildContext } from "@/ui/context";
 import { QueryError } from "@/ui/query/QueryError";
 import { QueryRoot } from "@/ui/query/QueryRoot";
 
+export const QUERY_CODE_BLOCK = "tasks-bridge-query";
+export const LEGACY_QUERY_CODE_BLOCK = "todoist";
+
 export class QueryInjector {
   private readonly plugin: TodoistPlugin;
   constructor(plugin: TodoistPlugin) {

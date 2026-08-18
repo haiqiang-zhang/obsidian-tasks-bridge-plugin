@@ -2,6 +2,13 @@ export function setIcon(parent: HTMLElement, iconId: string, _size?: number): vo
   parent.dataset.icon = iconId;
 }
 
+export const normalizePath = (path: string): string =>
+  path
+    .replace(/\\/gu, "/")
+    .split("/")
+    .filter((segment) => segment !== "" && segment !== ".")
+    .join("/");
+
 // biome-ignore lint/correctness/noUnusedFunctionParameters: mocks with empty impl
 export function setTooltip(el: HTMLElement, text: string, options?: TooltipOptions): void {}
 

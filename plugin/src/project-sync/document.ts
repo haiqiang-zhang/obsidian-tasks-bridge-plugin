@@ -1,4 +1,4 @@
-import { dump as dumpYaml } from "js-yaml";
+import { dump as dumpYaml, load as loadYaml } from "js-yaml";
 
 import type { ProjectCompletionEvent } from "@/api/domain/task";
 import type { Task } from "@/data/task";
@@ -9,7 +9,8 @@ import type { SnapshotTask } from "./types";
 
 export const MANAGED_BODY_START = "<!-- todoist-sync-plus:managed:start -->";
 export const MANAGED_BODY_END = "<!-- todoist-sync-plus:managed:end -->";
-export const MANAGED_TASK_CODE_BLOCK = "tasks-bridge-task";
+export const PROJECT_TASK_CODE_BLOCK = "tasks-bridge-project-task";
+export const LEGACY_PROJECT_TASK_CODE_BLOCK = "tasks-bridge-task";
 
 export const LEGACY_IMPLEMENTATION_FRONTMATTER_KEYS = [
   "todoist_sync_managed",
@@ -223,12 +224,10 @@ const isSameValue = (left: unknown, right: unknown): boolean =>
   JSON.stringify(left) === JSON.stringify(right);
 
 export const makeManagedBody = (task: Task): string => {
-  // The task card resolves current values from the note's managed frontmatter. Keeping the code
-  // block payload empty avoids duplicating mutable Todoist data in a second serialized format.
-  // The source task is intentionally accepted here because callers build the managed body from
-  // the same snapshot as the frontmatter used by the card.
-  void task;
-  return `${MANAGED_BODY_START}\n\`\`\`${MANAGED_TASK_CODE_BLOCK}\n\`\`\`\n${MANAGED_BODY_END}`;
+  // The immutable ID belongs in the block because it identifies the card independently from the
+  // note's Bases-facing properties. JSON string syntax is valid YAML and keeps numeric-looking
+  // Todoist IDs quoted so JavaScript never rounds them while parsing.
+  return `${MANAGED_BODY_START}\n\`\`\`${PROJECT_TASK_CODE_BLOCK}\ntask_id: ${JSON.stringify(task.id)}\n\`\`\`\n${MANAGED_BODY_END}`;
 };
 
 export const replaceManagedBody = (
@@ -408,19 +407,34 @@ export const replaceManagedTaskDocument = (
 
 const todoistTaskIdPattern = /^[A-Za-z0-9][A-Za-z0-9_-]*$/u;
 
-export const readManagedNoteIdentity = (
-  frontmatter: ManagedFrontmatter,
-): ManagedNoteIdentity | null => {
-  const taskId = frontmatter.todoist_task_id;
-  if (
-    typeof taskId !== "string" ||
-    taskId !== taskId.trim() ||
-    !todoistTaskIdPattern.test(taskId)
-  ) {
+const readTodoistTaskId = (value: unknown): ManagedNoteIdentity | null => {
+  if (typeof value !== "string" || value !== value.trim() || !todoistTaskIdPattern.test(value)) {
     return null;
   }
-  return { taskId };
+  return { taskId: value };
 };
+
+/** Read the immutable identity serialized inside a `tasks-bridge-project-task` block. */
+export const readProjectTaskBlockIdentity = (source: string): ManagedNoteIdentity | null => {
+  let value: unknown;
+  try {
+    value = loadYaml(source);
+  } catch {
+    return null;
+  }
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  if (Object.keys(record).some((key) => key !== "task_id")) {
+    return null;
+  }
+  return readTodoistTaskId(record.task_id);
+};
+
+export const readManagedNoteIdentity = (
+  frontmatter: ManagedFrontmatter,
+): ManagedNoteIdentity | null => readTodoistTaskId(frontmatter.todoist_task_id);
 
 /**
  * Recover only the immutable task identity from otherwise malformed managed frontmatter.

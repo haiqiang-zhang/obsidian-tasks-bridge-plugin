@@ -20,7 +20,7 @@ The red backend node and solid connection are available now. Purple-gray nodes a
 
 Todoist is the first supported backend. The current Todoist integration provides two independent workflows:
 
-- **Query blocks** render a Todoist filter inside any note, with cache-first loading and optional completed-task history.
+- **Query blocks** (`tasks-bridge-query`) render a Todoist filter inside any note, with cache-first loading and optional completed-task history.
 - **Project sync** maps one or more Todoist projects to independent Vault folders. Each selected folder is that project's exact root, optional child projects become nested folders, and every active or completed task becomes a Markdown file that can be managed with [Obsidian Bases](https://help.obsidian.md/bases).
 
 Project sync is a one-way Todoist-to-Obsidian projection. It retrieves complete completed-task history from Todoist's project endpoint, preserves note bodies and properties not managed by the plugin, and does not treat arbitrary Base or Markdown edits as Todoist changes. Its default ownership-based safety mode also leaves user-created `.base` files, notes, attachments, and folders inside a mapping untouched while Todoist renames and deletions continue to reconcile the task notes and empty folders managed by Tasks Bridge. Its **Tasks List** Base view provides explicit server-backed actions for editing, completing, and reopening tasks. Open task notes are deferred instead of overwritten, and tasks that leave an included child hierarchy are retained as `out_of_scope`. See the [project sync guide](https://haiqiang-zhang.github.io/obsidian-tasks-bridge-plugin/project-mode).

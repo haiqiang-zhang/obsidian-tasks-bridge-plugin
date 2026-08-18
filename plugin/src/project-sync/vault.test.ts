@@ -9,7 +9,13 @@ import {
   type ProjectCatalog,
   type ProjectCatalogStorage,
 } from "./catalog";
-import { makeManagedBody, makeTaskFrontmatter, renderNewTaskDocument } from "./document";
+import {
+  MANAGED_BODY_END,
+  MANAGED_BODY_START,
+  makeManagedBody,
+  makeTaskFrontmatter,
+  renderNewTaskDocument,
+} from "./document";
 import {
   emptyProjectSyncFolderOwnershipRegistry,
   listOwnedFolders,
@@ -387,6 +393,39 @@ describe("ObsidianProjectSyncVault", () => {
       todoist_project: "Child",
       todoist_project_path: ["Root", "Child"],
     });
+  });
+
+  it("migrates an empty legacy project task block without touching user content", async () => {
+    const project = makeProject("root", { name: "Root" });
+    const task = makeTask("legacy-task", { content: "Legacy task", project });
+    const snapshot: ProjectSyncSnapshot = {
+      rootProjectId: project.id,
+      projects: [project],
+      tasks: [{ task, completed: false }],
+      syncedAt: "2026-08-10T00:00:00.000Z",
+    };
+    const frontmatter = makeTaskFrontmatter(
+      { task, completed: false },
+      project.id,
+      testProjectPath(project),
+      snapshot.syncedAt,
+    );
+    const legacyBody = `${MANAGED_BODY_START}\n\`\`\`tasks-bridge-task\n\`\`\`\n${MANAGED_BODY_END}`;
+    vault.addFile(
+      "Sync/Legacy task.md",
+      `${renderNewTaskDocument(frontmatter, legacyBody)}\nUser notes stay here.\n`,
+    );
+
+    const migrated = await adapter.reconcile(snapshot, mapping);
+
+    expect(migrated).toMatchObject({ created: 0, updated: 1, unchanged: 0 });
+    const content = vault.files.get("Sync/Legacy task.md")?.content ?? "";
+    expect(content).toContain('```tasks-bridge-project-task\ntask_id: "legacy-task"\n```');
+    expect(content).not.toContain("```tasks-bridge-task");
+    expect(content).toContain("User notes stay here.");
+
+    const stable = await adapter.reconcile(snapshot, mapping);
+    expect(stable).toMatchObject({ created: 0, updated: 0, unchanged: 1 });
   });
 
   it("preserves same-named Bases and arbitrary user content while deleting remote task notes", async () => {
@@ -2957,7 +2996,9 @@ describe("ObsidianProjectSyncVault", () => {
     expect(result.conflicts).toEqual([]);
     expect(vault.files.has(originalPath)).toBe(false);
     expect(vault.files.get(renamedPath)?.file).toBe(originalEntry.file);
-    expect(vault.files.get(renamedPath)?.content).toContain("```tasks-bridge-task");
+    expect(vault.files.get(renamedPath)?.content).toContain(
+      '```tasks-bridge-project-task\ntask_id: "rename-task"',
+    );
     expect(vault.files.get(renamedPath)?.content).toContain("User-authored notes stay here.");
     expect(parseFrontmatter(vault.files.get(renamedPath)?.content ?? "")).toMatchObject({
       todoist_task_id: originalTask.id,

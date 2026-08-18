@@ -349,11 +349,12 @@
   order: -1;
 }
 
-.cm-lang-tasks-bridge-task {
+:is(.cm-lang-tasks-bridge-project-task, .cm-lang-tasks-bridge-task) {
   --embed-block-shadow-hover: none;
 }
 
-.cm-lang-tasks-bridge-task .embed-actions:focus-within {
+:is(.cm-lang-tasks-bridge-project-task, .cm-lang-tasks-bridge-task)
+  .embed-actions:focus-within {
   opacity: 1;
 }
 

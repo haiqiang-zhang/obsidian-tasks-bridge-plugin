@@ -213,7 +213,7 @@ export const nl: DeepPartial<Translations> = {
     },
   },
   commands: {
-    sync: "Synchroniseer met Todoist",
+    sync: "Synchroniseren",
     addTask: "Taak toevoegen",
     addTaskPageContent: "Taak toevoegen met huidige pagina in taakinhoud",
     addTaskPageDescription: "Taak toevoegen met huidige pagina in taakbeschrijving",

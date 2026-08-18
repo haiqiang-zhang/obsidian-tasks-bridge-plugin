@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### ✨ Improvements
+
+- Unified fenced block names as `tasks-bridge-query` and `tasks-bridge-project-task`. Project task blocks now carry their own quoted `task_id`, while legacy block names remain readable during migration.
+- Replaced the separate Todoist and Project sync commands with one **Tasks Bridge: Sync** command (`tasks-bridge:sync`) that refreshes Query blocks and every enabled Project mapping.
+
 ## v2.9.21 (2026-08-18)
 
 ### ✨ Improvements

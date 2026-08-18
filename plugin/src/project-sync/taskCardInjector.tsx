@@ -3,7 +3,7 @@ import { MarkdownRenderChild, normalizePath } from "obsidian";
 import { createRoot, type Root } from "react-dom/client";
 
 import type TodoistPlugin from "@/index";
-import { readManagedNoteIdentity } from "@/project-sync/document";
+import { readManagedNoteIdentity, readProjectTaskBlockIdentity } from "@/project-sync/document";
 import { RenderChildContext } from "@/ui/context";
 import { ProjectTaskCard, type ProjectTaskCardModel } from "@/ui/projectTaskCard";
 
@@ -14,9 +14,33 @@ export class ProjectTaskCardInjector {
     this.plugin = plugin;
   }
 
-  public onNewBlock(_source: string, el: HTMLElement, ctx: MarkdownPostProcessorContext): void {
+  public onNewBlock(source: string, el: HTMLElement, ctx: MarkdownPostProcessorContext): void {
+    const identity = readProjectTaskBlockIdentity(source);
+    if (identity === null) {
+      el.createDiv({
+        cls: "tasks-bridge-note-card-error",
+        text: 'This project task block needs one valid "task_id" field.',
+      });
+      return;
+    }
+
+    const file = findManagedTaskFileById(this.plugin, identity.taskId, ctx.sourcePath);
+    const model =
+      file === null ? null : readTaskCardModel(this.plugin, file, new Set(), identity.taskId);
+    this.mountModel(model, el, ctx);
+  }
+
+  public onLegacyBlock(_source: string, el: HTMLElement, ctx: MarkdownPostProcessorContext): void {
     const file = this.plugin.app.vault.getFileByPath(normalizePath(ctx.sourcePath));
     const model = file === null ? null : readTaskCardModel(this.plugin, file);
+    this.mountModel(model, el, ctx);
+  }
+
+  private mountModel(
+    model: ProjectTaskCardModel | null,
+    el: HTMLElement,
+    ctx: MarkdownPostProcessorContext,
+  ): void {
     if (model === null) {
       el.createDiv({
         cls: "tasks-bridge-note-card-error",
@@ -50,7 +74,10 @@ class ProjectTaskCardRenderer extends MarkdownRenderChild {
           return;
         }
         const rootFile = this.plugin.app.vault.getFileByPath(this.model.filePath);
-        const nextModel = rootFile === null ? null : readTaskCardModel(this.plugin, rootFile);
+        const nextModel =
+          rootFile === null
+            ? null
+            : readTaskCardModel(this.plugin, rootFile, new Set(), this.model.taskId);
         if (nextModel === null) {
           return;
         }
@@ -97,6 +124,7 @@ const readTaskCardModel = (
   plugin: TodoistPlugin,
   file: TFile,
   seen = new Set<string>(),
+  blockTaskId?: string,
 ): ProjectTaskCardModel | null => {
   if (seen.has(file.path)) {
     return null;
@@ -107,7 +135,11 @@ const readTaskCardModel = (
   if (frontmatter === undefined) {
     return null;
   }
-  const identity = readManagedNoteIdentity(frontmatter);
+  const noteIdentity = readManagedNoteIdentity(frontmatter);
+  if (blockTaskId !== undefined && (noteIdentity === null || noteIdentity.taskId !== blockTaskId)) {
+    return null;
+  }
+  const identity = blockTaskId === undefined ? noteIdentity : { taskId: blockTaskId };
   const content = readString(frontmatter.todoist_content);
   const status = frontmatter.todoist_status;
   const url = readString(frontmatter.todoist_url);
@@ -149,6 +181,40 @@ const readTaskCardModel = (
     taskId: identity.taskId,
     url,
   };
+};
+
+/** Resolve a canonical project-task block by its own ID, independent of the containing note. */
+export const findManagedTaskFileById = (
+  plugin: TodoistPlugin,
+  taskId: string,
+  preferredPath: string,
+): TFile | null => {
+  const preferred = plugin.app.vault.getFileByPath(normalizePath(preferredPath));
+  const preferredIdentity =
+    preferred === null
+      ? null
+      : readManagedNoteIdentity(
+          plugin.app.metadataCache.getFileCache(preferred)?.frontmatter ?? {},
+        );
+  let match: TFile | null = preferredIdentity?.taskId === taskId ? preferred : null;
+  for (const file of plugin.app.vault.getMarkdownFiles()) {
+    if (file.path === preferred?.path) {
+      continue;
+    }
+    const identity = readManagedNoteIdentity(
+      plugin.app.metadataCache.getFileCache(file)?.frontmatter ?? {},
+    );
+    if (identity?.taskId !== taskId) {
+      continue;
+    }
+    // Duplicate immutable IDs are a Project sync conflict, including when one copy contains this
+    // block. Refuse to render an arbitrary copy until Project sync restores a unique projection.
+    if (match !== null) {
+      return null;
+    }
+    match = file;
+  }
+  return match;
 };
 
 const collectTaskCardPaths = (task: ProjectTaskCardModel): Set<string> => {

@@ -23,12 +23,13 @@ import {
   decodeProjectSyncFolderOwnershipRegistry,
   emptyProjectSyncFolderOwnershipRegistry,
   isProjectSyncPath,
+  LEGACY_PROJECT_TASK_CODE_BLOCK,
   listOwnedFolders,
-  MANAGED_TASK_CODE_BLOCK,
   type ManagedFolderCreation,
   mergeProjectCatalogCollections,
   mergeProjectSyncFolderOwnershipRegistries,
   PROJECT_SYNC_FOLDER_OWNERSHIP_DATA_KEY,
+  PROJECT_TASK_CODE_BLOCK,
   type ProjectCatalog,
   type ProjectCatalogCollection,
   type ProjectCatalogStorage,
@@ -45,7 +46,7 @@ import {
   withProjectSyncFolderOwnershipRegistry,
 } from "@/project-sync";
 import { ProjectTaskCardInjector } from "@/project-sync/taskCardInjector";
-import { QueryInjector } from "@/query/injector";
+import { LEGACY_QUERY_CODE_BLOCK, QUERY_CODE_BLOCK, QueryInjector } from "@/query/injector";
 import { makeServices, type Services } from "@/services";
 import {
   type ProjectTaskAutomaticProjectionResult,
@@ -148,12 +149,22 @@ export default class TodoistPlugin extends Plugin {
       ),
     );
     this.registerMarkdownCodeBlockProcessor(
-      "todoist",
+      QUERY_CODE_BLOCK,
       queryInjector.onNewBlock.bind(queryInjector),
     );
     this.registerMarkdownCodeBlockProcessor(
-      MANAGED_TASK_CODE_BLOCK,
+      PROJECT_TASK_CODE_BLOCK,
       projectTaskCardInjector.onNewBlock.bind(projectTaskCardInjector),
+    );
+    // Keep the old names readable for users who have not migrated their notes yet. All generated
+    // content and documentation use the canonical Tasks Bridge names above.
+    this.registerMarkdownCodeBlockProcessor(
+      LEGACY_QUERY_CODE_BLOCK,
+      queryInjector.onNewBlock.bind(queryInjector),
+    );
+    this.registerMarkdownCodeBlockProcessor(
+      LEGACY_PROJECT_TASK_CODE_BLOCK,
+      projectTaskCardInjector.onLegacyBlock.bind(projectTaskCardInjector),
     );
     this.addSettingTab(new SettingsTab(this.app, this));
 
@@ -497,10 +508,24 @@ export default class TodoistPlugin extends Plugin {
 
     try {
       await this.services.todoist.sync();
+    } catch (error: unknown) {
       if (!this.isAsyncGenerationCurrent(generation)) {
         return null;
       }
+      console.error("Failed to synchronize Todoist query blocks:", error);
+      const message = error instanceof Error ? error.message : String(error);
+      new Notice(t().notices.querySyncFailed(message));
+    }
 
+    if (!this.isAsyncGenerationCurrent(generation)) {
+      return null;
+    }
+
+    if (!this.services.projectSync.getConfig().enabled) {
+      return null;
+    }
+
+    try {
       const permit = await this.obsidianSyncGate.waitForSafePermit(() =>
         this.isAsyncGenerationCurrent(generation),
       );
@@ -515,11 +540,7 @@ export default class TodoistPlugin extends Plugin {
         return null;
       }
       if (result === null) {
-        new Notice(
-          this.services.projectSync.getConfig().enabled
-            ? t().notices.projectSyncInterrupted
-            : t().notices.projectSyncDisabled,
-        );
+        new Notice(t().notices.projectSyncInterrupted);
         return null;
       }
 

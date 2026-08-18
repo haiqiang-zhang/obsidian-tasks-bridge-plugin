@@ -37,7 +37,7 @@ describe("Todoist query special-state styles", () => {
     const toolbar = ruleBody(css, ".embed-actions > .todoist-query-controls");
     const centeredRail = ruleBody(
       css,
-      ".cm-lang-todoist:has(.todoist-query.is-untitled .todoist-no-tasks:first-child) > .embed-actions",
+      ":is(.cm-lang-tasks-bridge-query, .cm-lang-todoist):has(.todoist-query.is-untitled .todoist-no-tasks:first-child) > .embed-actions",
     );
     const action = ruleBody(css, ".todoist-query-control-button");
 
@@ -47,15 +47,17 @@ describe("Todoist query special-state styles", () => {
     expect(centeredRail).not.toMatch(/(?:background|border|box-shadow|color|padding):/);
     expect(css).not.toContain(":has(> .callout-content)");
     expect(css).not.toContain(
-      ".cm-lang-todoist:has(.todoist-query.is-untitled .todoist-callout:first-child) > .embed-actions",
+      ":is(.cm-lang-tasks-bridge-query, .cm-lang-todoist):has(.todoist-query.is-untitled .todoist-callout:first-child) > .embed-actions",
     );
     expect(css).not.toContain(
-      ".cm-lang-todoist:has(.todoist-query.is-untitled .todoist-query-error:first-child) > .embed-actions",
+      ":is(.cm-lang-tasks-bridge-query, .cm-lang-todoist):has(.todoist-query.is-untitled .todoist-query-error:first-child) > .embed-actions",
     );
     expect(action).toContain("flex: none");
     expect(action).not.toMatch(/(?:border|box-shadow|color|--icon-size|--icon-stroke)\s*:/);
     expect(css).not.toContain(".edit-block-button");
     expect(css).not.toContain(".embed-actions > .embed-action {");
-    expect(css).not.toContain(".cm-lang-todoist > .embed-actions .embed-action {");
+    expect(css).not.toContain(
+      ":is(.cm-lang-tasks-bridge-query, .cm-lang-todoist) > .embed-actions .embed-action {",
+    );
   });
 });

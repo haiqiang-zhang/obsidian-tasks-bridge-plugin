@@ -16,13 +16,15 @@ export {
 } from "./catalog";
 export {
   applyManagedFrontmatter,
+  LEGACY_PROJECT_TASK_CODE_BLOCK,
   MANAGED_BODY_END,
   MANAGED_BODY_START,
   MANAGED_FRONTMATTER_KEYS,
-  MANAGED_TASK_CODE_BLOCK,
   makeManagedBody,
   makeTaskFrontmatter,
+  PROJECT_TASK_CODE_BLOCK,
   readManagedNoteIdentity,
+  readProjectTaskBlockIdentity,
   replaceManagedBody,
 } from "./document";
 export {

@@ -82,7 +82,7 @@
   }
 }
 
-.cm-lang-todoist .todoist-query-fallback-actions {
+:is(.cm-lang-tasks-bridge-query, .cm-lang-todoist) .todoist-query-fallback-actions {
   inset-inline-end: calc(var(--size-4-9) + var(--size-2-2));
 }
 
@@ -97,7 +97,10 @@
   order: -1;
 }
 
-.cm-lang-todoist:has(.todoist-query.is-untitled .todoist-no-tasks:first-child) > .embed-actions {
+:is(.cm-lang-tasks-bridge-query, .cm-lang-todoist):has(
+    .todoist-query.is-untitled .todoist-no-tasks:first-child
+  )
+  > .embed-actions {
   inset-block-start: 50%;
   transform: translateY(-50%);
 }
@@ -151,7 +154,7 @@
   }
 }
 
-.cm-lang-todoist .embed-actions:focus-within {
+:is(.cm-lang-tasks-bridge-query, .cm-lang-todoist) .embed-actions:focus-within {
   opacity: 1;
 }
 

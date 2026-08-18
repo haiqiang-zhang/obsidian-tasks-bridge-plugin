@@ -1,7 +1,7 @@
 export type Translations = {
   notices: {
     migrationFailed: string;
-    projectSyncDisabled: string;
+    querySyncFailed: (message: string) => string;
     projectSyncInterrupted: string;
     projectSyncComplete: (
       created: number,
@@ -342,7 +342,6 @@ export type Translations = {
   };
   commands: {
     sync: string;
-    projectSync: string;
     addTask: string;
     addTaskPageContent: string;
     addTaskPageDescription: string;

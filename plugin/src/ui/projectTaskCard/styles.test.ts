@@ -34,7 +34,10 @@ describe("Project task card styles", () => {
     );
     expect(heading).toContain("padding-inline-end: var(--tasks-bridge-note-card-actions-width)");
 
-    const host = ruleBody(compileStyles(), ".cm-lang-tasks-bridge-task");
+    const host = ruleBody(
+      compileStyles(),
+      ":is(.cm-lang-tasks-bridge-project-task, .cm-lang-tasks-bridge-task)",
+    );
     expect(host).toContain("--embed-block-shadow-hover: none");
   });
 
@@ -128,6 +131,8 @@ describe("Project task card styles", () => {
     expect(action).toContain("opacity: 1");
     expect(disabledAction).toContain("color: var(--embed-action-color)");
     expect(disabledAction).toContain("opacity: 1");
-    expect(css).not.toContain(".cm-lang-tasks-bridge-task > .embed-actions .embed-action {");
+    expect(css).not.toContain(
+      ":is(.cm-lang-tasks-bridge-project-task, .cm-lang-tasks-bridge-task) > .embed-actions .embed-action {",
+    );
   });
 });

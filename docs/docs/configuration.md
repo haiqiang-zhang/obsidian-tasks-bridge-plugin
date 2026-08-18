@@ -80,7 +80,7 @@ When enabled, periodic refreshes apply to both synchronization modes:
 - query blocks that do not define their own `autorefresh` value; and
 - Project sync when **Enable project sync** is also enabled and every mapping is valid.
 
-Manual synchronization through **Sync now** or the **Sync Todoist projects** command remains available when global auto-refresh is disabled.
+Manual synchronization through **Sync now** or the **Sync** command remains available when global auto-refresh is disabled. The command refreshes both Query blocks and every enabled Project sync mapping.
 
 ### Auto-refresh interval
 

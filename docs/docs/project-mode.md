@@ -94,13 +94,26 @@ Each task note has two plugin-managed areas:
 - flat `todoist_*` frontmatter properties for Bases; and
 - a body section between `todoist-sync-plus:managed` HTML comments containing an Obsidian-styled task card.
 
+The managed card uses an explicit immutable task identity:
+
+````md
+```tasks-bridge-project-task
+task_id: "6hGr78cXw24jQC7W"
+```
+````
+
+Project sync creates and maintains this block automatically. Its `task_id` tells the block which
+project task to render, even when the block is embedded from another note. The
+`todoist_task_id` property remains the ownership boundary for the synchronized Markdown file and
+should not be changed manually.
+
 Text outside the managed body comments is preserved. Frontmatter properties not listed below are also preserved. You can therefore add your own notes, links, tags, and Base-specific properties to a synchronized file.
 
 The task card shows the task, description, ordered project path, section, priority, and labels without exposing synchronization metadata. Its checkbox, edit action, and Todoist link use Obsidian's native interaction patterns.
 
 All user-relevant task data remains visible as native Markdown properties, including the task name, description, completion state, status, ordered project path, section, priority, labels, dates, deadline, duration, and task ID. This is the canonical data surface for Obsidian Bases. Tasks Bridge does not depend on a third-party property-hiding mechanism.
 
-`todoist_task_id` is the only binding identifier stored in a task note. Mapping ownership, project and section IDs, parent relationships, Todoist order, missing-task counters, and completion-event history are synchronization implementation details stored in the plugin's `data.json`. This keeps Markdown useful to people and native Bases while preserving a complete local sync index.
+`todoist_task_id` is the task note's synchronization ownership identifier. The managed card mirrors the same immutable value as `task_id` so the block can resolve its task independently. Mapping ownership, project and section IDs, parent relationships, Todoist order, missing-task counters, and completion-event history are synchronization implementation details stored in the plugin's `data.json`. This keeps Markdown useful to people and native Bases while preserving a complete local sync index.
 
 Most synchronized values remain a one-way projection. Changes made to plugin-managed `todoist_*` properties or to the managed body section are replaced with Todoist's values during the next synchronization. The exception is **`todoist_completed`**: changing its checkbox completes or reopens the task in Todoist and immediately refreshes the Markdown projection. If Todoist rejects the request, the checkbox is restored. Other local content is not sent to Todoist.
 
@@ -231,7 +244,7 @@ Select a task title to open its Markdown note. Task actions always operate on To
 
 The project and section are shown as context in the editor but cannot be moved by this first Tasks List view. Recurring due rules are kept unchanged unless you explicitly replace the due date. A completed task must be reopened before it can be edited. Actions are unavailable while Todoist is not ready.
 
-Do not edit plugin-managed `todoist_*` fields as a substitute for these actions. Project sync remains the authoritative projection and replaces local changes to managed fields during synchronization. If Todoist accepts an action but immediate projection is skipped, deferred, or fails, the remote change is still saved. Do not repeat the remote action; use **Sync Todoist projects** to refresh its note later.
+Do not edit plugin-managed `todoist_*` fields as a substitute for these actions. Project sync remains the authoritative projection and replaces local changes to managed fields during synchronization. If Todoist accepts an action but immediate projection is skipped, deferred, or fails, the remote change is still saved. Do not repeat the remote action; use **Sync** to refresh its note later.
 
 ## Synchronization timing
 
@@ -246,7 +259,7 @@ Automatic Project sync requires all of the following:
 You can start it manually at any time with either:
 
 - **Settings → Tasks Bridge → Project sync → Sync now**; or
-- the **Sync Todoist projects** command.
+- the **Sync** command.
 
 Manual synchronization does not depend on global **Auto-refresh**.
 
