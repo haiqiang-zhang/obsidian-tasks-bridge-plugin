@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v2.9.22 (2026-08-18)
+
 ### ✨ Improvements
 
 - Unified fenced block names as `tasks-bridge-query` and `tasks-bridge-project-task`. Project task blocks now carry their own quoted `task_id`, while legacy block names remain readable during migration.
