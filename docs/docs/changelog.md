@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v2.10.1 (2026-08-18)
+
 ### 🔁 Changes
 
 - Simplified maintenance by keeping the plugin UI and documentation English-only.
