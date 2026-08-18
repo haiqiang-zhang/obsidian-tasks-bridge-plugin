@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v2.9.23 (2026-08-18)
+
 ### ✨ Improvements
 
 - Added **Tasks Bridge: Insert query block** and **Tasks Bridge: Insert project task block**. Both use Obsidian's editor command API, so Obsidian supplies the active editor and current caret or selection. They are unavailable while Settings or another non-editor window is focused. Query filters can come directly from the current selection, while the Project task command provides a local, offline-capable picker and does not modify the note unless a task is chosen.
