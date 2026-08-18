@@ -5,7 +5,9 @@ toc_max_heading_level: 4
 
 # Query Blocks
 
-This plugin uses the concept of [filters](https://todoist.com/help/articles/introduction-to-filters-V98wIH) to fetch data from Todoist. To create a query block, insert a code block like the following in any note:
+This plugin uses the concept of [filters](https://todoist.com/help/articles/introduction-to-filters-V98wIH) to fetch data from Todoist. The fastest way to create one is **Tasks Bridge: Insert query block**: select a filter and run the command, or run it without a selection to insert the `today | overdue` example at the caret. See [Insert blocks](./commands/insert-blocks) for the complete editor behavior.
+
+You can also insert the canonical block manually in any note:
 
 ````
 ```tasks-bridge-query

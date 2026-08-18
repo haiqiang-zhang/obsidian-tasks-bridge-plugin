@@ -5,6 +5,7 @@ import {
   addTaskWithPageInContent,
   addTaskWithPageInDescription,
 } from "@/commands/addTask";
+import { insertProjectTaskBlock, insertQueryBlock } from "@/commands/insertBlocks";
 import { t } from "@/i18n";
 import type { Translations } from "@/i18n/translation";
 import type TodoistPlugin from "@/index";
@@ -29,12 +30,15 @@ const syncCommand: MakeCommand = (plugin: TodoistPlugin, i18n: Translations["com
 
 const commands = {
   sync: syncCommand,
+  "insert-query-block": insertQueryBlock,
+  "insert-project-task-block": insertProjectTaskBlock,
   "add-task": addTask,
   "add-task-page-content": addTaskWithPageInContent,
   "add-task-page-description": addTaskWithPageInDescription,
 };
 
 export type CommandId = keyof typeof commands;
+export type FireableCommandId = "add-task" | "add-task-page-content" | "add-task-page-description";
 
 export const registerCommands = (plugin: TodoistPlugin) => {
   const i18n = t().commands;
@@ -43,7 +47,7 @@ export const registerCommands = (plugin: TodoistPlugin) => {
   }
 };
 
-export const fireCommand = <K extends CommandId>(id: K, plugin: TodoistPlugin) => {
+export const fireCommand = <K extends FireableCommandId>(id: K, plugin: TodoistPlugin) => {
   const i18n = t().commands;
   const make = commands[id];
   const result = make(plugin, i18n).callback?.();

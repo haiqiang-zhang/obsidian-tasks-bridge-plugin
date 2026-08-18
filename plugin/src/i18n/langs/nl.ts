@@ -214,9 +214,28 @@ export const nl: DeepPartial<Translations> = {
   },
   commands: {
     sync: "Synchroniseren",
+    insertQueryBlock: "Queryblok invoegen",
+    insertProjectTaskBlock: "Projecttaakblok invoegen",
     addTask: "Taak toevoegen",
     addTaskPageContent: "Taak toevoegen met huidige pagina in taakinhoud",
     addTaskPageDescription: "Taak toevoegen met huidige pagina in taakbeschrijving",
+  },
+  projectTaskPicker: {
+    title: "Projecttaak invoegen",
+    search: {
+      label: "Gesynchroniseerde projecttaken zoeken",
+      placeholder: "Zoeken op taak, project of sectie",
+    },
+    emptyState: "Geen overeenkomende projecttaken",
+    currentLabel: "Huidig",
+    activeLabel: "Actief",
+    completedLabel: "Voltooid",
+    notices: {
+      noTasks:
+        "Er zijn geen gesynchroniseerde projecttaken beschikbaar. Configureer Projectsynchronisatie en voer eerst Synchroniseren uit.",
+      contextChanged:
+        "De gesynchroniseerde taak is niet meer beschikbaar. Voer de opdracht opnieuw uit.",
+    },
   },
   tokenValidation: {
     emptyTokenError: "API-token mag niet leeg zijn",

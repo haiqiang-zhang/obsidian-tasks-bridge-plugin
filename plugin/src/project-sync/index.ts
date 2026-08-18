@@ -14,6 +14,7 @@ export {
   readProjectCatalogCollection,
   withProjectCatalogCollection,
 } from "./catalog";
+export { makeCreationTimeMarker } from "./creationTime";
 export {
   applyManagedFrontmatter,
   LEGACY_PROJECT_TASK_CODE_BLOCK,

@@ -1,15 +1,15 @@
 {
-  "total": 291,
+  "total": 305,
   "statuses": [
     {
       "name": "English",
       "code": "en",
-      "completed": 291
+      "completed": 305
     },
     {
       "name": "Nederlands",
       "code": "nl",
-      "completed": 166
+      "completed": 180
     }
   ]
 }

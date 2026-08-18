@@ -23,6 +23,14 @@ export type ManagedProjectTaskReference = {
   filePath: string;
 };
 
+export type EmbeddableProjectTask = ManagedProjectTaskReference & {
+  content: string;
+  projectPath: readonly string[];
+  section?: string;
+  status: ManagedProjectTaskStatus;
+  createdAt?: string;
+};
+
 export type ProjectTaskMutationResult = {
   targetedProjection: Promise<void>;
   projection: Promise<void>;
@@ -117,6 +125,121 @@ export class ProjectTaskCommandService {
         (mapping) => mapping.project !== null && availableProjectIds.has(mapping.project.projectId),
       )
     );
+  }
+
+  /**
+   * Enumerate locally projected tasks that can be addressed unambiguously by a project-task block.
+   *
+   * This deliberately performs no Todoist request. Each result must have exactly one Markdown note
+   * for its immutable ID and must belong to one configured mapping whose matching local catalog
+   * contains the task. Unlike mutations, enumeration remains available while Todoist is offline.
+   */
+  public listEmbeddableTasks(): EmbeddableProjectTask[] {
+    const config = this.projectSync.getConfig();
+    if (!config.enabled || this.catalogStorage === undefined) {
+      return [];
+    }
+
+    const currentAccountProjectIds = this.todoist.isReady()
+      ? new Set(this.projectSync.listProjects().map((project) => project.id))
+      : undefined;
+    const catalogTaskIdsByMappingId = new Map<string, ReadonlySet<string>>();
+    for (const mapping of config.mappings) {
+      if (
+        mapping.project === null ||
+        (currentAccountProjectIds !== undefined &&
+          !currentAccountProjectIds.has(mapping.project.projectId))
+      ) {
+        continue;
+      }
+      const catalog = this.catalogStorage.getCatalog(mapping.id);
+      if (
+        catalog === null ||
+        catalog.mappingId !== mapping.id ||
+        catalog.rootProjectId !== mapping.project.projectId ||
+        catalog.includeSubprojects !== mapping.includeSubprojects
+      ) {
+        continue;
+      }
+      catalogTaskIdsByMappingId.set(mapping.id, new Set(catalog.tasks.map(({ id }) => id)));
+    }
+
+    const notesByTaskId = new Map<string, TFile[]>();
+    for (const file of this.vault.getMarkdownFiles()) {
+      const frontmatter = this.metadataCache.getFileCache(file)?.frontmatter;
+      if (frontmatter === undefined) {
+        continue;
+      }
+      const identity = readManagedNoteIdentity(frontmatter);
+      if (identity === null) {
+        continue;
+      }
+      const notes = notesByTaskId.get(identity.taskId) ?? [];
+      notes.push(file);
+      notesByTaskId.set(identity.taskId, notes);
+    }
+
+    const candidates: EmbeddableProjectTask[] = [];
+    for (const [taskId, notes] of notesByTaskId) {
+      // The renderer also refuses to choose between duplicate immutable IDs, even when one copy
+      // sits outside a configured mapping. Do not offer a block that would render as unavailable.
+      if (notes.length !== 1) {
+        continue;
+      }
+
+      const file = notes[0];
+      if (file === undefined) {
+        continue;
+      }
+
+      const owners = config.mappings.filter(
+        (mapping) =>
+          mapping.project !== null &&
+          [mapping.folder, ...mapping.previousFolders].some((folder) =>
+            isPathInside(normalizePath(folder), file.path),
+          ),
+      );
+      if (owners.length !== 1) {
+        continue;
+      }
+      const owner = owners[0];
+      if (owner?.project === null || owner === undefined) {
+        continue;
+      }
+      if (!catalogTaskIdsByMappingId.get(owner.id)?.has(taskId)) {
+        continue;
+      }
+
+      // Re-read after the local ownership checks so display fields and identity come from the
+      // latest metadata-cache entry.
+      const frontmatter = this.metadataCache.getFileCache(file)?.frontmatter;
+      const identity = frontmatter === undefined ? null : readManagedNoteIdentity(frontmatter);
+      const content = readNonEmptyString(frontmatter?.todoist_content);
+      const url = readNonEmptyString(frontmatter?.todoist_url);
+      const status = frontmatter?.todoist_status;
+      if (
+        identity?.taskId !== taskId ||
+        content === undefined ||
+        url === undefined ||
+        (status !== "active" && status !== "completed")
+      ) {
+        continue;
+      }
+
+      const section = readNonEmptyString(frontmatter?.todoist_section);
+      const createdAt = readNonEmptyString(frontmatter?.todoist_created_at);
+      candidates.push({
+        id: taskId,
+        filePath: file.path,
+        content,
+        projectPath: readStringList(frontmatter?.todoist_project_path),
+        ...(section === undefined ? {} : { section }),
+        status,
+        ...(createdAt === undefined ? {} : { createdAt }),
+      });
+    }
+
+    return candidates.sort((left, right) => compareText(left.filePath, right.filePath));
   }
 
   public async loadEditableTask(reference: ManagedProjectTaskReference): Promise<ApiTask> {
@@ -577,6 +700,29 @@ export class ProjectTaskCommandService {
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
+
+const readNonEmptyString = (value: unknown): string | undefined => {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.trim();
+  return normalized === "" ? undefined : normalized;
+};
+
+const readStringList = (value: unknown): string[] =>
+  Array.isArray(value)
+    ? value.flatMap((entry) => {
+        const normalized = readNonEmptyString(entry);
+        return normalized === undefined ? [] : [normalized];
+      })
+    : [];
+
+const compareText = (left: string, right: string): number => {
+  if (left === right) {
+    return 0;
+  }
+  return left < right ? -1 : 1;
+};
 
 const asProjectionError = (error: unknown): ProjectTaskProjectionError =>
   error instanceof ProjectTaskProjectionError ? error : new ProjectTaskProjectionError(error);

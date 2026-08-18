@@ -9,6 +9,27 @@ export const normalizePath = (path: string): string =>
     .filter((segment) => segment !== "" && segment !== ".")
     .join("/");
 
+export const getFrontMatterInfo = (content: string) => {
+  const bomOffset = content.startsWith("\uFEFF") ? 1 : 0;
+  const opening = content.slice(bomOffset).match(/^---[\t ]*\r?\n/u);
+  if (opening === null) {
+    return { exists: false, frontmatter: "", from: 0, to: 0, contentStart: 0 };
+  }
+  const from = bomOffset + opening[0].length;
+  const closing = content.slice(from).match(/^(?:---|\.\.\.)[\t ]*(?:\r?\n|$)/mu);
+  if (closing === null || closing.index === undefined) {
+    return { exists: false, frontmatter: "", from: 0, to: 0, contentStart: 0 };
+  }
+  const to = from + closing.index;
+  return {
+    exists: true,
+    frontmatter: content.slice(from, to),
+    from,
+    to,
+    contentStart: to + closing[0].length,
+  };
+};
+
 // biome-ignore lint/correctness/noUnusedFunctionParameters: mocks with empty impl
 export function setTooltip(el: HTMLElement, text: string, options?: TooltipOptions): void {}
 
@@ -17,6 +38,8 @@ export type TooltipOptions = {
 };
 
 export class App {}
+
+export class MarkdownView {}
 
 type SearchMatch = [number, number];
 
@@ -384,9 +407,25 @@ export abstract class FuzzySuggestModal<T> extends Modal {
 export function renderResults(
   el: HTMLElement,
   text: string,
-  _result: { score: number; matches: SearchMatch[] },
+  result: { score: number; matches: SearchMatch[] },
+  offset = 0,
 ): void {
-  el.textContent = text;
+  const fragment = document.createDocumentFragment();
+  let cursor = 0;
+  for (const [from, to] of result.matches) {
+    const start = Math.max(cursor, from - offset, 0);
+    const end = Math.min(to - offset, text.length);
+    if (end <= start || start >= text.length) {
+      continue;
+    }
+    fragment.append(text.slice(cursor, start));
+    const mark = document.createElement("mark");
+    mark.textContent = text.slice(start, end);
+    fragment.append(mark);
+    cursor = end;
+  }
+  fragment.append(text.slice(cursor));
+  el.replaceChildren(fragment);
 }
 
 export class PluginSettingTab {}

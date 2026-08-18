@@ -25,6 +25,8 @@ vi.mock("@/i18n", () => ({
   t: () => ({
     commands: {
       sync: "Sync",
+      insertQueryBlock: "Insert query block",
+      insertProjectTaskBlock: "Insert project task block",
       addTask: "Add task",
       addTaskPageContent: "Add task with current page in task content",
       addTaskPageDescription: "Add task with current page in task description",
@@ -49,6 +51,8 @@ describe("command registration", () => {
 
     expect(registered.map(({ id }) => id)).toEqual([
       "sync",
+      "insert-query-block",
+      "insert-project-task-block",
       "add-task",
       "add-task-page-content",
       "add-task-page-description",
@@ -62,5 +66,23 @@ describe("command registration", () => {
     await sync?.callback?.();
 
     expect(syncProjectFolderNow).toHaveBeenCalledOnce();
+  });
+
+  it("registers both insert commands with Obsidian's official editor command API", () => {
+    const registered: Command[] = [];
+    const plugin = {
+      addCommand: vi.fn((command: Command) => registered.push(command)),
+    } as unknown as TodoistPlugin;
+
+    registerCommands(plugin);
+
+    for (const id of ["insert-query-block", "insert-project-task-block"] as const) {
+      const command = registered.find((candidate) => candidate.id === id);
+      expect(command?.editorCheckCallback).toEqual(expect.any(Function));
+      expect(command?.callback).toBeUndefined();
+      expect(command?.checkCallback).toBeUndefined();
+      expect(command?.editorCallback).toBeUndefined();
+      expect(command?.hotkeys).toBeUndefined();
+    }
   });
 });

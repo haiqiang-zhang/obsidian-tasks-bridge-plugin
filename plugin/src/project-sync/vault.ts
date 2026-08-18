@@ -9,14 +9,13 @@ import {
   type Vault,
 } from "obsidian";
 
-import { todoistTimestampSchema } from "@/api/domain/task";
-
 import {
   makeProjectCatalog,
   mergeProjectCompletionEvents,
   type ProjectCatalog,
   type ProjectCatalogStorage,
 } from "./catalog";
+import { makeCreationTimeMarker } from "./creationTime";
 import {
   applyManagedTaskRelationships,
   isRecoverableManagedFrontmatterResidue,
@@ -3089,32 +3088,6 @@ const makeProjectionMarkerResolver =
       ? identityToken
       : `${creationTime}${PROJECTION_MARKER_SEPARATOR}${identityToken}`;
   };
-
-const makeCreationTimeMarker = (createdAt: string | null | undefined): string | undefined => {
-  if (createdAt === null || createdAt === undefined) {
-    return undefined;
-  }
-  if (!todoistTimestampSchema.safeParse(createdAt).success) {
-    return undefined;
-  }
-  const timestamp = Date.parse(createdAt);
-  // Todoist adapters use the Unix epoch only as an explicit placeholder when an old endpoint did
-  // not supply a creation time. Treat it as missing instead of exposing a misleading 1970 date.
-  if (!Number.isFinite(timestamp) || timestamp <= 0) {
-    return undefined;
-  }
-  const iso = new Date(timestamp).toISOString();
-  const normalizedParts = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}:\d{2})\.(\d{3})Z$/u.exec(iso);
-  if (normalizedParts === null) {
-    return undefined;
-  }
-  const [, date, rawTime, milliseconds] = normalizedParts;
-  const time = rawTime?.replace(/:/g, ".");
-  if (date === undefined || time === undefined || milliseconds === undefined) {
-    return undefined;
-  }
-  return `${date} ${time}${milliseconds === "000" ? "" : `.${milliseconds}`}Z`;
-};
 
 const projectionOwnerKey = (kind: ProjectionIdentity["kind"], id: string): string =>
   `${kind}:${id}`;

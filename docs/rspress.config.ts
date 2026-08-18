@@ -35,6 +35,7 @@ export default defineConfig({
           text: "Commands",
           items: [
             { text: "Add task", link: "/commands/add-task" },
+            { text: "Insert blocks", link: "/commands/insert-blocks" },
             { text: "Sync", link: "/commands/sync" },
           ],
         },

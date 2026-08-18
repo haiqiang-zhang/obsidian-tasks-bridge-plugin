@@ -342,9 +342,26 @@ export type Translations = {
   };
   commands: {
     sync: string;
+    insertQueryBlock: string;
+    insertProjectTaskBlock: string;
     addTask: string;
     addTaskPageContent: string;
     addTaskPageDescription: string;
+  };
+  projectTaskPicker: {
+    title: string;
+    search: {
+      label: string;
+      placeholder: string;
+    };
+    emptyState: string;
+    currentLabel: string;
+    activeLabel: string;
+    completedLabel: string;
+    notices: {
+      noTasks: string;
+      contextChanged: string;
+    };
   };
   tokenValidation: {
     emptyTokenError: string;

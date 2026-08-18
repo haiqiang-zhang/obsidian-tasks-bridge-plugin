@@ -375,9 +375,26 @@ export const en: Translations = {
   },
   commands: {
     sync: "Sync",
+    insertQueryBlock: "Insert query block",
+    insertProjectTaskBlock: "Insert project task block",
     addTask: "Add task",
     addTaskPageContent: "Add task with current page in task content",
     addTaskPageDescription: "Add task with current page in task description",
+  },
+  projectTaskPicker: {
+    title: "Insert project task",
+    search: {
+      label: "Search synced project tasks",
+      placeholder: "Search by task, project, or section",
+    },
+    emptyState: "No matching project tasks",
+    currentLabel: "Current",
+    activeLabel: "Active",
+    completedLabel: "Completed",
+    notices: {
+      noTasks: "No synced project tasks are available. Configure Project sync and run Sync first.",
+      contextChanged: "The synchronized task is no longer available. Run the command again.",
+    },
   },
   tokenValidation: {
     emptyTokenError: "API token must not be empty",

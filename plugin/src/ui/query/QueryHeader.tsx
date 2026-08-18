@@ -4,7 +4,7 @@ import { useState } from "react";
 import { Button } from "react-aria-components";
 import { createPortal } from "react-dom";
 
-import { type CommandId, fireCommand } from "@/commands";
+import { type FireableCommandId, fireCommand } from "@/commands";
 import { t } from "@/i18n";
 import { type Settings, useSettingsStore } from "@/settings";
 import { ObsidianIcon } from "@/ui/components/obsidian-icon";
@@ -12,7 +12,7 @@ import { PluginContext } from "@/ui/context";
 import { useEmbedActions, useObsidianTooltip } from "@/ui/hooks";
 import { assertNever } from "@/utils/types";
 
-const getAddTaskCommandId = (settings: Settings): CommandId => {
+const getAddTaskCommandId = (settings: Settings): FireableCommandId => {
   switch (settings.addTaskButtonAddsPageLink) {
     case "content":
       return "add-task-page-content";

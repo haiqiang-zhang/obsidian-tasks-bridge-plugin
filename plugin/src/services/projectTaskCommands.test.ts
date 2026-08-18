@@ -68,18 +68,50 @@ const mapping = (overrides: Partial<ProjectSyncMapping> = {}): ProjectSyncMappin
   ...overrides,
 });
 
+const projectCatalog = (
+  tasks: ProjectCatalog["tasks"] = [{ id: TASK_ID, projectId: "child-1", order: 0 }],
+): ProjectCatalog => ({
+  mappingId: MAPPING_ID,
+  rootProjectId: ROOT_PROJECT_ID,
+  includeSubprojects: true,
+  syncedAt: "2026-08-10T00:00:00.000Z",
+  projects: [
+    { id: ROOT_PROJECT_ID, parentId: null, name: "Root", childOrder: 0 },
+    { id: "child-1", parentId: ROOT_PROJECT_ID, name: "Child", childOrder: 0 },
+  ],
+  tasks,
+  completionEvents: [],
+});
+
 const managedFrontmatter = (overrides: ManagedFrontmatter = {}): ManagedFrontmatter => ({
   todoist_task_id: TASK_ID,
   todoist_status: "active",
   ...overrides,
 });
 
+const embeddableFrontmatter = (
+  id: string,
+  overrides: ManagedFrontmatter = {},
+): ManagedFrontmatter =>
+  managedFrontmatter({
+    todoist_task_id: id,
+    todoist_content: `Task ${id}`,
+    todoist_project_path: ["Root"],
+    todoist_url: `https://todoist.com/showTask?id=${id}`,
+    ...overrides,
+  });
+
 type HarnessOptions = {
   automaticProjectionAllowed?: boolean;
   availableRootProjectIds?: string[];
+  allowMismatchedCatalogLookup?: boolean;
   enabled?: boolean;
   filePath?: string;
   frontmatter?: ManagedFrontmatter | undefined;
+  markdownFiles?: Array<{
+    path: string;
+    frontmatter?: ManagedFrontmatter;
+  }>;
   mappings?: ProjectSyncMapping[];
   ready?: boolean;
   catalog?: ProjectCatalog | null;
@@ -89,8 +121,27 @@ const makeHarness = (options: HarnessOptions = {}) => {
   const filePath = options.filePath ?? FILE_PATH;
   const file = { path: filePath, name: "Task.md" } as TFile;
   const frontmatter = "frontmatter" in options ? options.frontmatter : managedFrontmatter();
-  const getFileByPath = vi.fn((_path: string) => file as TFile | null);
-  const getFileCache = vi.fn(() => (frontmatter === undefined ? null : { frontmatter }));
+  const markdownEntries = options.markdownFiles?.map((entry) => ({
+    file: {
+      path: entry.path,
+      name: entry.path.slice(entry.path.lastIndexOf("/") + 1),
+    } as TFile,
+    frontmatter: entry.frontmatter,
+  })) ?? [{ file, frontmatter }];
+  const getFileByPath = vi.fn((path: string) => {
+    if (options.markdownFiles === undefined) {
+      return file as TFile | null;
+    }
+    return markdownEntries.find((entry) => entry.file.path === path)?.file ?? null;
+  });
+  const getMarkdownFiles = vi.fn(() => markdownEntries.map((entry) => entry.file));
+  const getFileCache = vi.fn((candidate: TFile) => {
+    if (options.markdownFiles === undefined) {
+      return frontmatter === undefined ? null : { frontmatter };
+    }
+    const entry = markdownEntries.find(({ file: current }) => current.path === candidate.path);
+    return entry?.frontmatter === undefined ? null : { frontmatter: entry.frontmatter };
+  });
   const processFrontMatter = vi.fn(
     async (_file: TFile, update: (value: ManagedFrontmatter) => void): Promise<void> => {
       if (frontmatter === undefined) {
@@ -109,9 +160,10 @@ const makeHarness = (options: HarnessOptions = {}) => {
     reopenTask: vi.fn(async (_id: string) => undefined),
     updateTask: vi.fn(async (_id: string, _params: UpdateTaskParams) => task),
   };
+  const isReady = vi.fn(() => options.ready ?? true);
   const todoist = {
     actions,
-    isReady: vi.fn(() => options.ready ?? true),
+    isReady,
   } as unknown as TodoistAdapter;
 
   const invalidate = vi.fn(() => undefined);
@@ -144,34 +196,27 @@ const makeHarness = (options: HarnessOptions = {}) => {
     runAutomaticProjection,
     runInternalMutation,
   } as ProjectTaskProjectionCoordinator;
-  let catalog =
-    "catalog" in options
-      ? options.catalog
-      : ({
-          mappingId: MAPPING_ID,
-          rootProjectId: ROOT_PROJECT_ID,
-          includeSubprojects: true,
-          syncedAt: "2026-08-10T00:00:00.000Z",
-          projects: [
-            { id: ROOT_PROJECT_ID, parentId: null, name: "Root", childOrder: 0 },
-            { id: "child-1", parentId: ROOT_PROJECT_ID, name: "Child", childOrder: 0 },
-          ],
-          tasks: [{ id: TASK_ID, projectId: "child-1", order: 0 }],
-          completionEvents: [],
-        } satisfies ProjectCatalog);
+  let catalog = "catalog" in options ? options.catalog : projectCatalog();
   const persistCatalogs = vi.fn(async (catalogs: readonly ProjectCatalog[]) => {
     const incoming = catalogs.find((candidate) => candidate.mappingId === MAPPING_ID);
     if (incoming !== undefined) {
       catalog = structuredClone(incoming);
     }
   });
+  const getCatalog = vi.fn((mappingId: string) =>
+    catalog !== null &&
+    catalog !== undefined &&
+    (catalog.mappingId === mappingId || options.allowMismatchedCatalogLookup === true)
+      ? structuredClone(catalog)
+      : null,
+  );
   const catalogStorage: ProjectCatalogStorage = {
-    getCatalog: (mappingId) => (catalog?.mappingId === mappingId ? structuredClone(catalog) : null),
+    getCatalog,
     persistCatalogs,
   };
 
   const service = new ProjectTaskCommandService(
-    { getFileByPath } as unknown as Vault,
+    { getFileByPath, getMarkdownFiles } as unknown as Vault,
     { processFrontMatter } as unknown as FileManager,
     { getFileCache } as unknown as MetadataCache,
     todoist,
@@ -184,8 +229,11 @@ const makeHarness = (options: HarnessOptions = {}) => {
     actions,
     file,
     getFileByPath,
+    getMarkdownFiles,
     getFileCache,
+    getCatalog,
     invalidate,
+    isReady,
     listProjects,
     get catalog() {
       return catalog;
@@ -213,6 +261,216 @@ describe("ProjectTaskCommandService", () => {
     expect(makeHarness({ ready: false }).service.isReady()).toBe(false);
     expect(makeHarness({ enabled: false }).service.isReady()).toBe(false);
     expect(makeHarness({ availableRootProjectIds: [] }).service.isReady()).toBe(false);
+  });
+
+  it("enumerates active and completed local task projections without Todoist requests", () => {
+    const activeId = "active-task";
+    const completedId = "completed-task";
+    const harness = makeHarness({
+      catalog: projectCatalog([
+        { id: activeId, projectId: "child-1", order: 0 },
+        { id: completedId, projectId: "child-1", order: 1 },
+      ]),
+      markdownFiles: [
+        {
+          path: "Todoist/Root/B completed.md",
+          frontmatter: embeddableFrontmatter(completedId, {
+            todoist_content: "  Completed task  ",
+            todoist_created_at: "2026-08-02T00:00:00.000Z",
+            todoist_project_path: [" Root ", " Child "],
+            todoist_section: " Done ",
+            todoist_status: "completed",
+          }),
+        },
+        {
+          path: "Todoist/Root/A active.md",
+          frontmatter: embeddableFrontmatter(activeId, {
+            todoist_content: "Active task",
+            todoist_project_path: ["Root", "Child"],
+          }),
+        },
+      ],
+    });
+
+    expect(harness.service.listEmbeddableTasks()).toEqual([
+      {
+        id: activeId,
+        filePath: "Todoist/Root/A active.md",
+        content: "Active task",
+        projectPath: ["Root", "Child"],
+        status: "active",
+      },
+      {
+        id: completedId,
+        filePath: "Todoist/Root/B completed.md",
+        content: "Completed task",
+        projectPath: ["Root", "Child"],
+        section: "Done",
+        status: "completed",
+        createdAt: "2026-08-02T00:00:00.000Z",
+      },
+    ]);
+    expect(harness.actions.getTask).not.toHaveBeenCalled();
+    expect(harness.actions.updateTask).not.toHaveBeenCalled();
+    expect(harness.actions.closeProjectTask).not.toHaveBeenCalled();
+    expect(harness.actions.reopenProjectTask).not.toHaveBeenCalled();
+    expect(harness.sync).not.toHaveBeenCalled();
+    expect(harness.getCatalog).toHaveBeenCalledTimes(1);
+  });
+
+  it("omits an immutable task ID when more than one Markdown note claims it", () => {
+    const duplicateId = "duplicate-task";
+    const uniqueId = "unique-task";
+    const harness = makeHarness({
+      catalog: projectCatalog([
+        { id: duplicateId, projectId: "child-1", order: 0 },
+        { id: uniqueId, projectId: "child-1", order: 1 },
+      ]),
+      markdownFiles: [
+        {
+          path: "Todoist/Root/Duplicate.md",
+          frontmatter: embeddableFrontmatter(duplicateId),
+        },
+        {
+          // The renderer scans the whole Vault, so even an out-of-mapping copy is ambiguous.
+          path: "Notes/Duplicate copy.md",
+          frontmatter: embeddableFrontmatter(duplicateId),
+        },
+        {
+          path: "Todoist/Root/Unique.md",
+          frontmatter: embeddableFrontmatter(uniqueId),
+        },
+      ],
+    });
+
+    expect(harness.service.listEmbeddableTasks()).toEqual([
+      {
+        id: uniqueId,
+        filePath: "Todoist/Root/Unique.md",
+        content: `Task ${uniqueId}`,
+        projectPath: ["Root"],
+        status: "active",
+      },
+    ]);
+  });
+
+  it("omits local notes that fail mapping, catalog, status, or renderability policy", () => {
+    const validId = "valid-task";
+    const missingCatalogId = "missing-catalog-task";
+    const staleId = "stale-task";
+    const missingUrlId = "missing-url-task";
+    const harness = makeHarness({
+      catalog: projectCatalog([
+        { id: validId, projectId: "child-1", order: 0 },
+        { id: staleId, projectId: "child-1", order: 1 },
+        { id: missingUrlId, projectId: "child-1", order: 2 },
+      ]),
+      markdownFiles: [
+        {
+          path: "Todoist/Root/Valid.md",
+          frontmatter: embeddableFrontmatter(validId),
+        },
+        {
+          path: "Todoist/Root/Missing catalog.md",
+          frontmatter: embeddableFrontmatter(missingCatalogId),
+        },
+        {
+          path: "Todoist/Root/Stale.md",
+          frontmatter: embeddableFrontmatter(staleId, { todoist_status: "stale" }),
+        },
+        {
+          path: "Todoist/Root/Missing URL.md",
+          frontmatter: embeddableFrontmatter(missingUrlId, { todoist_url: "" }),
+        },
+        {
+          path: "Notes/Outside mapping.md",
+          frontmatter: embeddableFrontmatter("outside-task"),
+        },
+      ],
+    });
+
+    expect(harness.service.listEmbeddableTasks().map(({ id }) => id)).toEqual([validId]);
+  });
+
+  it.each([
+    {
+      name: "another mapping",
+      catalog: { ...projectCatalog(), mappingId: "mapping-2" },
+      allowMismatchedCatalogLookup: true,
+    },
+    {
+      name: "another root project",
+      catalog: { ...projectCatalog(), rootProjectId: "root-2" },
+      allowMismatchedCatalogLookup: false,
+    },
+    {
+      name: "another subproject scope",
+      catalog: { ...projectCatalog(), includeSubprojects: false },
+      allowMismatchedCatalogLookup: false,
+    },
+  ])("does not enumerate tasks from a catalog for $name", ({
+    catalog,
+    allowMismatchedCatalogLookup,
+  }) => {
+    const harness = makeHarness({
+      allowMismatchedCatalogLookup,
+      catalog,
+      markdownFiles: [
+        {
+          path: FILE_PATH,
+          frontmatter: embeddableFrontmatter(TASK_ID),
+        },
+      ],
+    });
+
+    expect(harness.service.listEmbeddableTasks()).toEqual([]);
+  });
+
+  it("does not enumerate a previous account's mapped tasks after Todoist is ready", () => {
+    const harness = makeHarness({
+      availableRootProjectIds: ["new-account-root"],
+      markdownFiles: [
+        {
+          path: FILE_PATH,
+          frontmatter: embeddableFrontmatter(TASK_ID),
+        },
+      ],
+    });
+
+    expect(harness.service.listEmbeddableTasks()).toEqual([]);
+    expect(harness.isReady).toHaveBeenCalledOnce();
+    expect(harness.listProjects).toHaveBeenCalledOnce();
+    expect(harness.getCatalog).not.toHaveBeenCalled();
+  });
+
+  it("enumerates catalog-confirmed local tasks while Todoist is offline", () => {
+    const harness = makeHarness({
+      ready: false,
+      availableRootProjectIds: [],
+      markdownFiles: [
+        {
+          path: FILE_PATH,
+          frontmatter: embeddableFrontmatter(TASK_ID),
+        },
+      ],
+    });
+
+    expect(harness.service.listEmbeddableTasks()).toEqual([
+      {
+        id: TASK_ID,
+        filePath: FILE_PATH,
+        content: `Task ${TASK_ID}`,
+        projectPath: ["Root"],
+        status: "active",
+      },
+    ]);
+    expect(harness.isReady).toHaveBeenCalledOnce();
+    expect(harness.listProjects).not.toHaveBeenCalled();
+    expect(harness.actions.getTask).not.toHaveBeenCalled();
+    expect(harness.actions.updateTask).not.toHaveBeenCalled();
+    expect(harness.actions.closeProjectTask).not.toHaveBeenCalled();
+    expect(harness.actions.reopenProjectTask).not.toHaveBeenCalled();
+    expect(harness.sync).not.toHaveBeenCalled();
   });
 
   it("applies a changed todoist_completed property through the existing complete action", async () => {

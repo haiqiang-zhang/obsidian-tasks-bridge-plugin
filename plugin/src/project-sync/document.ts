@@ -223,11 +223,14 @@ export const removeLegacyImplementationFrontmatter = (frontmatter: ManagedFrontm
 const isSameValue = (left: unknown, right: unknown): boolean =>
   JSON.stringify(left) === JSON.stringify(right);
 
+export const makeProjectTaskBlock = (taskId: string): string =>
+  `\`\`\`${PROJECT_TASK_CODE_BLOCK}\ntask_id: ${JSON.stringify(taskId)}\n\`\`\``;
+
 export const makeManagedBody = (task: Task): string => {
   // The immutable ID belongs in the block because it identifies the card independently from the
   // note's Bases-facing properties. JSON string syntax is valid YAML and keeps numeric-looking
   // Todoist IDs quoted so JavaScript never rounds them while parsing.
-  return `${MANAGED_BODY_START}\n\`\`\`${PROJECT_TASK_CODE_BLOCK}\ntask_id: ${JSON.stringify(task.id)}\n\`\`\`\n${MANAGED_BODY_END}`;
+  return `${MANAGED_BODY_START}\n${makeProjectTaskBlock(task.id)}\n${MANAGED_BODY_END}`;
 };
 
 export const replaceManagedBody = (

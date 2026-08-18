@@ -107,6 +107,12 @@ project task to render, even when the block is embedded from another note. The
 `todoist_task_id` property remains the ownership boundary for the synchronized Markdown file and
 should not be changed manually.
 
+To embed a synchronized task in another note, run **Tasks Bridge: Insert project task block**. Its
+local, offline-capable picker searches task names, project paths, and sections without
+requesting Todoist. A selection seeds the search and is replaced only after you choose a task;
+closing the picker leaves the note unchanged. See [Insert blocks](./commands/insert-blocks) for the
+complete workflow.
+
 Text outside the managed body comments is preserved. Frontmatter properties not listed below are also preserved. You can therefore add your own notes, links, tags, and Base-specific properties to a synchronized file.
 
 The task card shows the task, description, ordered project path, section, priority, and labels without exposing synchronization metadata. Its checkbox, edit action, and Todoist link use Obsidian's native interaction patterns.
