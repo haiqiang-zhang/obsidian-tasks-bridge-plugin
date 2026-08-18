@@ -45,7 +45,6 @@ export default defineConfig({
           items: [
             { text: "General", link: "/contributing/general" },
             { text: "Release process", link: "/contributing/release-process" },
-            { text: "Translations", link: "/contributing/translation" },
           ],
         },
       ],

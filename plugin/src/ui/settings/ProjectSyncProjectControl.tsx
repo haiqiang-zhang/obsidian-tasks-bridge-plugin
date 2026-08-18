@@ -2,9 +2,9 @@ import type React from "react";
 import { useMemo } from "react";
 
 import type { Project } from "@/api/domain/project";
-import { t } from "@/i18n";
 import type { ProjectDefaultSetting } from "@/settings";
 import { ObsidianIcon } from "@/ui/components/obsidian-icon";
+import { uiText } from "@/uiText";
 
 import { ObsidianDropdown } from "./ObsidianDropdown";
 
@@ -39,7 +39,7 @@ export const ProjectSyncProjectControl: React.FC<Props> = ({
   value,
   onChange,
 }) => {
-  const i18n = t().settings.projectSync.project;
+  const text = uiText.settings.projectSync.project;
 
   const options = useMemo(() => buildProjectOptions(metadata.projects), [metadata.projects]);
   const selectedProject =
@@ -68,21 +68,21 @@ export const ProjectSyncProjectControl: React.FC<Props> = ({
   return (
     <div className="project-dropdown-container">
       {isProjectDeleted && (
-        <div className="project-dropdown-warning-icon" title={i18n.deletedWarning}>
+        <div className="project-dropdown-warning-icon" title={text.deletedWarning}>
           <ObsidianIcon size="s" id="lucide-alert-triangle" />
         </div>
       )}
       <ObsidianDropdown
         ariaDescribedBy={ariaDescribedBy}
         ariaInvalid={invalid}
-        ariaLabel={ariaLabel ?? i18n.label}
+        ariaLabel={ariaLabel ?? text.label}
         className="project-sync-project-dropdown"
         disabled={!metadata.ready && value === null}
         id={id}
         onChange={handleChange}
         options={[
           {
-            label: metadata.ready ? i18n.noProject : i18n.loading,
+            label: metadata.ready ? text.noProject : text.loading,
             value: "",
           },
           ...options.map(({ project, label }) => ({ label, value: project.id })),
@@ -90,7 +90,7 @@ export const ProjectSyncProjectControl: React.FC<Props> = ({
             ? [
                 {
                   disabled: isProjectDeleted,
-                  label: `${value.projectName}${isProjectDeleted ? ` (${i18n.deleted})` : ""}`,
+                  label: `${value.projectName}${isProjectDeleted ? ` (${text.deleted})` : ""}`,
                   value: value.projectId,
                 },
               ]

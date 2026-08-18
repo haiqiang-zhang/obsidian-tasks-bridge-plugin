@@ -52,7 +52,6 @@ The site publishes `docs/` as its single current documentation set. Do not creat
 - Keep the documentation current in place.
 - Record released versions in `docs/changelog.md`; do not create frozen documentation snapshots.
 
-### Translation Support
+### Language
 
-- The documentation is currently English-only.
-- Translation status is generated into `translation-status.json`, while the generator also refreshes the status table in `contributing/translation.md`.
+- Write and maintain the documentation in English only.

@@ -3,10 +3,10 @@ import type React from "react";
 import { useMemo, useState } from "react";
 
 import type { Label } from "@/api/domain/label";
-import { t } from "@/i18n";
 import type { LabelsDefaultSetting } from "@/settings";
 import { ObsidianIcon } from "@/ui/components/obsidian-icon";
 import { PluginContext } from "@/ui/context";
+import { uiText } from "@/uiText";
 
 import { ObsidianDropdown } from "./ObsidianDropdown";
 
@@ -19,7 +19,7 @@ export const LabelsControl: React.FC<Props> = ({ value, onChange }) => {
   const [selected, setSelected] = useState(value);
   const plugin = PluginContext.use();
   const todoist = plugin.services.todoist;
-  const i18n = t().settings.taskCreation.defaultLabels;
+  const text = uiText.settings.taskCreation.defaultLabels;
 
   const labelsById: Map<string, Label> = useMemo(() => {
     if (!todoist.isReady()) {
@@ -66,7 +66,7 @@ export const LabelsControl: React.FC<Props> = ({ value, onChange }) => {
           {
             disabled: true,
             label:
-              availableLabels.length === 0 ? i18n.buttonNoAvailableLabels : i18n.buttonAddLabel,
+              availableLabels.length === 0 ? text.buttonNoAvailableLabels : text.buttonAddLabel,
             value: "",
           },
           ...availableLabels.map((label) => ({ label: label.name, value: label.id })),
@@ -74,7 +74,7 @@ export const LabelsControl: React.FC<Props> = ({ value, onChange }) => {
       />
 
       <div className="labels-control-list">
-        {selected.length === 0 && <div className="labels-control-empty-state">{i18n.noLabels}</div>}
+        {selected.length === 0 && <div className="labels-control-empty-state">{text.noLabels}</div>}
         {selected.map((labelSetting) => {
           const label = labelsById.get(labelSetting.labelId);
           const isDeleted = label === undefined;
@@ -89,7 +89,7 @@ export const LabelsControl: React.FC<Props> = ({ value, onChange }) => {
                   size="xs"
                   id="lucide-alert-triangle"
                   className="label-deleted-warning-icon"
-                  aria-label={i18n.deletedWarning}
+                  aria-label={text.deletedWarning}
                 />
                 <ObsidianIcon
                   size="xs"
@@ -99,7 +99,7 @@ export const LabelsControl: React.FC<Props> = ({ value, onChange }) => {
                 />
                 <span className="labels-control-item-name">
                   {labelSetting.labelName}
-                  {isDeleted && ` (${i18n.deleted})`}
+                  {isDeleted && ` (${text.deleted})`}
                 </span>
               </div>
               <button

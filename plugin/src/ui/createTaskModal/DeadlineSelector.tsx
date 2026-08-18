@@ -5,12 +5,12 @@ import { Button, Calendar, CalendarCell, CalendarGrid, Heading } from "react-ari
 
 import type { Deadline as ApiDeadline } from "@/api/domain/task";
 import { Deadline as DataDeadline } from "@/data/deadline";
-import { t } from "@/i18n";
 import { timezone } from "@/infra/time";
 import { openObsidianReactModal } from "@/ui/components/ObsidianReactModal";
 import { ObsidianIcon } from "@/ui/components/obsidian-icon";
 import { PluginContext } from "@/ui/context";
 import { useObsidianMenu } from "@/ui/obsidianMenu";
+import { uiText } from "@/uiText";
 
 export type Deadline = {
   date: CalendarDate;
@@ -28,13 +28,13 @@ export const DeadlineSelector: React.FC<Props> = ({
   allowPastDates = false,
 }) => {
   const plugin = PluginContext.use();
-  const i18n = t().createTaskModal.deadlineSelector;
+  const text = uiText.createTaskModal.deadlineSelector;
   const suggestions = getSuggestions();
 
   const openDateEditor = () => {
     openObsidianReactModal(plugin.app, {
       className: "tasks-bridge-date-modal",
-      title: i18n.dialogLabel,
+      title: text.dialogLabel,
       render: (close) => (
         <DeadlineEditor
           allowPastDates={allowPastDates}
@@ -63,7 +63,7 @@ export const DeadlineSelector: React.FC<Props> = ({
     }
     menu.addItem((item) =>
       item
-        .setTitle(i18n.chooseDateLabel)
+        .setTitle(text.chooseDateLabel)
         .setIcon("calendar-days")
         .setSection("custom-date")
         .onClick(openDateEditor),
@@ -75,7 +75,7 @@ export const DeadlineSelector: React.FC<Props> = ({
       ref={anchorRef}
       aria-expanded={isOpen}
       aria-haspopup="menu"
-      aria-label={i18n.buttonLabel}
+      aria-label={text.buttonLabel}
       className="deadline-selector"
       onPress={toggleMenu}
     >
@@ -98,14 +98,14 @@ const DeadlineEditor: React.FC<DeadlineEditorProps> = ({
   initial,
   onSave,
 }) => {
-  const createTaskI18n = t().createTaskModal;
-  const i18n = createTaskI18n.deadlineSelector;
+  const createTaskText = uiText.createTaskModal;
+  const text = createTaskText.deadlineSelector;
   const [draft, setDraft] = useState(initial);
 
   return (
     <div className="task-date-editor">
       <Calendar
-        aria-label={i18n.datePickerLabel}
+        aria-label={text.datePickerLabel}
         className="date-picker"
         minValue={allowPastDates ? undefined : today(timezone())}
         onChange={(date) => setDraft({ date })}
@@ -127,12 +127,12 @@ const DeadlineEditor: React.FC<DeadlineEditorProps> = ({
 
       <div className="task-date-editor-controls">
         <Button className="task-date-clear-button" onPress={() => onSave(undefined)}>
-          {i18n.noDeadline}
+          {text.noDeadline}
         </Button>
         <span className="task-date-editor-controls-spacer" />
-        <Button onPress={close}>{createTaskI18n.cancelButtonLabel}</Button>
+        <Button onPress={close}>{createTaskText.cancelButtonLabel}</Button>
         <Button className="mod-cta" onPress={() => onSave(draft)}>
-          {createTaskI18n.dateSelector.timeDialog.saveButtonLabel}
+          {createTaskText.dateSelector.timeDialog.saveButtonLabel}
         </Button>
       </div>
     </div>
@@ -141,7 +141,7 @@ const DeadlineEditor: React.FC<DeadlineEditorProps> = ({
 
 const getLabel = (selected: Deadline | undefined): string => {
   if (selected === undefined) {
-    return t().createTaskModal.deadlineSelector.placeholder;
+    return uiText.createTaskModal.deadlineSelector.placeholder;
   }
 
   const apiDeadline: ApiDeadline = { date: selected.date.toString() };
@@ -155,14 +155,14 @@ type DateSuggestion = {
 };
 
 const getSuggestions = (): DateSuggestion[] => {
-  const dateI18n = t().dates;
-  const selectorI18n = t().createTaskModal.deadlineSelector;
+  const dateText = uiText.dates;
+  const selectorText = uiText.createTaskModal.deadlineSelector;
   const startOfNextWeek = endOfWeek(today(timezone()), "en-US").add({ days: 1 });
 
   return [
-    { icon: "calendar", label: dateI18n.today, target: today(timezone()) },
-    { icon: "sun", label: dateI18n.tomorrow, target: today(timezone()).add({ days: 1 }) },
-    { icon: "calendar-clock", label: dateI18n.nextWeek, target: startOfNextWeek },
-    { icon: "ban", label: selectorI18n.noDeadline, target: undefined },
+    { icon: "calendar", label: dateText.today, target: today(timezone()) },
+    { icon: "sun", label: dateText.tomorrow, target: today(timezone()).add({ days: 1 }) },
+    { icon: "calendar-clock", label: dateText.nextWeek, target: startOfNextWeek },
+    { icon: "ban", label: selectorText.noDeadline, target: undefined },
   ];
 };

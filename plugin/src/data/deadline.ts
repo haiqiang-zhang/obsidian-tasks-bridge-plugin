@@ -1,9 +1,9 @@
 import { type CalendarDate, parseDate } from "@internationalized/date";
 
 import type { Deadline as ApiDeadline } from "@/api/domain/task";
-import { t } from "@/i18n";
 import { locale } from "@/infra/locale";
 import { timezone, today } from "@/infra/time";
+import { uiText } from "@/uiText";
 
 export type DeadlineInfo = {
   raw: Date;
@@ -71,17 +71,17 @@ const getFormatter: (style: string) => Intl.DateTimeFormat = (() => {
 })();
 
 const formatDeadline = (info: DeadlineInfo): string => {
-  const i18n = t().dates;
+  const text = uiText.dates;
 
   switch (info.flag) {
     case "today":
-      return i18n.today;
+      return text.today;
     case "tomorrow":
-      return i18n.tomorrow;
+      return text.tomorrow;
     case "yesterday":
-      return i18n.yesterday;
+      return text.yesterday;
     case "lastWeek":
-      return i18n.lastWeekday(getFormatter("weekday").format(info.raw));
+      return text.lastWeekday(getFormatter("weekday").format(info.raw));
     case "nextWeek":
       return getFormatter("weekday").format(info.raw);
     default:

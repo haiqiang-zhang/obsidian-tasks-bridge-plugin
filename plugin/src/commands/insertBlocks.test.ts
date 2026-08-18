@@ -2,9 +2,9 @@ import type { Command, Editor, EditorPosition } from "obsidian";
 import { MarkdownView, Notice } from "obsidian";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { Translations } from "@/i18n/translation";
 import type TodoistPlugin from "@/index";
 import type { EmbeddableProjectTask } from "@/services/projectTaskCommands";
+import { type UiText, uiText } from "@/uiText";
 
 import {
   insertProjectTaskBlock,
@@ -14,39 +14,21 @@ import {
   normalizeQueryFilter,
 } from "./insertBlocks";
 
-const pickerI18n: Translations["projectTaskPicker"] = {
-  title: "Insert project task",
-  search: {
-    label: "Search synced project tasks",
-    placeholder: "Search by task, project, or section",
-  },
-  emptyState: "No matching project tasks",
-  currentLabel: "Current",
-  activeLabel: "Active",
-  completedLabel: "Completed",
-  notices: {
-    noTasks: "No synced project tasks",
-    contextChanged: "The note changed",
-  },
-};
-
-vi.mock("@/i18n", () => ({
-  t: () => ({ projectTaskPicker: pickerI18n }),
-}));
+const pickerText = uiText.projectTaskPicker;
 
 vi.mock("obsidian", async (importOriginal) => {
   const original = await importOriginal<typeof import("obsidian")>();
   return { ...original, Notice: vi.fn() };
 });
 
-const commandI18n = {
+const commandText = {
   sync: "Sync",
   insertQueryBlock: "Insert query block",
   insertProjectTaskBlock: "Insert project task block",
   addTask: "Add task",
   addTaskPageContent: "Add task with page in content",
   addTaskPageDescription: "Add task with page in description",
-} satisfies Translations["commands"];
+} satisfies UiText["commands"];
 
 const activeTask = (overrides: Partial<EmbeddableProjectTask> = {}): EmbeddableProjectTask => ({
   id: "6hGr78cXw24jQC7W",
@@ -71,7 +53,7 @@ describe("insert block commands", () => {
 
   it("inserts a working query example through Obsidian's editor selection", () => {
     const editor = new FakeEditor("");
-    const command = insertQueryBlock(makePlugin([]), commandI18n);
+    const command = insertQueryBlock(makePlugin([]), commandText);
 
     execute(command, editor);
 
@@ -90,7 +72,7 @@ describe("insert block commands", () => {
       },
     } as unknown as TodoistPlugin;
 
-    execute(insertQueryBlock(plugin, commandI18n), editor);
+    execute(insertQueryBlock(plugin, commandText), editor);
 
     expect(editor.value).toBe(`Bo\n\n${makeQueryBlock("today | overdue")}\n\ndy`);
     expect(editor.editCount).toBe(1);
@@ -103,8 +85,8 @@ describe("insert block commands", () => {
     const context = makeMarkdownCommandContext(editor, "Notes/Current.md", {} as Window);
 
     for (const command of [
-      insertQueryBlock(plugin, commandI18n),
-      insertProjectTaskBlock(plugin, commandI18n),
+      insertQueryBlock(plugin, commandText),
+      insertProjectTaskBlock(plugin, commandText),
     ]) {
       expect(command.editorCheckCallback?.(true, editor.asEditor(), context)).toBe(false);
       expect(command.editorCheckCallback?.(false, editor.asEditor(), context)).toBe(false);
@@ -125,8 +107,8 @@ describe("insert block commands", () => {
     const context = makeMarkdownCommandContext(editor);
 
     for (const command of [
-      insertQueryBlock(plugin, commandI18n),
-      insertProjectTaskBlock(plugin, commandI18n),
+      insertQueryBlock(plugin, commandText),
+      insertProjectTaskBlock(plugin, commandText),
     ]) {
       expect(command.editorCheckCallback?.(true, editor.asEditor(), context)).toBe(true);
     }
@@ -145,8 +127,8 @@ describe("insert block commands", () => {
     const plugin = makePluginFromCatalog(listEmbeddableTasks);
     const context = makeMarkdownCommandContext(editor);
     const commands = [
-      insertQueryBlock(plugin, commandI18n),
-      insertProjectTaskBlock(plugin, commandI18n),
+      insertQueryBlock(plugin, commandText),
+      insertProjectTaskBlock(plugin, commandText),
     ];
 
     for (const command of commands) {
@@ -177,8 +159,8 @@ describe("insert block commands", () => {
     const fileInfo = { file: { path: "Notes/Current.md" } };
 
     for (const command of [
-      insertQueryBlock(plugin, commandI18n),
-      insertProjectTaskBlock(plugin, commandI18n),
+      insertQueryBlock(plugin, commandText),
+      insertProjectTaskBlock(plugin, commandText),
     ]) {
       expect(
         command.editorCheckCallback?.(
@@ -205,7 +187,7 @@ describe("insert block commands", () => {
   it("turns a multiline selection into safely quoted YAML and moves after the block", () => {
     const source = '  today\n  & "next" \\ path  ';
     const editor = new FakeEditor(source, 0, source.length);
-    const command = insertQueryBlock(makePlugin([]), commandI18n);
+    const command = insertQueryBlock(makePlugin([]), commandText);
 
     execute(command, editor);
 
@@ -219,7 +201,7 @@ describe("insert block commands", () => {
     const editor = new FakeEditor("BeforeAfter", 6);
     const plugin = makePlugin([]);
 
-    execute(insertQueryBlock(plugin, commandI18n), editor);
+    execute(insertQueryBlock(plugin, commandText), editor);
 
     expect(editor.value).toBe(`Before\n\n${makeQueryBlock("today | overdue")}\n\nAfter`);
     expect(editor.cursorOffset).toBe(editor.value.indexOf("After"));
@@ -229,7 +211,7 @@ describe("insert block commands", () => {
     const source = "Before\r\nAfter";
     const editor = new FakeEditor(source, source.indexOf("After"));
 
-    execute(insertQueryBlock(makePlugin([]), commandI18n), editor);
+    execute(insertQueryBlock(makePlugin([]), commandText), editor);
 
     expect(editor.value).toBe(
       `Before\r\n\r\n${makeQueryBlock("today | overdue").replace(/\n/gu, "\r\n")}\r\n\r\nAfter`,
@@ -259,7 +241,7 @@ describe("insert block commands", () => {
       activeTask({ id: "active-other", content: "Other report" }),
       current,
     ]);
-    const command = insertProjectTaskBlock(plugin, commandI18n);
+    const command = insertProjectTaskBlock(plugin, commandText);
 
     execute(command, editor);
 
@@ -280,7 +262,7 @@ describe("insert block commands", () => {
   it("does not change the note when the task picker is cancelled", () => {
     const editor = new FakeEditor("Keep this", 0, 4);
     const plugin = makePlugin([activeTask()]);
-    const command = insertProjectTaskBlock(plugin, commandI18n);
+    const command = insertProjectTaskBlock(plugin, commandText);
 
     execute(command, editor);
     document.querySelector<HTMLElement>(".modal-container")?.remove();
@@ -295,7 +277,7 @@ describe("insert block commands", () => {
     const editor = new FakeEditor(selected, 0, selected.length);
     const plugin = makePlugin([activeTask()]);
 
-    execute(insertProjectTaskBlock(plugin, commandI18n), editor);
+    execute(insertProjectTaskBlock(plugin, commandText), editor);
 
     const suggestion = document.querySelector<HTMLElement>(".suggestion-item");
     expect(suggestion).toHaveTextContent("Write report");
@@ -309,7 +291,7 @@ describe("insert block commands", () => {
   it("uses Obsidian's current selection when the picker resolves", () => {
     const editor = new FakeEditor("");
     const plugin = makePlugin([activeTask()]);
-    const command = insertProjectTaskBlock(plugin, commandI18n);
+    const command = insertProjectTaskBlock(plugin, commandText);
 
     execute(command, editor);
     editor.replaceExternally("Changed elsewhere");
@@ -326,22 +308,22 @@ describe("insert block commands", () => {
     const tasks = [activeTask()];
     const plugin = makePlugin(tasks);
 
-    execute(insertProjectTaskBlock(plugin, commandI18n), editor);
+    execute(insertProjectTaskBlock(plugin, commandText), editor);
     tasks.length = 0;
     document.querySelector<HTMLButtonElement>(".suggestion-item")?.click();
 
     expect(editor.value).toBe("");
     expect(editor.editCount).toBe(0);
-    expect(Notice).toHaveBeenCalledWith(pickerI18n.notices.contextChanged);
+    expect(Notice).toHaveBeenCalledWith(pickerText.notices.contextChanged);
   });
 
   it("shows a native notice when no synchronized project task is available", () => {
     const editor = new FakeEditor("");
-    const command = insertProjectTaskBlock(makePlugin([]), commandI18n);
+    const command = insertProjectTaskBlock(makePlugin([]), commandText);
 
     execute(command, editor);
 
-    expect(Notice).toHaveBeenCalledWith(pickerI18n.notices.noTasks);
+    expect(Notice).toHaveBeenCalledWith(pickerText.notices.noTasks);
     expect(document.querySelector(".modal-container")).toBeNull();
     expect(editor.editCount).toBe(0);
   });
@@ -354,7 +336,7 @@ describe("insert block commands", () => {
       activeTask({ id: "beta-two-abcdef", createdAt: "2026-08-18T07:12:00.000Z" }),
     ]);
 
-    execute(insertProjectTaskBlock(plugin, commandI18n), editor);
+    execute(insertProjectTaskBlock(plugin, commandText), editor);
 
     const details = [...document.querySelectorAll(".suggestion-item small")].map(
       (element) => element.textContent ?? "",
@@ -381,7 +363,7 @@ describe("insert block commands", () => {
       }),
     ]);
 
-    execute(insertProjectTaskBlock(plugin, commandI18n), editor);
+    execute(insertProjectTaskBlock(plugin, commandText), editor);
 
     const details = [...document.querySelectorAll(".suggestion-item small")].map(
       (element) => element.textContent ?? "",
@@ -406,7 +388,7 @@ describe("insert block commands", () => {
       }),
     ]);
 
-    execute(insertProjectTaskBlock(plugin, commandI18n), editor);
+    execute(insertProjectTaskBlock(plugin, commandText), editor);
 
     const details = [...document.querySelectorAll(".suggestion-item small")].map(
       (element) => element.textContent ?? "",
@@ -438,7 +420,7 @@ describe("insert block commands", () => {
       }),
     ]);
 
-    execute(insertProjectTaskBlock(plugin, commandI18n), editor);
+    execute(insertProjectTaskBlock(plugin, commandText), editor);
 
     const details = [...document.querySelectorAll(".suggestion-item small")].map(
       (element) => element.textContent ?? "",

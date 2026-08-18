@@ -1,10 +1,10 @@
 import type React from "react";
 import { useMemo, useState } from "react";
 
-import { t } from "@/i18n";
 import type { ProjectDefaultSetting } from "@/settings";
 import { ObsidianIcon } from "@/ui/components/obsidian-icon";
 import { PluginContext } from "@/ui/context";
+import { uiText } from "@/uiText";
 
 import { ObsidianDropdown } from "./ObsidianDropdown";
 
@@ -17,7 +17,7 @@ export const ProjectDropdownControl: React.FC<Props> = ({ value, onChange }) => 
   const [selected, setSelected] = useState(value);
   const plugin = PluginContext.use();
   const todoist = plugin.services.todoist;
-  const i18n = t().settings.taskCreation.defaultProject;
+  const text = uiText.settings.taskCreation.defaultProject;
 
   const projects = useMemo(() => {
     if (!todoist.isReady()) {
@@ -57,7 +57,7 @@ export const ProjectDropdownControl: React.FC<Props> = ({ value, onChange }) => 
   return (
     <div className="project-dropdown-container">
       {isProjectDeleted && (
-        <div className="project-dropdown-warning-icon" title={i18n.deletedWarning}>
+        <div className="project-dropdown-warning-icon" title={text.deletedWarning}>
           <ObsidianIcon size="s" id="lucide-alert-triangle" />
         </div>
       )}
@@ -65,13 +65,13 @@ export const ProjectDropdownControl: React.FC<Props> = ({ value, onChange }) => 
         value={selected?.projectId ?? ""}
         onChange={handleChange}
         options={[
-          { label: i18n.noDefault, value: "" },
+          { label: text.noDefault, value: "" },
           ...projects.map((project) => ({ label: project.name, value: project.id })),
           ...(isProjectDeleted && selected !== null
             ? [
                 {
                   disabled: true,
-                  label: `${selected.projectName} (${i18n.deleted})`,
+                  label: `${selected.projectName} (${text.deleted})`,
                   value: selected.projectId,
                 },
               ]

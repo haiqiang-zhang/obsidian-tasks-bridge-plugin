@@ -4,7 +4,6 @@ import type React from "react";
 import { useEffect, useState } from "react";
 import { Button } from "react-aria-components";
 
-import { t } from "@/i18n";
 import { timezone, today } from "@/infra/time";
 import {
   type AddTaskAction,
@@ -15,6 +14,7 @@ import {
 } from "@/settings";
 import { ModalContext, PluginContext } from "@/ui/context";
 import { useObsidianMenu } from "@/ui/obsidianMenu";
+import { uiText } from "@/uiText";
 import { assertNever } from "@/utils/types";
 
 import type TodoistPlugin from "../..";
@@ -30,8 +30,8 @@ import { TaskContentInput } from "./TaskContentInput";
 import { buildClipboardMarkdown, buildTaskContent, type FileInfo } from "./taskContent";
 import "./styles.scss";
 
-import type { Translations } from "@/i18n/translation";
 import { OptionsSelector } from "@/ui/createTaskModal/OptionsSelector";
+import type { UiText } from "@/uiText";
 
 const toFileInfo = (file: TFile | undefined): FileInfo | undefined => {
   if (file === undefined) {
@@ -61,13 +61,13 @@ type CreateTaskProps = {
 
 const getLinkDestinationMessage = (
   destination: LinkDestination | undefined,
-  i18n: Translations["createTaskModal"],
+  text: UiText["createTaskModal"],
 ): string | undefined => {
   switch (destination) {
     case "content":
-      return i18n.appendedLinkToContentMessage;
+      return text.appendedLinkToContentMessage;
     case "description":
-      return i18n.appendedLinkToDescriptionMessage;
+      return text.appendedLinkToDescriptionMessage;
     default:
       return undefined;
   }
@@ -102,7 +102,9 @@ const calculateDefaultProject = (
 
   const project = plugin.services.todoist.data().projects.byId(projectSetting.projectId);
   if (project === undefined) {
-    const noticeMsg = t().createTaskModal.defaultProjectDeletedNotice(projectSetting.projectName);
+    const noticeMsg = uiText.createTaskModal.defaultProjectDeletedNotice(
+      projectSetting.projectName,
+    );
     new Notice(noticeMsg);
     return getInboxProject(plugin);
   }
@@ -134,7 +136,9 @@ const calculateDefaultLabels = (
   }
 
   if (deletedLabelNames.length > 0) {
-    const noticeMsg = t().createTaskModal.defaultLabelsDeletedNotice(deletedLabelNames.join(", "));
+    const noticeMsg = uiText.createTaskModal.defaultLabelsDeletedNotice(
+      deletedLabelNames.join(", "),
+    );
     new Notice(noticeMsg);
   }
 
@@ -160,10 +164,10 @@ export const CreateTaskModal: React.FC<CreateTaskProps> = (props) => {
     return () => window.clearInterval(id);
   }, []);
 
-  const i18n = t().createTaskModal;
+  const text = uiText.createTaskModal;
 
   if (!isReady) {
-    return <div className="task-creation-modal-root">{i18n.loadingMessage}</div>;
+    return <div className="task-creation-modal-root">{text.loadingMessage}</div>;
   }
 
   return <CreateTaskModalContent {...props} />;
@@ -198,7 +202,7 @@ const CreateTaskModalContent: React.FC<CreateTaskProps> = ({
   const isPremium = plugin.services.todoist.isPremium();
   const isSubmitButtonDisabled = content === "" && options.appendLinkTo !== "content";
 
-  const i18n = t().createTaskModal;
+  const text = uiText.createTaskModal;
 
   const createTask = async (action: AddTaskAction) => {
     if (isSubmitButtonDisabled) {
@@ -260,16 +264,16 @@ const CreateTaskModalContent: React.FC<CreateTaskProps> = ({
         );
         try {
           await navigator.clipboard.writeText(markdownLink);
-          new Notice(i18n.linkCopiedNotice);
+          new Notice(text.linkCopiedNotice);
         } catch (clipboardErr) {
-          new Notice(i18n.linkCopyFailedNotice);
+          new Notice(text.linkCopyFailedNotice);
           console.error("Failed to copy to clipboard", clipboardErr);
         }
       } else {
-        new Notice(i18n.successNotice);
+        new Notice(text.successNotice);
       }
     } catch (err) {
-      new Notice(i18n.errorNotice);
+      new Notice(text.errorNotice);
       console.error("Failed to create task", err);
     }
   };
@@ -277,21 +281,21 @@ const CreateTaskModalContent: React.FC<CreateTaskProps> = ({
   const getActionLabel = (action: AddTaskAction): string => {
     switch (action) {
       case "add":
-        return i18n.addTaskButtonLabel;
+        return text.addTaskButtonLabel;
       case "add-copy-app":
-        return i18n.addTaskAndCopyAppLabel;
+        return text.addTaskAndCopyAppLabel;
       case "add-copy-web":
-        return i18n.addTaskAndCopyWebLabel;
+        return text.addTaskAndCopyWebLabel;
       default:
         return assertNever(action, "Unknown add task action");
     }
   };
 
-  const linkDestinationMessage = getLinkDestinationMessage(options.appendLinkTo, i18n);
+  const linkDestinationMessage = getLinkDestinationMessage(options.appendLinkTo, text);
   const addTaskActions: Array<{ action: AddTaskAction; label: string }> = [
-    { action: "add", label: i18n.addTaskButtonLabel },
-    { action: "add-copy-app", label: i18n.addTaskAndCopyAppLabel },
-    { action: "add-copy-web", label: i18n.addTaskAndCopyWebLabel },
+    { action: "add", label: text.addTaskButtonLabel },
+    { action: "add-copy-app", label: text.addTaskAndCopyAppLabel },
+    { action: "add-copy-web", label: text.addTaskAndCopyWebLabel },
   ];
   const {
     anchorRef: addTaskMenuAnchorRef,
@@ -312,7 +316,7 @@ const CreateTaskModalContent: React.FC<CreateTaskProps> = ({
     <div className="task-creation-modal-root">
       <TaskContentInput
         className="task-name"
-        placeholder={i18n.taskNamePlaceholder}
+        placeholder={text.taskNamePlaceholder}
         content={content}
         onChange={setContent}
         autofocus={true}
@@ -320,7 +324,7 @@ const CreateTaskModalContent: React.FC<CreateTaskProps> = ({
       />
       <TaskContentInput
         className="task-description"
-        placeholder={i18n.descriptionPlaceholder}
+        placeholder={text.descriptionPlaceholder}
         content={description}
         onChange={setDescription}
       />
@@ -344,8 +348,8 @@ const CreateTaskModalContent: React.FC<CreateTaskProps> = ({
           <ProjectSelector selected={project} setSelected={setProject} />
         </div>
         <div className="task-creation-action">
-          <Button onPress={() => modal.close()} aria-label={i18n.cancelButtonLabel}>
-            {i18n.cancelButtonLabel}
+          <Button onPress={() => modal.close()} aria-label={text.cancelButtonLabel}>
+            {text.cancelButtonLabel}
           </Button>
           <div className="add-task-button-group">
             <Button
@@ -360,7 +364,7 @@ const CreateTaskModalContent: React.FC<CreateTaskProps> = ({
               ref={addTaskMenuAnchorRef}
               aria-expanded={isAddTaskMenuOpen}
               aria-haspopup="menu"
-              aria-label={i18n.actionMenuLabel}
+              aria-label={text.actionMenuLabel}
               className="mod-cta add-task-dropdown"
               isDisabled={isSubmitButtonDisabled}
               onPress={toggleAddTaskMenu}
@@ -386,8 +390,8 @@ const getInboxProject = (plugin: TodoistPlugin): ProjectIdentifier => {
     }
   }
 
-  const i18n = t().createTaskModal;
+  const text = uiText.createTaskModal;
 
-  new Notice(i18n.failedToFindInboxNotice);
+  new Notice(text.failedToFindInboxNotice);
   throw new Error("Could not find inbox project");
 };

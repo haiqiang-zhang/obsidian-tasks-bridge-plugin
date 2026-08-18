@@ -23,12 +23,12 @@ import {
 import type { DueDate as ApiDueDate } from "@/api/domain/dueDate";
 import type { Duration as ApiDuration } from "@/api/domain/task";
 import { DueDate as DataDueDate } from "@/data/dueDate";
-import { t } from "@/i18n";
 import { now, timezone } from "@/infra/time";
 import { openObsidianReactModal } from "@/ui/components/ObsidianReactModal";
 import { ObsidianIcon } from "@/ui/components/obsidian-icon";
 import { PluginContext } from "@/ui/context";
 import { useObsidianMenu } from "@/ui/obsidianMenu";
+import { uiText } from "@/uiText";
 
 export type DueDate = {
   date: CalendarDate;
@@ -52,13 +52,13 @@ export const DueDateSelector: React.FC<Props> = ({
   allowPastDates = false,
 }) => {
   const plugin = PluginContext.use();
-  const i18n = t().createTaskModal.dateSelector;
+  const text = uiText.createTaskModal.dateSelector;
   const suggestions = getSuggestions();
 
   const openDateEditor = () => {
     openObsidianReactModal(plugin.app, {
       className: "tasks-bridge-date-modal",
-      title: i18n.dialogLabel,
+      title: text.dialogLabel,
       render: (close) => (
         <DueDateEditor
           allowPastDates={allowPastDates}
@@ -91,7 +91,7 @@ export const DueDateSelector: React.FC<Props> = ({
     }
     menu.addItem((item) =>
       item
-        .setTitle(i18n.chooseDateTimeLabel)
+        .setTitle(text.chooseDateTimeLabel)
         .setIcon("calendar-days")
         .setSection("custom-date")
         .onClick(openDateEditor),
@@ -103,7 +103,7 @@ export const DueDateSelector: React.FC<Props> = ({
       ref={anchorRef}
       aria-expanded={isOpen}
       aria-haspopup="menu"
-      aria-label={i18n.buttonLabel}
+      aria-label={text.buttonLabel}
       className="due-date-selector"
       onPress={toggleMenu}
     >
@@ -126,7 +126,7 @@ const DueDateEditor: React.FC<DueDateEditorProps> = ({
   initial,
   onSave,
 }) => {
-  const i18n = t().createTaskModal.dateSelector;
+  const text = uiText.createTaskModal.dateSelector;
   const [draft, setDraft] = useState(initial);
   const durationOptions = useMemo(() => buildDurationOptions(), []);
   const durationIndex = Math.max(
@@ -166,7 +166,7 @@ const DueDateEditor: React.FC<DueDateEditorProps> = ({
   return (
     <div className="task-date-editor">
       <Calendar
-        aria-label={i18n.datePickerLabel}
+        aria-label={text.datePickerLabel}
         className="date-picker"
         minValue={allowPastDates ? undefined : today(timezone())}
         onChange={(date) => setDraft((current) => ({ date, timeInfo: current?.timeInfo }))}
@@ -200,7 +200,7 @@ const DueDateEditor: React.FC<DueDateEditorProps> = ({
           }}
           value={draft?.timeInfo?.time ?? null}
         >
-          <Label className="task-time-picker-label">{i18n.timeDialog.timeLabel}</Label>
+          <Label className="task-time-picker-label">{text.timeDialog.timeLabel}</Label>
           <DateInput className="task-time-picker-input">
             {(segment) => (
               <DateSegment className="task-time-picker-input-segment" segment={segment} />
@@ -209,7 +209,7 @@ const DueDateEditor: React.FC<DueDateEditorProps> = ({
         </TimeField>
 
         <div className="task-duration-picker">
-          <span className="task-duration-picker-label">{i18n.timeDialog.durationLabel}</span>
+          <span className="task-duration-picker-label">{text.timeDialog.durationLabel}</span>
           <Button
             ref={durationAnchorRef}
             aria-expanded={durationMenuOpen}
@@ -231,19 +231,19 @@ const DueDateEditor: React.FC<DueDateEditorProps> = ({
               )
             }
           >
-            {i18n.timeDialog.clearTimeLabel}
+            {text.timeDialog.clearTimeLabel}
           </Button>
         )}
       </div>
 
       <div className="task-date-editor-controls">
         <Button className="task-date-clear-button" onPress={() => onSave(undefined)}>
-          {i18n.noDate}
+          {text.noDate}
         </Button>
         <span className="task-date-editor-controls-spacer" />
-        <Button onPress={close}>{i18n.timeDialog.cancelButtonLabel}</Button>
+        <Button onPress={close}>{text.timeDialog.cancelButtonLabel}</Button>
         <Button className="mod-cta" onPress={() => onSave(draft)}>
-          {i18n.timeDialog.saveButtonLabel}
+          {text.timeDialog.saveButtonLabel}
         </Button>
       </div>
     </div>
@@ -252,7 +252,7 @@ const DueDateEditor: React.FC<DueDateEditorProps> = ({
 
 const getLabel = (selected: DueDate | undefined): string => {
   if (selected === undefined) {
-    return t().createTaskModal.dateSelector.emptyDate;
+    return uiText.createTaskModal.dateSelector.emptyDate;
   }
 
   const date =
@@ -273,15 +273,15 @@ type DateSuggestion = {
 };
 
 const getSuggestions = (): DateSuggestion[] => {
-  const dateI18n = t().dates;
-  const selectorI18n = t().createTaskModal.dateSelector;
+  const dateText = uiText.dates;
+  const selectorText = uiText.createTaskModal.dateSelector;
   const startOfNextWeek = endOfWeek(today(timezone()), "en-US").add({ days: 1 });
 
   return [
-    { icon: "calendar", label: dateI18n.today, target: today(timezone()) },
-    { icon: "sun", label: dateI18n.tomorrow, target: today(timezone()).add({ days: 1 }) },
-    { icon: "calendar-clock", label: dateI18n.nextWeek, target: startOfNextWeek },
-    { icon: "ban", label: selectorI18n.noDate, target: undefined },
+    { icon: "calendar", label: dateText.today, target: today(timezone()) },
+    { icon: "sun", label: dateText.tomorrow, target: today(timezone()).add({ days: 1 }) },
+    { icon: "calendar-clock", label: dateText.nextWeek, target: startOfNextWeek },
+    { icon: "ban", label: selectorText.noDate, target: undefined },
   ];
 };
 
@@ -289,13 +289,13 @@ const durationSegmentMinutes = 15;
 const durationSegmentCount = (24 * 60 - durationSegmentMinutes) / durationSegmentMinutes;
 
 const buildDurationOptions = (): Array<{ label: string; value: ApiDuration | undefined }> => {
-  const i18n = t().createTaskModal.dateSelector.timeDialog;
+  const text = uiText.createTaskModal.dateSelector.timeDialog;
   return [
-    { label: i18n.noDuration, value: undefined },
+    { label: text.noDuration, value: undefined },
     ...Array.from({ length: durationSegmentCount }, (_, index) => {
       const amount = (index + 1) * durationSegmentMinutes;
       return {
-        label: i18n.duration(amount),
+        label: text.duration(amount),
         value: { amount, unit: "minute" as const },
       };
     }),

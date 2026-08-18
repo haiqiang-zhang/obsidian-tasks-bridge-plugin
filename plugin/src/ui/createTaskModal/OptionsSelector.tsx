@@ -1,10 +1,10 @@
 import type React from "react";
 import { Button } from "react-aria-components";
 
-import { t } from "@/i18n";
 import { ObsidianIcon } from "@/ui/components/obsidian-icon";
 import type { TaskCreationOptions } from "@/ui/createTaskModal";
 import { useObsidianMenu } from "@/ui/obsidianMenu";
+import { uiText } from "@/uiText";
 
 type Props = {
   selected: TaskCreationOptions;
@@ -12,7 +12,7 @@ type Props = {
 };
 
 export const OptionsSelector: React.FC<Props> = ({ selected, setSelected }) => {
-  const i18n = t().createTaskModal.optionsSelector;
+  const text = uiText.createTaskModal.optionsSelector;
 
   const items: Array<{
     label: string;
@@ -20,17 +20,17 @@ export const OptionsSelector: React.FC<Props> = ({ selected, setSelected }) => {
     onSelect: () => void;
   }> = [
     {
-      label: i18n.addLinkToContent,
+      label: text.addLinkToContent,
       isSelected: selected.appendLinkTo === "content",
       onSelect: () => setSelected({ ...selected, appendLinkTo: "content" }),
     },
     {
-      label: i18n.addLinkToDescription,
+      label: text.addLinkToDescription,
       isSelected: selected.appendLinkTo === "description",
       onSelect: () => setSelected({ ...selected, appendLinkTo: "description" }),
     },
     {
-      label: i18n.doNotAddLink,
+      label: text.doNotAddLink,
       isSelected: selected.appendLinkTo === undefined,
       onSelect: () => setSelected({ ...selected, appendLinkTo: undefined }),
     },
@@ -48,7 +48,7 @@ export const OptionsSelector: React.FC<Props> = ({ selected, setSelected }) => {
       ref={anchorRef}
       aria-expanded={isOpen}
       aria-haspopup="menu"
-      aria-label={i18n.buttonLabel}
+      aria-label={text.buttonLabel}
       className="options-selector"
       onPress={toggleMenu}
     >

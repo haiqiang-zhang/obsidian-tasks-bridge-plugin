@@ -5,11 +5,11 @@ import { Button } from "react-aria-components";
 import { createPortal } from "react-dom";
 
 import { type FireableCommandId, fireCommand } from "@/commands";
-import { t } from "@/i18n";
 import { type Settings, useSettingsStore } from "@/settings";
 import { ObsidianIcon } from "@/ui/components/obsidian-icon";
 import { PluginContext } from "@/ui/context";
 import { useEmbedActions, useObsidianTooltip } from "@/ui/hooks";
+import { uiText } from "@/uiText";
 import { assertNever } from "@/utils/types";
 
 const getAddTaskCommandId = (settings: Settings): FireableCommandId => {
@@ -40,14 +40,14 @@ export const QueryHeader: React.FC<Props> = ({
 }) => {
   const plugin = PluginContext.use();
   const settings = useSettingsStore();
-  const i18n = t().query.header.refreshTooltip;
+  const text = uiText.query.header.refreshTooltip;
   const embedActions = useEmbedActions();
   const hasTitle = title.trim().length > 0;
 
   const refreshedAtDisplay =
     refreshedTimestamp !== undefined
-      ? i18n.lastRefreshed(refreshedTimestamp.toLocaleString())
-      : i18n.notRefreshed;
+      ? text.lastRefreshed(refreshedTimestamp.toLocaleString())
+      : text.notRefreshed;
 
   const controls = (
     <div className="todoist-query-controls interactive-child" role="toolbar" aria-label="Todoist">
@@ -55,7 +55,7 @@ export const QueryHeader: React.FC<Props> = ({
         className="add-task"
         iconId="plus"
         action={() => fireCommand(getAddTaskCommandId(settings), plugin)}
-        label={t().commands.addTask}
+        label={uiText.commands.addTask}
       />
       <HeaderButton
         className={classNames("refresh-query", {
@@ -65,8 +65,8 @@ export const QueryHeader: React.FC<Props> = ({
         action={async () => {
           await refresh();
         }}
-        label={i18n.label}
-        tooltip={`${i18n.label}. ${refreshedAtDisplay}`}
+        label={text.label}
+        tooltip={`${text.label}. ${refreshedAtDisplay}`}
       />
     </div>
   );

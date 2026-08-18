@@ -2,10 +2,10 @@ import type React from "react";
 import { useEffect, useRef, useState } from "react";
 import { Button, FieldError, Group, Input, Label, TextField } from "react-aria-components";
 
-import { t } from "@/i18n";
 import { debug } from "@/log";
 import { TokenValidation, type TokenValidationResult } from "@/token";
 import { TokenValidationIcon } from "@/ui/components/token-validation-icon";
+import { uiText } from "@/uiText";
 
 const debouncingDelayMs = 500;
 
@@ -15,7 +15,7 @@ type Props = {
 };
 
 export const TokenInputForm: React.FC<Props> = ({ onTokenSubmit, tester }) => {
-  const i18n = t().onboardingModal;
+  const text = uiText.onboardingModal;
   const [token, setToken] = useState<string>("");
   const [validationStatus, setValidationStatus] = useState<TokenValidationResult>({
     kind: "none",
@@ -83,7 +83,7 @@ export const TokenInputForm: React.FC<Props> = ({ onTokenSubmit, tester }) => {
         onChange={onTokenChange}
         isInvalid={validationStatus.kind === "error"}
       >
-        <Label>{i18n.tokenInputLabel}</Label>
+        <Label>{text.tokenInputLabel}</Label>
         <Group>
           <Input />
           <TokenValidationIcon status={validationStatus} />
@@ -92,7 +92,7 @@ export const TokenInputForm: React.FC<Props> = ({ onTokenSubmit, tester }) => {
       </TextField>
       <div className="controls">
         <Button type="button" onPress={() => void pasteFromClipboard()}>
-          {i18n.pasteButtonLabel}
+          {text.pasteButtonLabel}
         </Button>
         <Button
           type="submit"
@@ -101,7 +101,7 @@ export const TokenInputForm: React.FC<Props> = ({ onTokenSubmit, tester }) => {
           className="mod-cta"
           data-testid="submit-button"
         >
-          {i18n.submitButtonLabel}
+          {text.submitButtonLabel}
         </Button>
       </div>
     </div>

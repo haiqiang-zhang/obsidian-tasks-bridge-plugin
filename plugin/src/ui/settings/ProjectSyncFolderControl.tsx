@@ -2,8 +2,8 @@ import { AbstractInputSuggest, type App, prepareFuzzySearch, SearchComponent } f
 import type React from "react";
 import { useLayoutEffect, useRef } from "react";
 
-import { t } from "@/i18n";
 import { PluginContext } from "@/ui/context";
+import { uiText } from "@/uiText";
 
 type Props = {
   ariaDescribedBy?: string;
@@ -53,7 +53,7 @@ export const ProjectSyncFolderControl: React.FC<Props> = ({
   const searchRef = useRef<SearchComponent | null>(null);
   const foldersRef = useRef(folders);
   const onChangeRef = useRef(onChange);
-  const i18n = t().settings.projectSync.folder;
+  const text = uiText.settings.projectSync.folder;
 
   foldersRef.current = folders;
   onChangeRef.current = onChange;
@@ -91,14 +91,14 @@ export const ProjectSyncFolderControl: React.FC<Props> = ({
     if (search.getValue() !== value) {
       search.setValue(value);
     }
-    search.setPlaceholder(i18n.placeholder);
+    search.setPlaceholder(text.placeholder);
 
     const { inputEl } = search;
     setOptionalAttribute(inputEl, "id", id);
     setOptionalAttribute(inputEl, "aria-describedby", ariaDescribedBy);
-    inputEl.setAttribute("aria-label", ariaLabel ?? i18n.label);
+    inputEl.setAttribute("aria-label", ariaLabel ?? text.label);
     inputEl.setAttribute("aria-invalid", String(invalid));
-  }, [ariaDescribedBy, ariaLabel, i18n.label, i18n.placeholder, id, invalid, value]);
+  }, [ariaDescribedBy, ariaLabel, text.label, text.placeholder, id, invalid, value]);
 
   return <div className="project-sync-folder-selector" ref={containerRef} />;
 };

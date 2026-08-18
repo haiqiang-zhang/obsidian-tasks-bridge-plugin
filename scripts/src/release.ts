@@ -28,7 +28,6 @@ const RELEASE_STATE_FILENAME = "tasks-bridge-release-state.json";
 const RELEASE_ASSETS = ["main.js", "manifest.json", "styles.css"] as const;
 const RELEASE_FILES = [
   "docs/docs/changelog.md",
-  "docs/docs/translation-status.json",
   "docs/package.json",
   "manifest.json",
   "package.json",
@@ -546,7 +545,6 @@ function validatePreparedVersion(version: string): void {
 
 function runReleaseChecks(version: string): void {
   logStarted("Running release checks...");
-  run("npm", ["run", "gen"], { inherit: true });
   run("npm", ["run", "check", "--workspace=plugin"], { inherit: true });
   run("npm", ["run", "lint:check", "--workspace=plugin"], { inherit: true });
   run("npm", ["test", "--workspace=plugin", "--", "--run"], { inherit: true });

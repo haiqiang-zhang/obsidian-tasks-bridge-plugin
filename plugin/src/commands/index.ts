@@ -6,21 +6,21 @@ import {
   addTaskWithPageInDescription,
 } from "@/commands/addTask";
 import { insertProjectTaskBlock, insertQueryBlock } from "@/commands/insertBlocks";
-import { t } from "@/i18n";
-import type { Translations } from "@/i18n/translation";
 import type TodoistPlugin from "@/index";
 import { debug } from "@/log";
+import type { UiText } from "@/uiText";
+import { uiText } from "@/uiText";
 
 export type MakeCommand = (
   plugin: TodoistPlugin,
-  i18n: Translations["commands"],
+  text: UiText["commands"],
 ) => Omit<ObsidianCommand, "id" | "callback"> & {
   callback?: () => void | Promise<void>;
 };
 
-const syncCommand: MakeCommand = (plugin: TodoistPlugin, i18n: Translations["commands"]) => {
+const syncCommand: MakeCommand = (plugin: TodoistPlugin, text: UiText["commands"]) => {
   return {
-    name: i18n.sync,
+    name: text.sync,
     callback: async () => {
       debug("Synchronizing Todoist queries and projects");
       await plugin.syncProjectFolderNow();
@@ -41,16 +41,16 @@ export type CommandId = keyof typeof commands;
 export type FireableCommandId = "add-task" | "add-task-page-content" | "add-task-page-description";
 
 export const registerCommands = (plugin: TodoistPlugin) => {
-  const i18n = t().commands;
+  const text = uiText.commands;
   for (const [id, make] of Object.entries(commands)) {
-    plugin.addCommand({ id, ...make(plugin, i18n) });
+    plugin.addCommand({ id, ...make(plugin, text) });
   }
 };
 
 export const fireCommand = <K extends FireableCommandId>(id: K, plugin: TodoistPlugin) => {
-  const i18n = t().commands;
+  const text = uiText.commands;
   const make = commands[id];
-  const result = make(plugin, i18n).callback?.();
+  const result = make(plugin, text).callback?.();
   if (result instanceof Promise) {
     void result.catch((error: unknown) => {
       console.error(`Failed to execute command '${id}':`, error);

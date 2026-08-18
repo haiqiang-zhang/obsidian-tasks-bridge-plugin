@@ -4,17 +4,17 @@ import { useMemo } from "react";
 import { Button } from "react-aria-components";
 
 import type { Label } from "@/api/domain/label";
-import { t } from "@/i18n";
-import type { Translations } from "@/i18n/translation";
 import { ObsidianIcon } from "@/ui/components/obsidian-icon";
 import { PluginContext } from "@/ui/context";
+import type { UiText } from "@/uiText";
+import { uiText } from "@/uiText";
 
 type Props = {
   selected: Label[];
   setSelected: (labels: Label[]) => void;
 };
 
-type LabelSelectorTranslations = Translations["createTaskModal"]["labelSelector"];
+type LabelSelectorText = UiText["createTaskModal"]["labelSelector"];
 
 export const LabelSelector: React.FC<Props> = ({ selected, setSelected }) => {
   const plugin = PluginContext.use();
@@ -22,21 +22,21 @@ export const LabelSelector: React.FC<Props> = ({ selected, setSelected }) => {
     () => Array.from(plugin.services.todoist.data().labels.iterActive()),
     [plugin],
   );
-  const i18n = t().createTaskModal.labelSelector;
+  const text = uiText.createTaskModal.labelSelector;
 
   const openSelector = () => {
-    new LabelSelectionModal(plugin.app, options, selected, setSelected, i18n).open();
+    new LabelSelectionModal(plugin.app, options, selected, setSelected, text).open();
   };
 
   return (
     <Button
       aria-haspopup="dialog"
-      aria-label={i18n.buttonLabel}
+      aria-label={text.buttonLabel}
       className="label-selector"
       onPress={openSelector}
     >
       <ObsidianIcon id="tag" size="m" />
-      <span>{i18n.buttonText(selected.length)}</span>
+      <span>{text.buttonText(selected.length)}</span>
     </Button>
   );
 };
@@ -45,7 +45,7 @@ class LabelSelectionModal extends Modal {
   private readonly labels: Label[];
   private readonly selectedIds: Set<string>;
   private readonly onSelectionChange: (labels: Label[]) => void;
-  private readonly i18n: LabelSelectorTranslations;
+  private readonly text: LabelSelectorText;
   private resultsEl: HTMLElement | null = null;
 
   public constructor(
@@ -53,26 +53,26 @@ class LabelSelectionModal extends Modal {
     labels: Label[],
     selected: Label[],
     onSelectionChange: (labels: Label[]) => void,
-    i18n: LabelSelectorTranslations,
+    text: LabelSelectorText,
   ) {
     super(app);
     this.labels = labels;
     this.selectedIds = new Set(selected.map((label) => label.id));
     this.onSelectionChange = onSelectionChange;
-    this.i18n = i18n;
+    this.text = text;
   }
 
   public override onOpen(): void {
-    this.setTitle(this.i18n.labelOptionsLabel);
+    this.setTitle(this.text.labelOptionsLabel);
     this.modalEl.classList.add("tasks-bridge-label-selector-modal");
     this.contentEl.replaceChildren();
 
     new Setting(this.contentEl)
-      .setName(this.i18n.search.label)
+      .setName(this.text.search.label)
       .setClass("tasks-bridge-label-selector-search")
       .addSearch((search) => {
-        search.setPlaceholder(this.i18n.search.placeholder);
-        search.inputEl.setAttribute("aria-label", this.i18n.search.label);
+        search.setPlaceholder(this.text.search.placeholder);
+        search.inputEl.setAttribute("aria-label", this.text.search.label);
         search.onChange((query) => this.renderOptions(query));
       });
 
@@ -83,10 +83,10 @@ class LabelSelectionModal extends Modal {
       .setClass("tasks-bridge-label-selector-actions")
       .addButton((button) => {
         button
-          .setButtonText(this.i18n.doneButtonLabel)
+          .setButtonText(this.text.doneButtonLabel)
           .setCta()
           .onClick(() => this.close());
-        button.buttonEl.setAttribute("aria-label", this.i18n.doneButtonLabel);
+        button.buttonEl.setAttribute("aria-label", this.text.doneButtonLabel);
       });
   }
 
@@ -108,7 +108,7 @@ class LabelSelectionModal extends Modal {
 
     if (visibleLabels.length === 0) {
       new Setting(this.resultsEl)
-        .setName(this.i18n.emptyState)
+        .setName(this.text.emptyState)
         .setClass("tasks-bridge-label-selector-empty");
       return;
     }

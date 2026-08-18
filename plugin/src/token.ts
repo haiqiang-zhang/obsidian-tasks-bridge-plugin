@@ -1,6 +1,6 @@
 import { TodoistApiClient } from "@/api";
 import { ObsidianFetcher } from "@/api/fetcher";
-import { t } from "@/i18n";
+import { uiText } from "@/uiText";
 
 export type TokenValidationResult =
   | { kind: "none" }
@@ -11,12 +11,12 @@ export type TokenValidationResult =
 export type TokenTester = (token: string) => Promise<boolean>;
 
 const validate = async (token: string, tester: TokenTester): Promise<TokenValidationResult> => {
-  const i18n = t().tokenValidation;
+  const text = uiText.tokenValidation;
 
   if (token.length === 0) {
     return {
       kind: "error",
-      message: i18n.emptyTokenError,
+      message: text.emptyTokenError,
     };
   }
 
@@ -25,7 +25,7 @@ const validate = async (token: string, tester: TokenTester): Promise<TokenValida
   if (!isValid) {
     return {
       kind: "error",
-      message: i18n.invalidTokenError,
+      message: text.invalidTokenError,
     };
   }
 

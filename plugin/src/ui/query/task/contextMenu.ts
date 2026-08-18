@@ -2,9 +2,9 @@ import type { Point } from "obsidian";
 import { Menu } from "obsidian";
 
 import { isTaskCompleted, type Task } from "@/data/task";
-import { t } from "@/i18n";
 import type TodoistPlugin from "@/index";
 import { todoistTaskAppUrl, todoistTaskWebUrl } from "@/todoist/taskLinks";
+import { uiText } from "@/uiText";
 
 type TaskContext = {
   task: Task;
@@ -12,13 +12,13 @@ type TaskContext = {
 };
 
 export function showTaskContext(ctx: TaskContext, position: Point) {
-  const i18n = t().query.contextMenu;
+  const text = uiText.query.contextMenu;
   const menu = new Menu();
 
   if (!isTaskCompleted(ctx.task)) {
     menu.addItem((menuItem) =>
       menuItem
-        .setTitle(i18n.completeTaskLabel)
+        .setTitle(text.completeTaskLabel)
         .setIcon("check-small")
         .onClick(async () => await ctx.plugin.services.todoist.actions.closeTask(ctx.task.id)),
     );
@@ -27,7 +27,7 @@ export function showTaskContext(ctx: TaskContext, position: Point) {
   menu
     .addItem((menuItem) =>
       menuItem
-        .setTitle(i18n.openTaskInAppLabel)
+        .setTitle(text.openTaskInAppLabel)
         .setIcon("popup-open")
         .onClick(() => {
           openExternal(todoistTaskAppUrl(ctx.task.id));
@@ -35,7 +35,7 @@ export function showTaskContext(ctx: TaskContext, position: Point) {
     )
     .addItem((menuItem) =>
       menuItem
-        .setTitle(i18n.openTaskInBrowserLabel)
+        .setTitle(text.openTaskInBrowserLabel)
         .setIcon("popup-open")
         .onClick(() => openExternal(todoistTaskWebUrl(ctx.task.project.id, ctx.task.id))),
     )

@@ -6,7 +6,6 @@ import { CheckboxButton, CheckboxField } from "react-aria-components";
 import { DueDate } from "@/data/dueDate";
 import { isTaskCompleted } from "@/data/task";
 import type { TaskTree } from "@/data/transformations/relationships";
-import { t } from "@/i18n";
 import { useSettingsStore } from "@/settings";
 import { Markdown } from "@/ui/components/markdown";
 import { ObsidianIcon } from "@/ui/components/obsidian-icon";
@@ -14,6 +13,7 @@ import { PluginContext, QueryContext } from "@/ui/context";
 import { showTaskContext } from "@/ui/query/task/contextMenu";
 import { TaskList } from "@/ui/query/task/TaskList";
 import { TaskMetadata } from "@/ui/query/task/TaskMetadata";
+import { uiText } from "@/uiText";
 
 const noticeDurationMs = 2000;
 
@@ -48,7 +48,7 @@ export const Task: React.FC<Props> = ({ tree }) => {
       await plugin.services.todoist.actions.closeTask(tree.id);
     } catch (error: unknown) {
       console.error("Failed to close task", error);
-      new Notice(t().query.failedCloseMessage, noticeDurationMs);
+      new Notice(uiText.query.failedCloseMessage, noticeDurationMs);
     }
   };
 

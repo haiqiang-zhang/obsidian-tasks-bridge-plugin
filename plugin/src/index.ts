@@ -1,4 +1,4 @@
-import { setLanguage, t } from "@/i18n";
+import { uiText } from "@/uiText";
 import "@/styles/main.scss";
 import type { PluginManifest } from "obsidian";
 import { type App, Notice, Plugin } from "obsidian";
@@ -129,7 +129,6 @@ export default class TodoistPlugin extends Plugin {
   }
 
   async onload() {
-    setLanguage(document.documentElement.lang);
     await this.loadOptions();
     if (this.disposed) {
       return;
@@ -198,7 +197,7 @@ export default class TodoistPlugin extends Plugin {
           return;
         }
         console.error("Failed to apply migrations:", error);
-        new Notice(t().notices.migrationFailed);
+        new Notice(uiText.notices.migrationFailed);
       }
 
       if (this.disposed) {
@@ -222,7 +221,7 @@ export default class TodoistPlugin extends Plugin {
             throw error;
           }
           console.error("Todoist task completed, but Project sync failed", error.projectionCause);
-          new Notice(t().editTaskModal.projectionErrorNotice);
+          new Notice(uiText.editTaskModal.projectionErrorNotice);
           throw error;
         }
       },
@@ -237,7 +236,7 @@ export default class TodoistPlugin extends Plugin {
             throw error;
           }
           console.error("Todoist task reopened, but Project sync failed", error.projectionCause);
-          new Notice(t().editTaskModal.projectionErrorNotice);
+          new Notice(uiText.editTaskModal.projectionErrorNotice);
           throw error;
         }
       },
@@ -514,7 +513,7 @@ export default class TodoistPlugin extends Plugin {
       }
       console.error("Failed to synchronize Todoist query blocks:", error);
       const message = error instanceof Error ? error.message : String(error);
-      new Notice(t().notices.querySyncFailed(message));
+      new Notice(uiText.notices.querySyncFailed(message));
     }
 
     if (!this.isAsyncGenerationCurrent(generation)) {
@@ -540,13 +539,13 @@ export default class TodoistPlugin extends Plugin {
         return null;
       }
       if (result === null) {
-        new Notice(t().notices.projectSyncInterrupted);
+        new Notice(uiText.notices.projectSyncInterrupted);
         return null;
       }
 
       this.logProjectSyncConflicts(result, "Manual");
       new Notice(
-        t().notices.projectSyncComplete(
+        uiText.notices.projectSyncComplete(
           result.created,
           result.updated,
           result.moved,
@@ -561,7 +560,7 @@ export default class TodoistPlugin extends Plugin {
       }
       console.error("Failed to synchronize the Todoist project folder:", error);
       const message = error instanceof Error ? error.message : String(error);
-      new Notice(t().notices.projectSyncFailed(message));
+      new Notice(uiText.notices.projectSyncFailed(message));
       return null;
     }
   }
@@ -1271,7 +1270,7 @@ export default class TodoistPlugin extends Plugin {
       return;
     }
     new Notice(
-      t().notices.projectSyncComplete(
+      uiText.notices.projectSyncComplete(
         result.created,
         result.updated,
         result.moved,

@@ -17,26 +17,6 @@
   --rp-c-brand-tint: rgb(237 113 103 / 16%);
 }
 
-.translation-status td:nth-child(n + 2),
-.translation-status th:nth-child(n + 2) {
-  text-align: right;
-}
-
-.translation-progress {
-  display: inline-flex;
-  gap: 0.6rem;
-  align-items: center;
-  min-width: 12rem;
-}
-
-.translation-progress span {
-  min-width: 5ch;
-}
-
-.translation-progress progress {
-  accent-color: var(--rp-c-brand);
-}
-
 /* Keep home-page actions legible when the hero content becomes narrow. */
 .rp-home-hero__actions {
   align-items: center;

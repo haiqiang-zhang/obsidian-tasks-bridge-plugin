@@ -1,24 +1,24 @@
 import type React from "react";
 
 import { QueryErrorKind } from "@/data";
-import { t } from "@/i18n";
-import type { Translations } from "@/i18n/translation";
 import { Callout } from "@/ui/components/callout";
+import type { UiText } from "@/uiText";
+import { uiText } from "@/uiText";
 
 const getErrorMessage = (
   kind: QueryErrorKind,
-  i18n: Translations["query"]["displays"]["error"],
+  text: UiText["query"]["displays"]["error"],
 ): string => {
   switch (kind) {
     case QueryErrorKind.BadRequest:
-      return i18n.badRequest;
+      return text.badRequest;
     case QueryErrorKind.Unauthorized:
     case QueryErrorKind.Forbidden:
-      return i18n.unauthorized;
+      return text.unauthorized;
     case QueryErrorKind.ServerError:
-      return i18n.serverError;
+      return text.serverError;
     default:
-      return i18n.unknown;
+      return text.unknown;
   }
 };
 
@@ -27,14 +27,14 @@ type Props = {
 };
 
 export const ErrorDisplay: React.FC<Props> = ({ kind }) => {
-  const i18n = t().query.displays.error;
+  const text = uiText.query.displays.error;
 
-  const errorMessage = getErrorMessage(kind, i18n);
+  const errorMessage = getErrorMessage(kind, text);
 
   return (
     <Callout
       className="todoist-query-error"
-      title={i18n.header}
+      title={text.header}
       iconId="lucide-alert-triangle"
       variant="error"
       contents={[errorMessage]}

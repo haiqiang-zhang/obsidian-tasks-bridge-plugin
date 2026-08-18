@@ -5,7 +5,6 @@ import { Button } from "react-aria-components";
 
 import type { Label as TodoistLabel } from "@/api/domain/label";
 import type { Task, UpdateTaskParams } from "@/api/domain/task";
-import { t } from "@/i18n";
 import { ProjectTaskProjectionError } from "@/services/projectTaskCommands";
 import { ObsidianIcon } from "@/ui/components/obsidian-icon";
 import { ModalContext, PluginContext } from "@/ui/context";
@@ -14,6 +13,7 @@ import { type DueDate, DueDateSelector } from "@/ui/createTaskModal/DueDateSelec
 import { LabelSelector } from "@/ui/createTaskModal/LabelSelector";
 import { PrioritySelector } from "@/ui/createTaskModal/PrioritySelector";
 import { TaskContentInput } from "@/ui/createTaskModal/TaskContentInput";
+import { uiText } from "@/uiText";
 
 import {
   buildUpdateTaskParams,
@@ -38,7 +38,7 @@ export const EditTaskModal: React.FC<EditTaskModalProps> = ({
 }) => {
   const plugin = PluginContext.use();
   const modal = ModalContext.use();
-  const i18n = t().editTaskModal;
+  const text = uiText.editTaskModal;
 
   const availableLabels = useMemo(
     () => Array.from(plugin.services.todoist.data().labels.iterActive()),
@@ -90,15 +90,15 @@ export const EditTaskModal: React.FC<EditTaskModalProps> = ({
     try {
       await onSubmit(params);
       modal.close();
-      new Notice(i18n.successNotice);
+      new Notice(text.successNotice);
     } catch (error: unknown) {
       if (error instanceof ProjectTaskProjectionError) {
         modal.close();
-        new Notice(i18n.projectionErrorNotice);
+        new Notice(text.projectionErrorNotice);
         console.error("Todoist task updated, but Project sync failed", error.projectionCause);
         return;
       }
-      new Notice(i18n.errorNotice);
+      new Notice(text.errorNotice);
       console.error("Failed to update Todoist task", error);
       setIsSaving(false);
     }
@@ -110,7 +110,7 @@ export const EditTaskModal: React.FC<EditTaskModalProps> = ({
     <div className="task-creation-modal-root task-edit-modal-root">
       <TaskContentInput
         className="task-name"
-        placeholder={i18n.taskNamePlaceholder}
+        placeholder={text.taskNamePlaceholder}
         content={content}
         onChange={setContent}
         autofocus={true}
@@ -118,7 +118,7 @@ export const EditTaskModal: React.FC<EditTaskModalProps> = ({
       />
       <TaskContentInput
         className="task-description"
-        placeholder={i18n.descriptionPlaceholder}
+        placeholder={text.descriptionPlaceholder}
         content={description}
         onChange={setDescription}
       />
@@ -156,16 +156,16 @@ export const EditTaskModal: React.FC<EditTaskModalProps> = ({
       {task.due?.isRecurring === true && !dueDateChanged && (
         <div className="task-edit-recurring-hint">
           <ObsidianIcon id="repeat-2" size="xs" />
-          <span>{i18n.recurringDueHint}</span>
+          <span>{text.recurringDueHint}</span>
         </div>
       )}
 
       <div className="task-edit-actions">
         <Button className="mod-ghost" onPress={modal.close} isDisabled={isSaving}>
-          {i18n.cancelButtonLabel}
+          {text.cancelButtonLabel}
         </Button>
         <Button className="mod-cta" onPress={() => void save()} isDisabled={!canSave}>
-          {isSaving ? i18n.savingButtonLabel : i18n.saveButtonLabel}
+          {isSaving ? text.savingButtonLabel : text.saveButtonLabel}
         </Button>
       </div>
     </div>

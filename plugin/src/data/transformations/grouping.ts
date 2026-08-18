@@ -3,8 +3,8 @@ import type { Section } from "@/api/domain/section";
 import type { Priority } from "@/api/domain/task";
 import { DueDate } from "@/data/dueDate";
 import type { Task } from "@/data/task";
-import { t } from "@/i18n";
 import type { GroupingKey } from "@/query/schema/grouping";
+import { uiText } from "@/uiText";
 
 export type GroupedTasks = {
   id: string;
@@ -131,14 +131,14 @@ function groupBySection(tasks: Task[]): GroupedTasks[] {
 }
 
 function groupByDate(tasks: Task[]): GroupedTasks[] {
-  const i18n = t().query.groupedHeaders;
+  const text = uiText.query.groupedHeaders;
   const makeHeader = (date: string | undefined): string => {
     if (date === undefined) {
-      return i18n.noDueDate;
+      return text.noDueDate;
     }
 
     if (date === "Overdue") {
-      return i18n.overdue;
+      return text.overdue;
     }
 
     return DueDate.formatHeader(

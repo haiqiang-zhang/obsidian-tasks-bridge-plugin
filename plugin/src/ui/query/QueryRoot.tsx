@@ -12,7 +12,6 @@ import type {
   SubscriptionResult,
 } from "@/data";
 import type { Task } from "@/data/task";
-import { t } from "@/i18n";
 import type TodoistPlugin from "@/index";
 import type { QueryWarning } from "@/query/parser";
 import type { TaskQuery } from "@/query/schema/tasks";
@@ -23,6 +22,7 @@ import { Displays } from "@/ui/query/displays";
 import { QueryHeader } from "@/ui/query/QueryHeader";
 import { QueryResponseHandler } from "@/ui/query/QueryResponseHandler";
 import { QueryWarnings } from "@/ui/query/QueryWarnings";
+import { uiText } from "@/uiText";
 import { assertNever } from "@/utils/types";
 import "./styles.scss";
 
@@ -354,7 +354,7 @@ export const QueryRoot: React.FC<Props> = ({ query, warnings }) => {
     1;
   const nextCompletedHistoryMonths =
     (loadedCompletedWindowCount + 1) * COMPLETED_TASKS_WINDOW_MONTHS;
-  const completedHistoryText = t().query.completedHistory;
+  const completedHistoryText = uiText.query.completedHistory;
 
   return (
     <LazyMotion features={domAnimation}>
@@ -429,7 +429,7 @@ const getTitle = (query: TaskQuery, result: SubscriptionResult): string => {
 
   switch (result.type) {
     case "error": {
-      const postfix = t().query.header.errorPostfix;
+      const postfix = uiText.query.header.errorPostfix;
       return `${query.name} ${postfix}`;
     }
     case "success":

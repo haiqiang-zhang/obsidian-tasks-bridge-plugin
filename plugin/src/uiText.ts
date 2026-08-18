@@ -1,14 +1,18 @@
-import type { Translations } from "@/i18n/translation";
-
-export const en: Translations = {
+export const uiText = {
   notices: {
     migrationFailed: "Failed to apply migrations. Check the console for details.",
-    querySyncFailed: (message) => `Query sync failed: ${message}`,
+    querySyncFailed: (message: string) => `Query sync failed: ${message}`,
     projectSyncInterrupted:
       "Project sync paused because the mapped Vault folders changed. Wait for Obsidian Sync to settle, then try again.",
-    projectSyncComplete: (created, updated, moved, deleted, conflicts) =>
+    projectSyncComplete: (
+      created: number,
+      updated: number,
+      moved: number,
+      deleted: number,
+      conflicts: number,
+    ) =>
       `Project sync complete: ${created} created, ${updated} updated, ${moved} moved, ${deleted} deleted, ${conflicts} conflicts.`,
-    projectSyncFailed: (message) => `Project sync failed: ${message}`,
+    projectSyncFailed: (message: string) => `Project sync failed: ${message}`,
   },
   settings: {
     general: {
@@ -64,10 +68,10 @@ export const en: Translations = {
         empty: "No project mappings yet.",
         add: "Add project mapping",
         remove: "Remove mapping",
-        mappingLabel: (number) => `Project mapping ${number}`,
-        removeLabel: (number) => `Remove project mapping ${number}`,
+        mappingLabel: (number: number) => `Project mapping ${number}`,
+        removeLabel: (number: number) => `Remove project mapping ${number}`,
         pendingMoveLabel: "Historical Sync roots",
-        pendingMoveDescription: (folders) =>
+        pendingMoveDescription: (folders: string) =>
           `Monitoring for late Obsidian Sync files and migrating managed notes from: ${folders}`,
       },
       folder: {
@@ -431,3 +435,5 @@ export const en: Translations = {
     },
   },
 };
+
+export type UiText = typeof uiText;

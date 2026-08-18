@@ -2,7 +2,6 @@ import type React from "react";
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import type { Project } from "@/api/domain/project";
-import { t } from "@/i18n";
 import { isPathInside, selectProjectHierarchy } from "@/project-sync";
 import {
   createProjectSyncMapping,
@@ -12,6 +11,7 @@ import {
 } from "@/settings";
 import { ObsidianIcon } from "@/ui/components/obsidian-icon";
 import { PluginContext } from "@/ui/context";
+import { uiText } from "@/uiText";
 
 import { ProjectSyncFolderControl } from "./ProjectSyncFolderControl";
 import { type ProjectMetadata, ProjectSyncProjectControl } from "./ProjectSyncProjectControl";
@@ -51,7 +51,7 @@ export const ProjectSyncMappingsControl: React.FC<Props> = ({
   onValidityChange,
 }) => {
   const plugin = PluginContext.use();
-  const i18n = t().settings.projectSync.mappings;
+  const text = uiText.settings.projectSync.mappings;
   const [metadata, setMetadata] = useState<SyncMetadata>(() => readSyncMetadata(plugin));
   const mappingsRef = useRef(mappings);
   const onValidityChangeRef = useRef(onValidityChange);
@@ -130,7 +130,7 @@ export const ProjectSyncMappingsControl: React.FC<Props> = ({
       {mappings.length === 0 ? (
         <output className="project-sync-mappings-empty">
           <ObsidianIcon id="lucide-folder-sync" size="l" />
-          <span>{i18n.empty}</span>
+          <span>{text.empty}</span>
         </output>
       ) : (
         <div className="project-sync-mappings-list">
@@ -148,7 +148,7 @@ export const ProjectSyncMappingsControl: React.FC<Props> = ({
           ))}
         </div>
       )}
-      <Setting.ButtonControl icon="plus" label={i18n.add} onClick={() => void addMapping()} />
+      <Setting.ButtonControl icon="plus" label={text.add} onClick={() => void addMapping()} />
     </div>
   );
 };
@@ -172,7 +172,7 @@ const ProjectSyncMappingCard: React.FC<CardProps> = ({
   onChange,
   onRemove,
 }) => {
-  const i18n = t().settings.projectSync;
+  const text = uiText.settings.projectSync;
   const titleId = useId();
   const projectControlId = `${titleId}-project`;
   const projectErrorsId = `${titleId}-project-errors`;
@@ -200,13 +200,13 @@ const ProjectSyncMappingCard: React.FC<CardProps> = ({
       <div className="project-sync-mapping-header">
         <div className="project-sync-mapping-title" id={titleId}>
           <ObsidianIcon id="lucide-folder-kanban" size="m" />
-          <span>{i18n.mappings.mappingLabel(mappingNumber)}</span>
+          <span>{text.mappings.mappingLabel(mappingNumber)}</span>
         </div>
         <button
-          aria-label={i18n.mappings.removeLabel(mappingNumber)}
+          aria-label={text.mappings.removeLabel(mappingNumber)}
           className="clickable-icon project-sync-mapping-remove"
           onClick={() => void onRemove()}
-          title={i18n.mappings.remove}
+          title={text.mappings.remove}
           type="button"
         >
           <ObsidianIcon id="lucide-trash-2" size="m" />
@@ -216,11 +216,11 @@ const ProjectSyncMappingCard: React.FC<CardProps> = ({
       <div className="project-sync-mapping-fields">
         <div className="project-sync-mapping-field">
           <label className="project-sync-mapping-field-label" htmlFor={projectControlId}>
-            {i18n.project.label}
+            {text.project.label}
           </label>
           <ProjectSyncProjectControl
             ariaDescribedBy={projectIssues.length > 0 ? projectErrorsId : undefined}
-            ariaLabel={`${i18n.project.label}, ${i18n.mappings.mappingLabel(mappingNumber)}`}
+            ariaLabel={`${text.project.label}, ${text.mappings.mappingLabel(mappingNumber)}`}
             id={projectControlId}
             invalid={projectIssues.length > 0}
             metadata={metadata}
@@ -234,13 +234,13 @@ const ProjectSyncMappingCard: React.FC<CardProps> = ({
 
         <div className="project-sync-mapping-field">
           <label className="project-sync-mapping-field-label" htmlFor={folderControlId}>
-            {i18n.folder.label}
+            {text.folder.label}
           </label>
           <ProjectSyncFolderControl
             ariaDescribedBy={
               folderIssues.length > 0 ? `${folderHintId} ${folderErrorsId}` : folderHintId
             }
-            ariaLabel={`${i18n.folder.label}, ${i18n.mappings.mappingLabel(mappingNumber)}`}
+            ariaLabel={`${text.folder.label}, ${text.mappings.mappingLabel(mappingNumber)}`}
             folders={folders}
             id={folderControlId}
             invalid={folderIssues.length > 0}
@@ -250,7 +250,7 @@ const ProjectSyncMappingCard: React.FC<CardProps> = ({
             value={mapping.folder}
           />
           <div className="project-sync-mapping-field-hint" id={folderHintId}>
-            {i18n.folder.exactRootHint}
+            {text.folder.exactRootHint}
           </div>
           <MappingIssues id={folderErrorsId} issues={folderIssues} />
         </div>
@@ -261,10 +261,10 @@ const ProjectSyncMappingCard: React.FC<CardProps> = ({
           <ObsidianIcon id="lucide-folder-input" size="s" />
           <div>
             <div className="project-sync-mapping-migration-label">
-              {i18n.mappings.pendingMoveLabel}
+              {text.mappings.pendingMoveLabel}
             </div>
             <div className="project-sync-mapping-migration-description">
-              {i18n.mappings.pendingMoveDescription(mapping.previousFolders.join(", "))}
+              {text.mappings.pendingMoveDescription(mapping.previousFolders.join(", "))}
             </div>
           </div>
         </output>
@@ -272,14 +272,14 @@ const ProjectSyncMappingCard: React.FC<CardProps> = ({
 
       <div className="project-sync-mapping-toggle-row">
         <div>
-          <div className="project-sync-mapping-toggle-label">{i18n.includeSubprojects.label}</div>
+          <div className="project-sync-mapping-toggle-label">{text.includeSubprojects.label}</div>
           <div className="project-sync-mapping-toggle-description">
-            {i18n.includeSubprojects.description}
+            {text.includeSubprojects.description}
           </div>
         </div>
         <div
           aria-checked={mapping.includeSubprojects}
-          aria-label={`${i18n.includeSubprojects.label}, ${i18n.mappings.mappingLabel(mappingNumber)}`}
+          aria-label={`${text.includeSubprojects.label}, ${text.mappings.mappingLabel(mappingNumber)}`}
           className={`checkbox-container${mapping.includeSubprojects ? " is-enabled" : ""}`}
           onClick={() => void toggleSubprojects()}
           onKeyDown={handleToggleKeyDown}
@@ -299,7 +299,7 @@ const MappingIssues: React.FC<{ id: string; issues: ProjectSyncMappingIssueCode[
     return null;
   }
 
-  const messages = t().settings.projectSync.validation;
+  const messages = uiText.settings.projectSync.validation;
   return (
     <div aria-live="polite" className="project-sync-mapping-errors" id={id}>
       {issues.map((issue) => (

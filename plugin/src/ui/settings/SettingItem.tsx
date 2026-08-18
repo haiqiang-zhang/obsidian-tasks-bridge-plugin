@@ -2,7 +2,7 @@ import classNames from "classnames";
 import type React from "react";
 import type { PropsWithChildren } from "react";
 
-import { t } from "@/i18n";
+import { uiText } from "@/uiText";
 
 import { ObsidianIcon } from "../components/obsidian-icon";
 import { ObsidianDropdown } from "./ObsidianDropdown";
@@ -39,7 +39,7 @@ type DeprecationNoticeProps = {
 };
 
 const DeprecationNotice: React.FC<DeprecationNoticeProps> = ({ message }) => {
-  const prefix = t().settings.deprecation.warningMessage;
+  const prefix = uiText.settings.deprecation.warningMessage;
   return (
     <div className="setting-item-deprecation-notice">
       <ObsidianIcon size="l" id="lucide-alert-triangle" />

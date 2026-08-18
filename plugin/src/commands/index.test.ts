@@ -4,25 +4,25 @@ import { describe, expect, it, vi } from "vitest";
 import type TodoistPlugin from "@/index";
 
 vi.mock("@/commands/addTask", () => ({
-  addTask: (_plugin: TodoistPlugin, i18n: { addTask: string }) => ({
-    name: i18n.addTask,
+  addTask: (_plugin: TodoistPlugin, text: { addTask: string }) => ({
+    name: text.addTask,
     callback: vi.fn(),
   }),
-  addTaskWithPageInContent: (_plugin: TodoistPlugin, i18n: { addTaskPageContent: string }) => ({
-    name: i18n.addTaskPageContent,
+  addTaskWithPageInContent: (_plugin: TodoistPlugin, text: { addTaskPageContent: string }) => ({
+    name: text.addTaskPageContent,
     callback: vi.fn(),
   }),
   addTaskWithPageInDescription: (
     _plugin: TodoistPlugin,
-    i18n: { addTaskPageDescription: string },
+    text: { addTaskPageDescription: string },
   ) => ({
-    name: i18n.addTaskPageDescription,
+    name: text.addTaskPageDescription,
     callback: vi.fn(),
   }),
 }));
 
-vi.mock("@/i18n", () => ({
-  t: () => ({
+vi.mock("@/uiText", () => ({
+  uiText: {
     commands: {
       sync: "Sync",
       insertQueryBlock: "Insert query block",
@@ -31,7 +31,7 @@ vi.mock("@/i18n", () => ({
       addTaskPageContent: "Add task with current page in task content",
       addTaskPageDescription: "Add task with current page in task description",
     },
-  }),
+  },
 }));
 
 vi.mock("@/log", () => ({ debug: vi.fn() }));

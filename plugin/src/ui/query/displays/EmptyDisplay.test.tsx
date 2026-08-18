@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { EmptyDisplay } from "./EmptyDisplay";
 
 describe("EmptyDisplay", () => {
-  it("should render default i18n message when no message prop", () => {
+  it("should render default text message when no message prop", () => {
     const { container } = render(<EmptyDisplay />);
 
     expect(screen.getByText("The query returned no tasks")).toBeInTheDocument();

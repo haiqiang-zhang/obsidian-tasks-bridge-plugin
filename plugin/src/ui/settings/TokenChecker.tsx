@@ -1,8 +1,8 @@
 import type React from "react";
 import { useEffect, useState } from "react";
 
-import { t } from "@/i18n";
 import { PluginContext } from "@/ui/context";
+import { uiText } from "@/uiText";
 
 import { TokenValidation, type TokenValidationResult } from "../../token";
 import { TokenValidationIcon } from "../components/token-validation-icon";
@@ -51,7 +51,7 @@ export const TokenChecker: React.FC<Props> = ({ tester }) => {
     });
   };
 
-  const buttonLabel = t().settings.general.apiToken.buttonLabel;
+  const buttonLabel = uiText.settings.general.apiToken.buttonLabel;
 
   return (
     <>

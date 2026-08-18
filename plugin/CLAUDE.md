@@ -23,7 +23,7 @@ All commands run from this `plugin/` directory:
 - `src/ui/` - React components (React 18 + React Aria Components + Framer Motion)
 - `src/services/` - Business logic (token management, modal orchestration)
 - `src/commands/` - Obsidian command definitions
-- `src/i18n/` - Internationalization (interface in `translation.ts`, implementations in `langs/`)
+- `src/uiText.ts` - Typed English-only catalog for user-facing plugin copy
 - `src/utils/` - Shared utilities
 
 ## Key Design Decisions
@@ -33,25 +33,21 @@ All commands run from this `plugin/` directory:
 - **React Aria Components**: Accessibility-first UI primitives. Prefer these over custom interactive elements.
 - **SCSS with component-scoped styles**: Each component has co-located `.scss`; supports Obsidian light/dark themes.
 
-## Internationalization
+## UI Text
 
-- **Always use translations for user-facing text** - never hardcode strings in UI components
-- Import translations with `import { t } from "@/i18n"` and use `const i18n = t().section`
-- For simple text: define as `string` in translation interface and return string value
-- For text with interpolation: define as `(param: Type) => string` function in translation interface
+- Keep user-facing copy in `src/uiText.ts`; do not hardcode it across UI components.
+- English is the only maintained UI language.
+- Import the catalog with `import { uiText } from "@/uiText"` and select the relevant section locally.
+- Store simple copy as strings and interpolated copy as typed functions.
 - Example with interpolation:
 
   ```typescript
-  // translation.ts
-  deleteNotice: (itemName: string) => string;
+  // uiText.ts
+  projectSyncFailed: (message: string) => `Project sync failed: ${message}`,
 
-  // en.ts
-  deleteNotice: ((itemName: string) => `Item "${itemName}" was deleted`,
-    // component.tsx
-    new Notice(i18n.deleteNotice(item.name)));
+  // component.tsx
+  new Notice(uiText.notices.projectSyncFailed(error.message));
   ```
-
-- Translation files are in `src/i18n/` with interface in `translation.ts` and implementations in `langs/`
 
 ### Testing
 

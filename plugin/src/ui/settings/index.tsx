@@ -8,8 +8,8 @@ import type React from "react";
 import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { createRoot } from "react-dom/client";
 
-import { t } from "@/i18n";
 import { PluginContext } from "@/ui/context";
+import { uiText } from "@/uiText";
 
 import type TodoistPlugin from "../..";
 import { useSettingsStore } from "../../settings";
@@ -35,38 +35,38 @@ export class SettingsTab extends PluginSettingTab {
   }
 
   getSettingDefinitions(): SettingDefinitionItem[] {
-    const i18n = t().settings;
+    const text = uiText.settings;
     const render = (content: React.ReactNode) => (setting: ObsidianSetting) =>
       mountReactControl(setting, this.plugin, content);
 
     return [
       {
         type: "group",
-        heading: i18n.general.header,
+        heading: text.general.header,
         items: [
           {
-            name: i18n.general.links.label,
+            name: text.general.links.label,
             render: render(<SettingsLinks />),
           },
           {
-            name: i18n.general.apiToken.label,
-            desc: i18n.general.apiToken.description,
+            name: text.general.apiToken.label,
+            desc: text.general.apiToken.description,
             render: render(<TokenChecker tester={TokenValidation.DefaultTester} />),
           },
           {
-            name: i18n.general.tokenStorage.label,
-            desc: i18n.general.tokenStorage.description,
+            name: text.general.tokenStorage.label,
+            desc: text.general.tokenStorage.description,
             render: render(<TokenStorageControl plugin={this.plugin} />),
           },
         ],
       },
       {
         type: "group",
-        heading: i18n.projectSync.header,
+        heading: text.projectSync.header,
         items: [
           {
-            name: i18n.projectSync.enabled.label,
-            desc: i18n.projectSync.enabled.description,
+            name: text.projectSync.enabled.label,
+            desc: text.projectSync.enabled.description,
             render: render(
               <ProjectSyncEnabledControl
                 plugin={this.plugin}
@@ -75,8 +75,8 @@ export class SettingsTab extends PluginSettingTab {
             ),
           },
           {
-            name: i18n.projectSync.preserveUnmanagedItems.label,
-            desc: i18n.projectSync.preserveUnmanagedItems.description,
+            name: text.projectSync.preserveUnmanagedItems.label,
+            desc: text.projectSync.preserveUnmanagedItems.description,
             control: {
               type: "toggle",
               key: "projectSyncPreserveUnmanagedItems",
@@ -84,9 +84,9 @@ export class SettingsTab extends PluginSettingTab {
             },
           },
           {
-            name: i18n.projectSync.mappings.label,
-            desc: i18n.projectSync.mappings.description,
-            aliases: [i18n.projectSync.project.label, i18n.projectSync.folder.label],
+            name: text.projectSync.mappings.label,
+            desc: text.projectSync.mappings.description,
+            aliases: [text.projectSync.project.label, text.projectSync.folder.label],
             render: render(
               <ProjectSyncMappingsSetting
                 plugin={this.plugin}
@@ -95,24 +95,24 @@ export class SettingsTab extends PluginSettingTab {
             ),
           },
           {
-            name: i18n.projectSync.syncNow.label,
-            desc: i18n.projectSync.syncNow.description,
+            name: text.projectSync.syncNow.label,
+            desc: text.projectSync.syncNow.description,
             render: render(<ProjectSyncNowSetting validation={this.projectSyncValidation} />),
           },
         ],
       },
       {
         type: "group",
-        heading: i18n.autoRefresh.header,
+        heading: text.autoRefresh.header,
         items: [
           {
-            name: i18n.autoRefresh.toggle.label,
-            desc: i18n.autoRefresh.toggle.description,
+            name: text.autoRefresh.toggle.label,
+            desc: text.autoRefresh.toggle.description,
             control: { type: "toggle", key: "autoRefreshToggle" },
           },
           {
-            name: i18n.autoRefresh.interval.label,
-            desc: i18n.autoRefresh.interval.description,
+            name: text.autoRefresh.interval.label,
+            desc: text.autoRefresh.interval.description,
             control: {
               type: "number",
               key: "autoRefreshInterval",
@@ -124,85 +124,85 @@ export class SettingsTab extends PluginSettingTab {
       },
       {
         type: "group",
-        heading: i18n.rendering.header,
+        heading: text.rendering.header,
         items: [
           {
-            name: i18n.rendering.taskFadeAnimation.label,
-            desc: i18n.rendering.taskFadeAnimation.description,
+            name: text.rendering.taskFadeAnimation.label,
+            desc: text.rendering.taskFadeAnimation.description,
             control: { type: "toggle", key: "fadeToggle" },
           },
           {
-            name: i18n.rendering.dateIcon.label,
-            desc: i18n.rendering.dateIcon.description,
+            name: text.rendering.dateIcon.label,
+            desc: text.rendering.dateIcon.description,
             control: { type: "toggle", key: "renderDateIcon" },
           },
           {
-            name: i18n.rendering.projectIcon.label,
-            desc: i18n.rendering.projectIcon.description,
+            name: text.rendering.projectIcon.label,
+            desc: text.rendering.projectIcon.description,
             control: { type: "toggle", key: "renderProjectIcon" },
           },
           {
-            name: i18n.rendering.labelsIcon.label,
-            desc: i18n.rendering.labelsIcon.description,
+            name: text.rendering.labelsIcon.label,
+            desc: text.rendering.labelsIcon.description,
             control: { type: "toggle", key: "renderLabelsIcon" },
           },
         ],
       },
       {
         type: "group",
-        heading: i18n.taskCreation.header,
+        heading: text.taskCreation.header,
         items: [
           {
-            name: i18n.taskCreation.wrapLinksInParens.label,
-            desc: i18n.taskCreation.wrapLinksInParens.description,
+            name: text.taskCreation.wrapLinksInParens.label,
+            desc: text.taskCreation.wrapLinksInParens.description,
             control: { type: "toggle", key: "shouldWrapLinksInParens" },
           },
           {
-            name: i18n.taskCreation.addTaskButtonAddsPageLink.label,
-            desc: i18n.taskCreation.addTaskButtonAddsPageLink.description,
+            name: text.taskCreation.addTaskButtonAddsPageLink.label,
+            desc: text.taskCreation.addTaskButtonAddsPageLink.description,
             control: {
               type: "dropdown",
               key: "addTaskButtonAddsPageLink",
               options: {
-                off: i18n.taskCreation.addTaskButtonAddsPageLink.options.off,
-                description: i18n.taskCreation.addTaskButtonAddsPageLink.options.description,
-                content: i18n.taskCreation.addTaskButtonAddsPageLink.options.content,
+                off: text.taskCreation.addTaskButtonAddsPageLink.options.off,
+                description: text.taskCreation.addTaskButtonAddsPageLink.options.description,
+                content: text.taskCreation.addTaskButtonAddsPageLink.options.content,
               },
             },
           },
           {
-            name: i18n.taskCreation.defaultDueDate.label,
-            desc: i18n.taskCreation.defaultDueDate.description,
+            name: text.taskCreation.defaultDueDate.label,
+            desc: text.taskCreation.defaultDueDate.description,
             control: {
               type: "dropdown",
               key: "taskCreationDefaultDueDate",
               options: {
-                none: i18n.taskCreation.defaultDueDate.options.none,
-                today: t().dates.today,
-                tomorrow: t().dates.tomorrow,
+                none: text.taskCreation.defaultDueDate.options.none,
+                today: uiText.dates.today,
+                tomorrow: uiText.dates.tomorrow,
               },
             },
           },
           {
-            name: i18n.taskCreation.defaultProject.label,
-            desc: i18n.taskCreation.defaultProject.description,
+            name: text.taskCreation.defaultProject.label,
+            desc: text.taskCreation.defaultProject.description,
             render: render(<DefaultProjectControl plugin={this.plugin} />),
           },
           {
-            name: i18n.taskCreation.defaultLabels.label,
-            desc: i18n.taskCreation.defaultLabels.description,
+            name: text.taskCreation.defaultLabels.label,
+            desc: text.taskCreation.defaultLabels.description,
             render: render(<DefaultLabelsControl plugin={this.plugin} />),
           },
           {
-            name: i18n.taskCreation.defaultAddTaskAction.label,
-            desc: i18n.taskCreation.defaultAddTaskAction.description,
+            name: text.taskCreation.defaultAddTaskAction.label,
+            desc: text.taskCreation.defaultAddTaskAction.description,
             control: {
               type: "dropdown",
               key: "defaultAddTaskAction",
               options: {
-                add: i18n.taskCreation.defaultAddTaskAction.options.add,
-                "add-copy-app": i18n.taskCreation.defaultAddTaskAction.options.addCopyApp,
-                "add-copy-web": i18n.taskCreation.defaultAddTaskAction.options.addCopyWeb,
+                add: text.taskCreation.defaultAddTaskAction.options.add,
+                "add-copy-app": text.taskCreation.defaultAddTaskAction.options.addCopyApp,
+                "add-copy-web": text.taskCreation.defaultAddTaskAction.options.addCopyWeb,
               },
             },
           },
@@ -210,16 +210,16 @@ export class SettingsTab extends PluginSettingTab {
       },
       {
         type: "group",
-        heading: i18n.advanced.header,
+        heading: text.advanced.header,
         items: [
           {
-            name: i18n.advanced.debugLogging.label,
-            desc: i18n.advanced.debugLogging.description,
+            name: text.advanced.debugLogging.label,
+            desc: text.advanced.debugLogging.description,
             control: { type: "toggle", key: "debugLogging" },
           },
           {
-            name: i18n.advanced.buildStamp.label,
-            desc: i18n.advanced.buildStamp.description,
+            name: text.advanced.buildStamp.label,
+            desc: text.advanced.buildStamp.description,
             render: render(<span className="setting-item-build-stamp">{BuildStamp}</span>),
           },
         ],
@@ -324,25 +324,25 @@ type SettingsLinksProps = {
 export const SettingsLinks: React.FC<SettingsLinksProps> = ({
   navigate = (url) => location.replace(url),
 }) => {
-  const i18n = t().settings.general.links;
+  const text = uiText.settings.general.links;
   return (
     <>
       <Setting.ButtonControl
-        label={i18n.docsButtonLabel}
+        label={text.docsButtonLabel}
         icon="book-open"
         onClick={() => {
           navigate(SETTINGS_LINKS.documentation);
         }}
       />
       <Setting.ButtonControl
-        label={i18n.feedbackButtonLabel}
+        label={text.feedbackButtonLabel}
         icon="github"
         onClick={() => {
           navigate(SETTINGS_LINKS.feedback);
         }}
       />
       <Setting.ButtonControl
-        label={i18n.donateButtonLabel}
+        label={text.donateButtonLabel}
         icon="coffee"
         onClick={() => {
           navigate(SETTINGS_LINKS.donate);
@@ -354,13 +354,13 @@ export const SettingsLinks: React.FC<SettingsLinksProps> = ({
 
 const TokenStorageControl: React.FC<{ plugin: TodoistPlugin }> = ({ plugin }) => {
   const tokenStorage = useSettingsStore((settings) => settings.tokenStorage);
-  const i18n = t().settings.general.tokenStorage;
+  const text = uiText.settings.general.tokenStorage;
   return (
     <Setting.DropdownControl
       value={tokenStorage}
       options={[
-        { label: i18n.options.secrets, value: "secrets" },
-        { label: i18n.options.file, value: "file" },
+        { label: text.options.secrets, value: "secrets" },
+        { label: text.options.file, value: "file" },
       ]}
       onClick={async (next) => {
         await plugin.services.token.migrateStorage(tokenStorage, next);
@@ -382,7 +382,7 @@ const ProjectSyncEnabledControl: React.FC<{
   );
   return (
     <Setting.ToggleControl
-      ariaLabel={t().settings.projectSync.enabled.label}
+      ariaLabel={uiText.settings.projectSync.enabled.label}
       disabled={!status.valid && !enabled}
       onClick={async (value) => await plugin.writeOptions({ projectSyncEnabled: value })}
       value={enabled}

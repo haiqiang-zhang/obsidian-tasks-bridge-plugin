@@ -14,7 +14,7 @@ npm run release -- minor
 npm run release -- major
 ```
 
-The command validates the repository and GitHub authentication, updates every workspace and release version file, regenerates derived files, runs all release checks, commits and pushes `master`, creates and pushes the matching annotated tag, waits for the official GitHub Actions build, and publishes the generated draft with the matching changelog notes. Workflow status and elapsed time remain visible while GitHub builds the release.
+The command validates the repository and GitHub authentication, updates every workspace and release version file, runs all release checks, commits and pushes `master`, creates and pushes the matching annotated tag, waits for the official GitHub Actions build, and publishes the generated draft with the matching changelog notes. Workflow status and elapsed time remain visible while GitHub builds the release.
 
 When `plugin/dist` is a directory symlink to a development Vault, a successful release also installs the three published assets into that linked plugin directory. It replaces only `main.js`, `manifest.json`, and `styles.css`; the existing `data.json` remains untouched.
 

@@ -22,7 +22,6 @@ Entries are organized under these category headings:
 - `### 🐛 Bug Fixes` - Corrections to existing behavior
 - `### 🔁 Changes` - Modifications to existing features
 - `### ⚙ Internal` - Technical changes (use sparingly, still user-focused)
-- `### 🌐 Translations` - New or updated translations
 - `### Breaking changes` - For major releases only
 - `### Deprecated` - Features being phased out
 

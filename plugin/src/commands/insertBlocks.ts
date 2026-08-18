@@ -10,13 +10,13 @@ import {
 } from "obsidian";
 
 import type { MakeCommand } from "@/commands";
-import { t } from "@/i18n";
-import type { Translations } from "@/i18n/translation";
 import type TodoistPlugin from "@/index";
 import { makeCreationTimeMarker } from "@/project-sync/creationTime";
 import { makeProjectTaskBlock } from "@/project-sync/document";
 import { QUERY_CODE_BLOCK } from "@/query/injector";
 import type { EmbeddableProjectTask } from "@/services/projectTaskCommands";
+import type { UiText } from "@/uiText";
+import { uiText } from "@/uiText";
 
 const DEFAULT_QUERY_FILTER = "today | overdue";
 const INSERT_ORIGIN = "tasks-bridge-insert-block";
@@ -35,8 +35,8 @@ type ProjectTaskPickerItem = EmbeddableProjectTask & {
   searchText: string;
 };
 
-export const insertQueryBlock: MakeCommand = (_plugin, i18n) => ({
-  name: i18n.insertQueryBlock,
+export const insertQueryBlock: MakeCommand = (_plugin, text) => ({
+  name: text.insertQueryBlock,
   editorCheckCallback: (checking, editor, context) => {
     if (!isFocusedMarkdownCommandContext(context)) {
       return false;
@@ -48,8 +48,8 @@ export const insertQueryBlock: MakeCommand = (_plugin, i18n) => ({
   },
 });
 
-export const insertProjectTaskBlock: MakeCommand = (plugin, i18n) => ({
-  name: i18n.insertProjectTaskBlock,
+export const insertProjectTaskBlock: MakeCommand = (plugin, text) => ({
+  name: text.insertProjectTaskBlock,
   editorCheckCallback: (checking, editor, context) => {
     if (!isFocusedMarkdownCommandContext(context)) {
       return false;
@@ -81,18 +81,18 @@ const openProjectTaskPicker = (
   editor: Editor,
   currentFilePath: string,
 ): void => {
-  const pickerI18n = t().projectTaskPicker;
+  const pickerText = uiText.projectTaskPicker;
   const tasks = plugin.services.projectTasks.listEmbeddableTasks();
   if (tasks.length === 0) {
-    new Notice(pickerI18n.notices.noTasks);
+    new Notice(pickerText.notices.noTasks);
     return;
   }
 
   const initialQuery = normalizePickerQuery(editor.getSelection());
-  const items = makeProjectTaskPickerItems(tasks, currentFilePath, pickerI18n);
-  const modal = new ProjectTaskSuggestModal(plugin, items, initialQuery, pickerI18n, (task) => {
+  const items = makeProjectTaskPickerItems(tasks, currentFilePath, pickerText);
+  const modal = new ProjectTaskSuggestModal(plugin, items, initialQuery, pickerText, (task) => {
     if (!isTaskStillEmbeddable(plugin, task.id)) {
-      new Notice(pickerI18n.notices.contextChanged);
+      new Notice(pickerText.notices.contextChanged);
       return;
     }
 
@@ -189,7 +189,7 @@ const normalizePickerQuery = (selection: string): string => selection.replace(/\
 const makeProjectTaskPickerItems = (
   tasks: readonly EmbeddableProjectTask[],
   currentFilePath: string,
-  i18n: Translations["projectTaskPicker"],
+  text: UiText["projectTaskPicker"],
 ): ProjectTaskPickerItem[] => {
   const collisionGroups = new Map<string, EmbeddableProjectTask[]>();
   for (const task of tasks) {
@@ -204,8 +204,8 @@ const makeProjectTaskPickerItems = (
       const location = formatTaskLocation(task);
       const detailParts = [
         location || task.filePath,
-        task.status === "active" ? i18n.activeLabel : i18n.completedLabel,
-        ...(current ? [i18n.currentLabel] : []),
+        task.status === "active" ? text.activeLabel : text.completedLabel,
+        ...(current ? [text.currentLabel] : []),
         ...(collision ? [taskDisambiguator(task, collisionGroups)] : []),
       ];
       const detail = detailParts.join(" · ");
@@ -290,17 +290,17 @@ class ProjectTaskSuggestModal extends FuzzySuggestModal<ProjectTaskPickerItem> {
     plugin: TodoistPlugin,
     items: ProjectTaskPickerItem[],
     initialQuery: string,
-    i18n: Translations["projectTaskPicker"],
+    text: UiText["projectTaskPicker"],
     choose: (task: ProjectTaskPickerItem) => void,
   ) {
     super(plugin.app);
     this.items = items;
     this.choose = choose;
-    this.setTitle(i18n.title);
-    this.setPlaceholder(i18n.search.placeholder);
-    this.inputEl.setAttribute("aria-label", i18n.search.label);
+    this.setTitle(text.title);
+    this.setPlaceholder(text.search.placeholder);
+    this.inputEl.setAttribute("aria-label", text.search.label);
     this.inputEl.value = initialQuery;
-    this.emptyStateText = i18n.emptyState;
+    this.emptyStateText = text.emptyState;
   }
 
   getItems(): ProjectTaskPickerItem[] {

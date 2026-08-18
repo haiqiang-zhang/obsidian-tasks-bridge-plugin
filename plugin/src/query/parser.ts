@@ -1,8 +1,8 @@
 import { load as loadYaml } from "js-yaml";
 import { z } from "zod";
 
-import { t } from "@/i18n";
 import type { QueryDefinition } from "@/query/schema/query";
+import { uiText } from "@/uiText";
 
 type ErrorTree = string | { msg: string; children: ErrorTree[] };
 
@@ -48,7 +48,7 @@ export function parseQuery<T extends z.ZodObject>(
 
   try {
     obj = tryParseAsJson(raw);
-    warnings.push(t().query.warning.jsonQuery);
+    warnings.push(uiText.query.warning.jsonQuery);
   } catch {
     try {
       obj = tryParseAsYaml(raw);
@@ -133,7 +133,7 @@ function parseObjectZod<T extends z.ZodObject>(
   const warnings: QueryWarning[] = [];
   if (typeof query === "object" && query !== null && !Array.isArray(query)) {
     for (const key of findUnknownKeys(query as Record<string, unknown>, definition.schema)) {
-      warnings.push(t().query.warning.unknownKey(key));
+      warnings.push(uiText.query.warning.unknownKey(key));
     }
   }
 

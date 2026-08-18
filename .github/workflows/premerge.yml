@@ -67,21 +67,3 @@ jobs:
       - name: Test
         run: npm test
         working-directory: ./scripts
-
-      - name: Generate files
-        run: npm run gen
-        working-directory: ./scripts
-
-      - name: Check for generated file changes
-        run: |
-          # Only these files are owned by the translation-status generator.
-          # Dependency installation and other platform-specific tooling must not
-          # be mistaken for generated documentation changes.
-          git add -- docs/docs/translation-status.json docs/docs/project-mode.md
-          if git diff --staged --quiet; then
-            echo "✅ No changes detected in generated files"
-          else
-            echo "❌ Generated files have changed. Please commit these changes:"
-            git diff --staged
-            exit 1
-          fi

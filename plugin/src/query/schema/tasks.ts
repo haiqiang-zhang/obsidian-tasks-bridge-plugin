@@ -1,11 +1,11 @@
 import { z } from "zod/v4";
 
-import { t } from "@/i18n";
 import { groupingSchema } from "@/query/schema/grouping";
 import type { QueryDefinition } from "@/query/schema/query";
 import { showSchema } from "@/query/schema/show";
 import { sortingSchema } from "@/query/schema/sorting";
 import { viewSchema } from "@/query/schema/view";
+import { uiText } from "@/uiText";
 
 const taskQuerySchema = z.object({
   name: z.string().optional(),
@@ -29,11 +29,11 @@ const generateWarnings = (query: TaskQuery): string[] => {
   const show = query.show;
 
   if (show.has("due") && show.has("time")) {
-    warnings.push(t().query.warning.dueAndTime);
+    warnings.push(uiText.query.warning.dueAndTime);
   }
 
   if (show.has("project") && show.has("section")) {
-    warnings.push(t().query.warning.projectAndSection);
+    warnings.push(uiText.query.warning.projectAndSection);
   }
 
   return warnings;

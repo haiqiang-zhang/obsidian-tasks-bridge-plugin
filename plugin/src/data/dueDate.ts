@@ -10,9 +10,9 @@ import {
 
 import type { DueDate as ApiDueDate } from "@/api/domain/dueDate";
 import type { Duration as ApiDuration } from "@/api/domain/task";
-import { t } from "@/i18n";
 import { locale } from "@/infra/locale";
 import { now, timezone, today } from "@/infra/time";
+import { uiText } from "@/uiText";
 import { assertNever } from "@/utils/types";
 
 export type DateInfo = {
@@ -141,34 +141,34 @@ const formatDueDate = (due: DueDate): string => {
     return date;
   }
 
-  const i18n = t().dates;
+  const text = uiText.dates;
   const time = getFormatter("time").format(due.start.raw);
 
   if (due.end === undefined) {
-    return i18n.dateTime(date, time);
+    return text.dateTime(date, time);
   }
 
   const endTime = getFormatter("time").format(due.end.raw);
   if (isSameDay(due.start.raw, due.end.raw)) {
-    return i18n.dateTimeDuration(date, time, endTime);
+    return text.dateTimeDuration(date, time, endTime);
   }
 
   const endDate = formatDate(due.end);
-  return i18n.dateTimeDurationDifferentDays(date, time, endDate, endTime);
+  return text.dateTimeDurationDifferentDays(date, time, endDate, endTime);
 };
 
 const formatDate = (info: DateInfo): string => {
-  const i18n = t().dates;
+  const text = uiText.dates;
 
   switch (info.flag) {
     case "today":
-      return i18n.today;
+      return text.today;
     case "tomorrow":
-      return i18n.tomorrow;
+      return text.tomorrow;
     case "yesterday":
-      return i18n.yesterday;
+      return text.yesterday;
     case "lastWeek":
-      return i18n.lastWeekday(getFormatter("weekday").format(info.raw));
+      return text.lastWeekday(getFormatter("weekday").format(info.raw));
     case "nextWeek":
       return getFormatter("weekday").format(info.raw);
     default:
@@ -188,14 +188,14 @@ const formatDueDateHeader = (due: DueDate): string => {
     getFormatter("weekday").format(due.start.raw),
   ];
 
-  const i18n = t().dates;
+  const text = uiText.dates;
 
   switch (due.start.flag) {
     case "today":
-      parts.push(i18n.today);
+      parts.push(text.today);
       break;
     case "tomorrow":
-      parts.push(i18n.tomorrow);
+      parts.push(text.tomorrow);
       break;
     default:
       break;
@@ -209,7 +209,7 @@ const formatDueDateTimeOnly = (dueDate: DueDate): string => {
     return "";
   }
 
-  const i18n = t().dates;
+  const text = uiText.dates;
   const startTime = getFormatter("time").format(dueDate.start.raw);
 
   if (dueDate.end === undefined) {
@@ -219,11 +219,11 @@ const formatDueDateTimeOnly = (dueDate: DueDate): string => {
   const endTime = getFormatter("time").format(dueDate.end.raw);
 
   if (isSameDay(dueDate.start.raw, dueDate.end.raw)) {
-    return i18n.timeDuration(startTime, endTime);
+    return text.timeDuration(startTime, endTime);
   }
 
   const endDate = formatDate(dueDate.end);
-  return i18n.timeDurationDifferentDays(startTime, endDate, endTime);
+  return text.timeDurationDifferentDays(startTime, endDate, endTime);
 };
 
 export const DueDate = {

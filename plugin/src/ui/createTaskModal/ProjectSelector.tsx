@@ -3,9 +3,9 @@ import type React from "react";
 import { useMemo } from "react";
 import { Button } from "react-aria-components";
 
-import { t } from "@/i18n";
-import type { Translations } from "@/i18n/translation";
 import { PluginContext } from "@/ui/context";
+import type { UiText } from "@/uiText";
+import { uiText } from "@/uiText";
 
 import type TodoistPlugin from "../..";
 import type { Project, ProjectId } from "../../api/domain/project";
@@ -22,7 +22,7 @@ type Props = {
   setSelected: (selected: ProjectIdentifier) => void;
 };
 
-type ProjectSelectorTranslations = Translations["createTaskModal"]["projectSelector"];
+type ProjectSelectorText = UiText["createTaskModal"]["projectSelector"];
 
 type ProjectSelectionOption = {
   identifier: ProjectIdentifier;
@@ -34,16 +34,16 @@ type ProjectSelectionOption = {
 export const ProjectSelector: React.FC<Props> = ({ selected, setSelected }) => {
   const plugin = PluginContext.use();
   const options = useMemo(() => buildProjectOptions(plugin), [plugin]);
-  const i18n = t().createTaskModal.projectSelector;
+  const text = uiText.createTaskModal.projectSelector;
 
   const openSelector = () => {
-    new ProjectSuggestModal(plugin, options, selected, setSelected, i18n).open();
+    new ProjectSuggestModal(plugin, options, selected, setSelected, text).open();
   };
 
   return (
     <Button
       aria-haspopup="dialog"
-      aria-label={i18n.buttonLabel}
+      aria-label={text.buttonLabel}
       className="project-selector"
       onPress={openSelector}
     >
@@ -63,17 +63,17 @@ class ProjectSuggestModal extends FuzzySuggestModal<ProjectSelectionOption> {
     options: ProjectSelectionOption[],
     selected: ProjectIdentifier,
     onSelect: (selected: ProjectIdentifier) => void,
-    i18n: ProjectSelectorTranslations,
+    text: ProjectSelectorText,
   ) {
     super(plugin.app);
     this.options = options;
     this.selected = selected;
     this.onSelect = onSelect;
     this.limit = Math.max(this.limit, options.length);
-    this.emptyStateText = i18n.emptyState;
-    this.setTitle(i18n.selectorLabel);
-    this.setPlaceholder(i18n.search.placeholder);
-    this.inputEl.setAttribute("aria-label", i18n.search.label);
+    this.emptyStateText = text.emptyState;
+    this.setTitle(text.selectorLabel);
+    this.setPlaceholder(text.search.placeholder);
+    this.inputEl.setAttribute("aria-label", text.search.label);
     this.modalEl.classList.add("tasks-bridge-project-suggest-modal");
   }
 

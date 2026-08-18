@@ -1,9 +1,9 @@
 import type React from "react";
 import { Button } from "react-aria-components";
 
-import { t } from "@/i18n";
-import type { Translations } from "@/i18n/translation";
 import { useObsidianMenu } from "@/ui/obsidianMenu";
+import type { UiText } from "@/uiText";
+import { uiText } from "@/uiText";
 import { assertNever } from "@/utils/types";
 
 import { Priorities, type Priority } from "../../api/domain/task";
@@ -17,25 +17,25 @@ type Props = {
 const options: Priority[] = [Priorities.P1, Priorities.P2, Priorities.P3, Priorities.P4];
 
 export const PrioritySelector: React.FC<Props> = ({ selected, setSelected }) => {
-  const i18n = t().createTaskModal.prioritySelector;
+  const text = uiText.createTaskModal.prioritySelector;
   const { anchorRef, isOpen, toggleMenu } = useObsidianMenu((menu) => {
     for (const priority of options) {
       menu.addItem((item) =>
         item
-          .setTitle(getLabel(priority, i18n))
+          .setTitle(getLabel(priority, text))
           .setChecked(priority === selected)
           .onClick(() => setSelected(priority)),
       );
     }
   });
 
-  const label = getLabel(selected, i18n);
+  const label = getLabel(selected, text);
   return (
     <Button
       ref={anchorRef}
       aria-expanded={isOpen}
       aria-haspopup="menu"
-      aria-label={i18n.buttonLabel}
+      aria-label={text.buttonLabel}
       className="priority-selector"
       onPress={toggleMenu}
     >
@@ -47,17 +47,17 @@ export const PrioritySelector: React.FC<Props> = ({ selected, setSelected }) => 
 
 const getLabel = (
   priority: Priority,
-  i18n: Translations["createTaskModal"]["prioritySelector"],
+  text: UiText["createTaskModal"]["prioritySelector"],
 ): string => {
   switch (priority) {
     case Priorities.P4:
-      return i18n.p4;
+      return text.p4;
     case Priorities.P3:
-      return i18n.p3;
+      return text.p3;
     case Priorities.P2:
-      return i18n.p2;
+      return text.p2;
     case Priorities.P1:
-      return i18n.p1;
+      return text.p1;
     default:
       return assertNever(priority, "Unknown priority");
   }

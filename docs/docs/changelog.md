@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### 🔁 Changes
+
+- Simplified maintenance by keeping the plugin UI and documentation English-only.
+
 ## v2.10.0 (2026-08-18)
 
 ### ✨ Improvements
@@ -374,10 +378,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - API requests resulting in 5xx server errors now show a dedicated error message in the rendered query.
 - There is now a build stamp indicating version, commit SHA, and time of build in the settings.
 
-### 🌐 Translations
-
-- Added translations for Dutch (`nl` language code). Thanks [@tr3kl0v](https://github.com/tr3kl0v) for the contribution!
-
 ## v2.0.1 (2024-12-16)
 
 ### 🔁 Changes
@@ -389,14 +389,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Tasks with floating task time timezones are now rendered correctly in the current system timezone.
 
 ## v2.0.0 (2024-12-15)
-
-:::info
-
-Help wanted!
-
-This release has added rudimentary support for translating the plugin into other languages. If you'd like to help out, please see the [translation contribution guide](./contributing/translation).
-
-:::
 
 :::warning
 
@@ -413,7 +405,6 @@ default Obsidian theme.
 ### ✨ Features
 
 - Rebuilt the task renderer from the ground up. This now resembles Todoist more closely and has improved the default styling.
-- Added support for translations in the plugin
 - Added a setting to control whether the embedded "Add task" button in a query should automatically add a link to the current page.
   - This behaviour can now be turned off or configured to append to the task name or description.
 

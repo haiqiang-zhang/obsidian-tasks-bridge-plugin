@@ -120,9 +120,8 @@ vi.mock("@/data/queryCache", () => ({
   },
 }));
 
-vi.mock("@/i18n", () => ({
-  setLanguage: vi.fn(),
-  t: () => ({
+vi.mock("@/uiText", () => ({
+  uiText: {
     editTaskModal: {
       projectionErrorNotice: "Todoist was updated, but its Vault note could not be refreshed.",
     },
@@ -139,7 +138,7 @@ vi.mock("@/i18n", () => ({
       projectSyncInterrupted: "Project sync was interrupted",
       projectSyncFailed: (message: string) => `Project sync failed: ${message}`,
     },
-  }),
+  },
 }));
 
 vi.mock("@/infra/time", () => ({
