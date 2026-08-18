@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### ✨ Improvements
+
+- Established the 2.10 feature release for editor-native Query and Project task block insertion.
+
 ## v2.9.23 (2026-08-18)
 
 ### ✨ Improvements
