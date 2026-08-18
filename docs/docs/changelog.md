@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v2.10.2 (2026-08-18)
+
 ### 🐛 Bug Fixes
 
 - Unified Tasks List statistics with the current Obsidian Base result. Native Base filters and the result limit, together with the selected root project, now govern task rows, toolbar counts, Project overview totals, the completion heatmap, and per-project progress as one scope.
