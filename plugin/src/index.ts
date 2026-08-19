@@ -1,7 +1,7 @@
 import { uiText } from "@/uiText";
 import "@/styles/main.scss";
 import type { PluginManifest } from "obsidian";
-import { type App, Notice, Plugin } from "obsidian";
+import { type App, Notice, normalizePath, Plugin } from "obsidian";
 
 import { TodoistApiClient } from "@/api";
 import type { TaskId } from "@/api/domain/task";
@@ -26,6 +26,7 @@ import {
   LEGACY_PROJECT_TASK_CODE_BLOCK,
   listOwnedFolders,
   type ManagedFolderCreation,
+  type ManagedFolderRelocation,
   mergeProjectCatalogCollections,
   mergeProjectSyncFolderOwnershipRegistries,
   PROJECT_SYNC_FOLDER_OWNERSHIP_DATA_KEY,
@@ -42,6 +43,7 @@ import {
   readProjectCatalogCollection,
   recordCreatedFolders as recordCreatedFolderOwnership,
   releaseOwnedFolderPaths as releaseFolderOwnership,
+  relocateOwnedFolders as relocateFolderOwnership,
   withProjectCatalogCollection,
   withProjectSyncFolderOwnershipRegistry,
 } from "@/project-sync";
@@ -117,6 +119,7 @@ export default class TodoistPlugin extends Plugin {
           : listOwnedFolders(this.projectSyncFolderOwnership, mappingId),
       recordCreatedFolder: async (input) => await this.persistCreatedFolders([input]),
       recordCreatedFolders: async (inputs) => await this.persistCreatedFolders(inputs),
+      relocateOwnedFolders: async (inputs) => await this.persistRelocatedFolders(inputs),
       releaseOwnedFolderPath: async (mappingId, path) =>
         await this.persistReleasedFolderPaths(mappingId, [path]),
       releaseOwnedFolderPaths: async (mappingId, paths) =>
@@ -1070,6 +1073,34 @@ export default class TodoistPlugin extends Plugin {
     });
   }
 
+  private persistRelocatedFolders(inputs: readonly ManagedFolderRelocation[]): Promise<void> {
+    if (
+      this.disposed ||
+      inputs.length === 0 ||
+      this.projectSyncFolderOwnershipOpaque !== undefined ||
+      this.projectSyncFolderOwnershipShadowIsOpaque
+    ) {
+      return Promise.resolve();
+    }
+    return this.enqueueSettingsOperation(async () => {
+      if (
+        this.disposed ||
+        this.projectSyncFolderOwnershipOpaque !== undefined ||
+        this.projectSyncFolderOwnershipShadowIsOpaque
+      ) {
+        return;
+      }
+      const next = relocateFolderOwnership(this.projectSyncFolderOwnership, inputs);
+      if (JSON.stringify(next) !== JSON.stringify(this.projectSyncFolderOwnership)) {
+        this.projectSyncFolderOwnership = next;
+        this.markProjectSyncFolderOwnershipDirty();
+      }
+      if (this.projectSyncFolderOwnershipNeedsPersist) {
+        await this.persistSettings();
+      }
+    });
+  }
+
   private persistReleasedFolderPathsAcrossMappings(paths: readonly string[]): Promise<void> {
     if (
       this.disposed ||
@@ -1321,8 +1352,10 @@ export default class TodoistPlugin extends Plugin {
     );
     this.registerEvent(
       this.app.vault.on("rename", (file, oldPath) => {
-        this.releaseFolderOwnershipAfterVaultReplacement(oldPath);
-        this.recordProjectSyncVaultActivity(oldPath, file.path);
+        const isExternal = this.recordProjectSyncVaultActivity(oldPath, file.path);
+        if (isExternal && portableVaultPathKey(oldPath) !== portableVaultPathKey(file.path)) {
+          this.releaseFolderOwnershipAfterVaultReplacement(oldPath);
+        }
       }),
     );
   }
@@ -1335,19 +1368,27 @@ export default class TodoistPlugin extends Plugin {
     });
   }
 
-  private recordProjectSyncVaultActivity(...paths: string[]): void {
+  private recordProjectSyncVaultActivity(...paths: string[]): boolean {
     this.services.projectSync.notifyLocalProjectionChanges(paths);
     const mappings = useSettingsStore.getState().projectSyncMappings;
     const relevantPaths = paths.filter((path) => isProjectSyncPath(path, mappings));
-    if (relevantPaths.length > 0 && this.projectSyncActivity.recordVaultActivity(relevantPaths)) {
+    if (relevantPaths.length === 0) {
+      return true;
+    }
+    const isExternal = this.projectSyncActivity.recordVaultActivity(relevantPaths);
+    if (isExternal) {
       // A late file event can arrive just after the Sync engine reports Fully synced. Restart the
       // settle window before allowing another projection. Exact-path suppression above keeps this
       // plugin's own writes (and their outbound upload) out of this path.
       this.obsidianSyncGate.recordExternalVaultActivity();
       this.services.projectSync.invalidate();
     }
+    return isExternal;
   }
 }
+
+const portableVaultPathKey = (path: string): string =>
+  normalizePath(path).normalize("NFC").toLocaleLowerCase("en-US");
 
 const isRecord = (value: unknown): value is Record<string, unknown> => {
   return typeof value === "object" && value !== null && !Array.isArray(value);

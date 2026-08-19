@@ -18,6 +18,11 @@ export type ManagedFolderOwnership = ManagedFolderCreation & {
   generation: number;
 };
 
+export type ManagedFolderRelocation = {
+  ownership: ManagedFolderOwnership;
+  path: string;
+};
+
 export type ManagedFolderPathTombstone = {
   mappingId: string;
   path: string;
@@ -46,6 +51,8 @@ export interface ProjectSyncFolderOwnershipStorage {
   recordCreatedFolder(input: ManagedFolderCreation): Promise<void>;
   /** Batch variant that persists at most once. An empty batch retries a previously failed save. */
   recordCreatedFolders(inputs: readonly ManagedFolderCreation[]): Promise<void>;
+  /** Atomically replaces owned paths after Tasks Bridge renames their live folders. */
+  relocateOwnedFolders(inputs: readonly ManagedFolderRelocation[]): Promise<void>;
   releaseOwnedFolderPath(mappingId: string, path: string): Promise<void>;
   /** Revokes every observed generation for the supplied portable paths. */
   releaseOwnedFolderPaths(mappingId: string, paths: readonly string[]): Promise<void>;
@@ -247,6 +254,45 @@ export const releaseOwnedFolderPaths = (
     return normalizedRegistry;
   }
   return makeSafeRegistry(normalizedRegistry.records, [...releasedIds], pathTombstones);
+};
+
+export const relocateOwnedFolders = (
+  registry: ProjectSyncFolderOwnershipRegistry,
+  inputs: readonly ManagedFolderRelocation[],
+  createId: () => string = createFolderOwnershipId,
+): ProjectSyncFolderOwnershipRegistry => {
+  let relocated = cloneProjectSyncFolderOwnershipRegistry(registry);
+  for (const input of inputs) {
+    const ownership = normalizeOwnership(input.ownership);
+    const path = normalizeVaultPath(input.path);
+    if (portablePathKey(ownership.path) !== portablePathKey(path)) {
+      throw new TypeError("Managed folder relocation must preserve the portable Vault path");
+    }
+    if (ownership.path === path) {
+      continue;
+    }
+
+    const current = relocated.records.find((record) => sameOwnership(record, ownership));
+    if (current === undefined) {
+      continue;
+    }
+
+    relocated = releaseOwnedFolderPaths(relocated, ownership.mappingId, [ownership.path]);
+    relocated = recordCreatedFolders(
+      relocated,
+      [
+        {
+          mappingId: ownership.mappingId,
+          rootProjectId: ownership.rootProjectId,
+          ownerKind: ownership.ownerKind,
+          ownerId: ownership.ownerId,
+          path,
+        },
+      ],
+      createId,
+    );
+  }
+  return relocated;
 };
 
 const parseStoredV1 = (

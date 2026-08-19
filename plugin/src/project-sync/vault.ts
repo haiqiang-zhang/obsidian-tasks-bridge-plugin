@@ -33,7 +33,11 @@ import {
   replaceManagedTaskDocument,
   type UserOwnedTaskDocument,
 } from "./document";
-import type { ManagedFolderCreation, ProjectSyncFolderOwnershipStorage } from "./folderOwnership";
+import type {
+  ManagedFolderCreation,
+  ManagedFolderRelocation,
+  ProjectSyncFolderOwnershipStorage,
+} from "./folderOwnership";
 import { projectHierarchyPath } from "./hierarchy";
 import {
   isPathInside,
@@ -142,6 +146,7 @@ type ManagedFrontMatterInfo = {
 
 const YAML_DELIMITER_WITH_LEADING_LINE_BREAK = "\n---";
 const YAML_OPENING_LENGTH = 4;
+const MAX_RECASE_TEMP_PATH_ATTEMPTS = 100;
 
 const emptyResult = (): ProjectSyncResult => ({
   created: 0,
@@ -317,6 +322,8 @@ export class ObsidianProjectSyncVault {
       mapping.previousFolders,
       runContext,
     );
+    await this.canonicalizeOwnedFolderPaths(canonicalProjection, mapping, rootPath, runContext);
+    runContext.assertValid();
     const {
       configuredByTaskId,
       ownedByTaskId: managedById,
@@ -669,6 +676,428 @@ export class ObsidianProjectSyncVault {
     }
 
     return result;
+  }
+
+  /**
+   * A portable path key protects case-insensitive filesystems from collisions, but a synchronized
+   * path is settled only when its exact spelling matches Todoist. Recase only folders whose
+   * persisted owner identity matches the desired project or parent task; unmanaged folders remain
+   * protected by the normal projection preflight.
+   */
+  private async canonicalizeOwnedFolderPaths(
+    canonicalProjection: CanonicalProjectionPlan,
+    mapping: ProjectSyncMapping,
+    rootPath: string,
+    runContext: ProjectSyncRunContext,
+  ): Promise<void> {
+    const storage = this.folderOwnershipStorage;
+    const rootProjectId = mapping.project?.projectId;
+    if (storage === undefined || rootProjectId === undefined) {
+      return;
+    }
+
+    const targets = new Map<string, ManagedFolderCreation>();
+    for (const [projectId, path] of canonicalProjection.projectFoldersById) {
+      if (projectId === rootProjectId) {
+        continue;
+      }
+      targets.set(projectionOwnerKey("project", projectId), {
+        mappingId: mapping.id,
+        rootProjectId,
+        ownerKind: "project",
+        ownerId: projectId,
+        path,
+      });
+    }
+    for (const [taskId, plan] of canonicalProjection.taskFilePlansById) {
+      if (!plan.ownsFolder) {
+        continue;
+      }
+      targets.set(projectionOwnerKey("task", taskId), {
+        mappingId: mapping.id,
+        rootProjectId,
+        ownerKind: "task",
+        ownerId: taskId,
+        path: plan.folder,
+      });
+    }
+    if (targets.size === 0) {
+      return;
+    }
+
+    const ownerships = storage
+      .listOwnedFolders(mapping.id)
+      .filter((ownership) => ownership.rootProjectId === rootProjectId);
+    const initialIndex = new PortableVaultPathIndex(this.vault.getAllLoadedFiles());
+    const observedFolders = new Map<string, TFolder>();
+    for (const ownership of ownerships) {
+      const occupants = initialIndex.occupants(ownership.path);
+      if (occupants.length !== 1) {
+        continue;
+      }
+      const occupant = occupants[0];
+      if (occupant !== undefined && this.vault.getFolderByPath(occupant.path) === occupant) {
+        observedFolders.set(ownership.creationId, occupant as TFolder);
+      }
+    }
+
+    const orderedTargets = [...targets.values()].sort((left, right) => {
+      const depth = left.path.split("/").length - right.path.split("/").length;
+      return depth === 0 ? comparePortablePaths(left.path, right.path) : depth;
+    });
+    try {
+      for (const target of orderedTargets) {
+        runContext.assertValid();
+        const ownerKey = projectionOwnerKey(target.ownerKind, target.ownerId);
+        const matchingOwnerships = ownerships.filter(
+          (ownership) =>
+            projectionOwnerKey(ownership.ownerKind, ownership.ownerId) === ownerKey &&
+            portablePathKey(ownership.path) === portablePathKey(target.path),
+        );
+        if (matchingOwnerships.length === 0) {
+          continue;
+        }
+
+        const portableClaims = ownerships.filter(
+          (ownership) => portablePathKey(ownership.path) === portablePathKey(target.path),
+        );
+        if (
+          portableClaims.some(
+            (ownership) =>
+              ownership.ownerKind !== target.ownerKind || ownership.ownerId !== target.ownerId,
+          )
+        ) {
+          continue;
+        }
+
+        const folders = new Set(
+          matchingOwnerships.flatMap((ownership) => {
+            const folder = observedFolders.get(ownership.creationId);
+            return folder === undefined ? [] : [folder];
+          }),
+        );
+        if (folders.size !== 1) {
+          continue;
+        }
+        const folder = folders.values().next().value as TFolder | undefined;
+        if (
+          folder === undefined ||
+          portablePathKey(folder.path) !== portablePathKey(target.path) ||
+          folder.path === target.path
+        ) {
+          continue;
+        }
+
+        const liveIndex = new PortableVaultPathIndex(this.vault.getAllLoadedFiles());
+        if (liveIndex.occupants(target.path, folder).length > 0) {
+          continue;
+        }
+        try {
+          await this.renameOwnedFolderToExactPath(folder, target.path, rootPath, runContext);
+        } catch (error: unknown) {
+          if (!(error instanceof ManagedPathRaceError)) {
+            throw error;
+          }
+        }
+      }
+    } finally {
+      const relocations: ManagedFolderRelocation[] = [];
+      for (const ownership of ownerships) {
+        const target = targets.get(projectionOwnerKey(ownership.ownerKind, ownership.ownerId));
+        const folder = observedFolders.get(ownership.creationId);
+        if (
+          target === undefined ||
+          folder === undefined ||
+          ownership.path === target.path ||
+          portablePathKey(ownership.path) !== portablePathKey(target.path) ||
+          folder.path !== target.path ||
+          this.vault.getFolderByPath(target.path) !== folder
+        ) {
+          continue;
+        }
+        relocations.push({ ownership, path: target.path });
+      }
+      await storage.relocateOwnedFolders(relocations);
+    }
+  }
+
+  private async renameOwnedFolderToExactPath(
+    folder: TFolder,
+    targetPath: string,
+    rootPath: string,
+    runContext: ProjectSyncRunContext,
+  ): Promise<void> {
+    const originalPath = normalizePath(folder.path);
+    const normalizedTarget = normalizePath(targetPath);
+    this.assertWithinRoot(rootPath, originalPath);
+    this.assertWithinRoot(rootPath, normalizedTarget);
+    if (portablePathKey(originalPath) !== portablePathKey(normalizedTarget)) {
+      throw new Error("Managed folder recasing must preserve the portable Vault path");
+    }
+    if (
+      new PortableVaultPathIndex(this.vault.getAllLoadedFiles()).occupants(normalizedTarget, folder)
+        .length > 0
+    ) {
+      throw new ManagedPathRaceError(
+        `Canonical Todoist folder '${normalizedTarget}' became occupied during synchronization`,
+      );
+    }
+
+    const renameDirectly = async (): Promise<void> => {
+      const affectedPaths = this.folderRenameMutationPaths(folder.path, normalizedTarget);
+      await this.runInternalMutation(
+        affectedPaths,
+        async () => await this.fileManager.renameFile(folder, normalizedTarget),
+      );
+    };
+
+    let directError: unknown;
+    try {
+      runContext.assertValid();
+      await renameDirectly();
+    } catch (error: unknown) {
+      directError = error;
+    }
+    if (await this.isExactLiveFolder(folder, normalizedTarget, originalPath)) {
+      return;
+    }
+
+    if (
+      new PortableVaultPathIndex(this.vault.getAllLoadedFiles()).occupants(normalizedTarget, folder)
+        .length > 0
+    ) {
+      throw new ManagedPathRaceError(
+        `Canonical Todoist folder '${normalizedTarget}' became occupied during synchronization`,
+      );
+    }
+
+    if (folder.path !== originalPath && folder.path !== normalizedTarget) {
+      throw directError ?? new Error(`Managed folder '${originalPath}' moved unexpectedly`);
+    }
+
+    const temporaryPath = await this.availableRecaseTemporaryPath(originalPath);
+    const fallbackSourcePath = folder.path;
+    const affectedPaths = this.folderRenameMutationPaths(
+      fallbackSourcePath,
+      temporaryPath,
+      normalizedTarget,
+    );
+    try {
+      await this.runInternalMutation(affectedPaths, async () => {
+        runContext.assertValid();
+        await this.fileManager.renameFile(folder, temporaryPath);
+        runContext.assertValid();
+        await this.fileManager.renameFile(folder, normalizedTarget);
+      });
+    } catch (fallbackError: unknown) {
+      if (await this.isExactLiveFolder(folder, normalizedTarget, originalPath)) {
+        return;
+      }
+      if (folder.path === temporaryPath) {
+        try {
+          await this.runInternalMutation(
+            this.folderRenameMutationPaths(temporaryPath, originalPath),
+            async () => await this.fileManager.renameFile(folder, originalPath),
+          );
+        } catch (rollbackError: unknown) {
+          if (!(await this.isExactLiveFolder(folder, originalPath, temporaryPath))) {
+            const fallbackMessage =
+              fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
+            const rollbackMessage =
+              rollbackError instanceof Error ? rollbackError.message : String(rollbackError);
+            throw new Error(
+              `Could not recase managed folder '${originalPath}' and could not restore its original path; it remains at '${folder.path}': ${fallbackMessage}; rollback failed: ${rollbackMessage}`,
+            );
+          }
+        }
+      }
+      if (
+        new PortableVaultPathIndex(this.vault.getAllLoadedFiles()).occupants(
+          normalizedTarget,
+          folder,
+        ).length > 0
+      ) {
+        throw new ManagedPathRaceError(
+          `Canonical Todoist folder '${normalizedTarget}' became occupied during synchronization`,
+        );
+      }
+      throw fallbackError;
+    }
+
+    if (!(await this.isExactLiveFolder(folder, normalizedTarget, originalPath))) {
+      throw (
+        directError ??
+        new Error(`Managed folder '${originalPath}' did not adopt Todoist's exact casing`)
+      );
+    }
+  }
+
+  private folderRenameMutationPaths(folderPath: string, ...destinations: string[]): string[] {
+    const source = normalizePath(folderPath);
+    const paths = new Set<string>();
+    for (const entry of this.vault.getAllLoadedFiles()) {
+      const entryPath = normalizePath(entry.path);
+      if (!isPathInside(source, entryPath)) {
+        continue;
+      }
+      paths.add(entryPath);
+      for (const destination of destinations) {
+        paths.add(`${normalizePath(destination)}${entryPath.slice(source.length)}`);
+      }
+    }
+    paths.add(source);
+    for (const destination of destinations) {
+      paths.add(normalizePath(destination));
+    }
+    return [...paths];
+  }
+
+  private async isExactLiveFolder(
+    folder: TFolder,
+    targetPath: string,
+    previousPath: string,
+  ): Promise<boolean> {
+    return (
+      folder.path === targetPath &&
+      this.vault.getFolderByPath(targetPath) === folder &&
+      (await this.vault.adapter.exists(targetPath, true)) &&
+      !(await this.vault.adapter.exists(previousPath, true))
+    );
+  }
+
+  private async availableRecaseTemporaryPath(path: string): Promise<string> {
+    const separator = path.lastIndexOf("/");
+    const parent = separator < 0 ? "" : path.slice(0, separator);
+    const name = separator < 0 ? path : path.slice(separator + 1);
+    for (let attempt = 1; attempt <= MAX_RECASE_TEMP_PATH_ATTEMPTS; attempt++) {
+      const suffix = attempt === 1 ? "" : `-${attempt}`;
+      const candidate = normalizePath(
+        `${parent === "" ? "" : `${parent}/`}${name}.tasks-bridge-recase${suffix}`,
+      );
+      if (
+        new PortableVaultPathIndex(this.vault.getAllLoadedFiles()).occupants(candidate).length ===
+          0 &&
+        !(await this.vault.adapter.exists(candidate))
+      ) {
+        return candidate;
+      }
+    }
+    throw new Error(`Could not reserve a temporary path to recase managed folder '${path}'`);
+  }
+
+  private async renameManagedFileToPath(
+    file: TFile,
+    targetPath: string,
+    runContext: ProjectSyncRunContext,
+  ): Promise<void> {
+    const originalPath = normalizePath(file.path);
+    const normalizedTarget = normalizePath(targetPath);
+    const recasing = portablePathKey(originalPath) === portablePathKey(normalizedTarget);
+    let directError: unknown;
+    try {
+      await this.runInternalMutation([originalPath, normalizedTarget], async () => {
+        runContext.assertValid();
+        await this.fileManager.renameFile(file, normalizedTarget);
+      });
+    } catch (error: unknown) {
+      directError = error;
+    }
+
+    if (!recasing || (await this.isExactLiveFile(file, normalizedTarget, originalPath))) {
+      if (file.path === normalizedTarget) {
+        return;
+      }
+      this.throwPathRaceIfOccupied(normalizedTarget, file);
+      throw (
+        directError ??
+        new Error(`Managed note '${originalPath}' did not move to '${normalizedTarget}'`)
+      );
+    }
+
+    this.throwPathRaceIfOccupied(normalizedTarget, file);
+    if (file.path !== originalPath && file.path !== normalizedTarget) {
+      throw directError ?? new Error(`Managed note '${originalPath}' moved unexpectedly`);
+    }
+
+    const temporaryPath = await this.availableRecaseTemporaryFilePath(originalPath);
+    const fallbackSourcePath = file.path;
+    try {
+      await this.runInternalMutation(
+        [fallbackSourcePath, temporaryPath, normalizedTarget],
+        async () => {
+          runContext.assertValid();
+          await this.fileManager.renameFile(file, temporaryPath);
+          runContext.assertValid();
+          await this.fileManager.renameFile(file, normalizedTarget);
+        },
+      );
+    } catch (fallbackError: unknown) {
+      if (await this.isExactLiveFile(file, normalizedTarget, originalPath)) {
+        return;
+      }
+      if (file.path === temporaryPath) {
+        try {
+          await this.runInternalMutation([temporaryPath, originalPath], async () => {
+            await this.fileManager.renameFile(file, originalPath);
+          });
+        } catch (rollbackError: unknown) {
+          if (!(await this.isExactLiveFile(file, originalPath, temporaryPath))) {
+            const fallbackMessage =
+              fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
+            const rollbackMessage =
+              rollbackError instanceof Error ? rollbackError.message : String(rollbackError);
+            throw new Error(
+              `Could not recase managed note '${originalPath}' and could not restore its original path; it remains at '${file.path}': ${fallbackMessage}; rollback failed: ${rollbackMessage}`,
+            );
+          }
+        }
+      }
+      this.throwPathRaceIfOccupied(normalizedTarget, file);
+      throw fallbackError;
+    }
+
+    if (!(await this.isExactLiveFile(file, normalizedTarget, originalPath))) {
+      throw (
+        directError ??
+        new Error(`Managed note '${originalPath}' did not adopt Todoist's exact casing`)
+      );
+    }
+  }
+
+  private async isExactLiveFile(
+    file: TFile,
+    targetPath: string,
+    previousPath: string,
+  ): Promise<boolean> {
+    return (
+      file.path === targetPath &&
+      this.vault.getAbstractFileByPath(targetPath) === file &&
+      (await this.vault.adapter.exists(targetPath, true)) &&
+      !(await this.vault.adapter.exists(previousPath, true))
+    );
+  }
+
+  private async availableRecaseTemporaryFilePath(path: string): Promise<string> {
+    const separator = path.lastIndexOf("/");
+    const parent = separator < 0 ? "" : path.slice(0, separator);
+    const name = separator < 0 ? path : path.slice(separator + 1);
+    const extensionAt = name.lastIndexOf(".");
+    const stem = extensionAt <= 0 ? name : name.slice(0, extensionAt);
+    const extension = extensionAt <= 0 ? "" : name.slice(extensionAt);
+    for (let attempt = 1; attempt <= MAX_RECASE_TEMP_PATH_ATTEMPTS; attempt++) {
+      const suffix = attempt === 1 ? "" : `-${attempt}`;
+      const candidate = normalizePath(
+        `${parent === "" ? "" : `${parent}/`}${stem}.tasks-bridge-recase${suffix}${extension}`,
+      );
+      if (
+        new PortableVaultPathIndex(this.vault.getAllLoadedFiles()).occupants(candidate).length ===
+          0 &&
+        !(await this.vault.adapter.exists(candidate))
+      ) {
+        return candidate;
+      }
+    }
+    throw new Error(`Could not reserve a temporary path to recase managed note '${path}'`);
   }
 
   /**
@@ -1812,10 +2241,7 @@ export class ObsidianProjectSyncVault {
       runContext.assertValid();
       this.assertLivePathAvailable(targetPath, canonical.file);
       const oldPath = canonical.file.path;
-      await this.runInternalMutation(
-        [oldPath, targetPath],
-        async () => await this.fileManager.renameFile(canonical.file, targetPath),
-      );
+      await this.renameManagedFileToPath(canonical.file, targetPath, runContext);
       pathIndex.move(canonical.file, oldPath, targetPath);
     }
 
@@ -1970,15 +2396,7 @@ export class ObsidianProjectSyncVault {
       await this.assertLiveManagedIdentityTransition(managed, desiredIdentity);
       this.assertLivePathAvailable(targetPath, managed.file);
       const oldPath = managed.file.path;
-      try {
-        await this.runInternalMutation(
-          [oldPath, targetPath],
-          async () => await this.fileManager.renameFile(managed.file, targetPath),
-        );
-      } catch (error: unknown) {
-        this.throwPathRaceIfOccupied(targetPath, managed.file);
-        throw error;
-      }
+      await this.renameManagedFileToPath(managed.file, targetPath, runContext);
       pathIndex.move(managed.file, oldPath, targetPath);
       runContext.assertValid();
     }
@@ -2011,10 +2429,7 @@ export class ObsidianProjectSyncVault {
     if (moved) {
       this.assertLivePathAvailable(targetPath, managed.file);
       const oldPath = managed.file.path;
-      await this.runInternalMutation(
-        [oldPath, targetPath],
-        async () => await this.fileManager.renameFile(managed.file, targetPath),
-      );
+      await this.renameManagedFileToPath(managed.file, targetPath, runContext);
       pathIndex.move(managed.file, oldPath, targetPath);
       runContext.assertValid();
     }

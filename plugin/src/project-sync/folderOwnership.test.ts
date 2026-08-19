@@ -12,6 +12,7 @@ import {
   readProjectSyncFolderOwnershipRegistry,
   recordCreatedFolders,
   releaseOwnedFolderPaths,
+  relocateOwnedFolders,
   withProjectSyncFolderOwnershipRegistry,
 } from "./folderOwnership";
 
@@ -274,6 +275,59 @@ describe("Project Sync folder ownership registry", () => {
     expect(recreated.records).toEqual([
       expect.objectContaining({ creationId: "created-next", generation: 2 }),
     ]);
+  });
+
+  it("relocates exact casing with a newer generation so stale devices cannot restore it", () => {
+    const lowercase = recordCreatedFolders(
+      emptyProjectSyncFolderOwnershipRegistry(),
+      [projectFolder("Task Projects/Root/logistics")],
+      ids("created-lowercase"),
+    );
+    const ownership = lowercase.records[0];
+    if (ownership === undefined) {
+      throw new Error("Expected an owned folder");
+    }
+
+    const canonical = relocateOwnedFolders(
+      lowercase,
+      [{ ownership, path: "Task Projects/Root/Logistics" }],
+      ids("created-canonical"),
+    );
+    const staleDeviceReturns = mergeProjectSyncFolderOwnershipRegistries(canonical, lowercase);
+
+    expect(canonical.records).toEqual([
+      {
+        creationId: "created-canonical",
+        generation: 2,
+        ...projectFolder("Task Projects/Root/Logistics"),
+      },
+    ]);
+    expect(canonical.tombstones).toEqual(["created-lowercase"]);
+    expect(canonical.pathTombstones).toEqual([
+      {
+        mappingId: "mapping-root",
+        path: "Task Projects/Root/logistics",
+        generation: 1,
+      },
+    ]);
+    expect(staleDeviceReturns).toEqual(canonical);
+  });
+
+  it("rejects a relocation that changes the portable folder path", () => {
+    const registry = recordCreatedFolders(
+      emptyProjectSyncFolderOwnershipRegistry(),
+      [projectFolder("Task Projects/Root/Logistics")],
+      ids("created-logistics"),
+    );
+    const ownership = registry.records[0];
+    if (ownership === undefined) {
+      throw new Error("Expected an owned folder");
+    }
+
+    expect(() =>
+      relocateOwnedFolders(registry, [{ ownership, path: "Task Projects/Root/Shipping" }]),
+    ).toThrow("preserve the portable Vault path");
+    expect(registry.records[0]?.path).toBe("Task Projects/Root/Logistics");
   });
 
   it("tombstones a creation ID with conflicting immutable ownership", () => {

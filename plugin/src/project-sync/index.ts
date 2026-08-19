@@ -37,6 +37,7 @@ export {
   type ManagedFolderOwnerKind,
   type ManagedFolderOwnership,
   type ManagedFolderPathTombstone,
+  type ManagedFolderRelocation,
   mergeProjectSyncFolderOwnershipRegistries,
   PROJECT_SYNC_FOLDER_OWNERSHIP_DATA_KEY,
   PROJECT_SYNC_FOLDER_OWNERSHIP_SCHEMA_VERSION,
@@ -47,6 +48,7 @@ export {
   readProjectSyncFolderOwnershipRegistry,
   recordCreatedFolders,
   releaseOwnedFolderPaths,
+  relocateOwnedFolders,
   withProjectSyncFolderOwnershipRegistry,
 } from "./folderOwnership";
 export { projectNamePath, selectProjectHierarchy } from "./hierarchy";

@@ -21,10 +21,12 @@ import {
   listOwnedFolders,
   type ManagedFolderCreation,
   type ManagedFolderOwnership,
+  type ManagedFolderRelocation,
   type ProjectSyncFolderOwnershipRegistry,
   type ProjectSyncFolderOwnershipStorage,
   recordCreatedFolders,
   releaseOwnedFolderPaths,
+  relocateOwnedFolders,
 } from "./folderOwnership";
 import type { ProjectSyncConfig, ProjectSyncMapping, ProjectSyncSnapshot } from "./types";
 import { ObsidianProjectSyncVault } from "./vault";
@@ -77,6 +79,13 @@ class FakeVault {
   readonly files = new Map<string, { file: FakeFile; content: string }>();
   readonly folders = new Set<string>(["Sync"]);
   readonly adapter = {
+    exists: vi.fn(async (path: string, sensitive = false) => {
+      if (sensitive) {
+        return this.getAbstractFileByPath(path) !== null;
+      }
+      const key = portableTestPathKey(path);
+      return this.getAllLoadedFiles().some((entry) => portableTestPathKey(entry.path) === key);
+    }),
     list: vi.fn(async (path: string) => {
       const prefix = `${path}/`;
       return {
@@ -165,6 +174,51 @@ class FakeVault {
     this.folderEntries.delete(path);
   }
 
+  moveFolder(folder: FakeFolder, newPath: string): void {
+    const oldPath = folder.path;
+    if (!this.folders.has(oldPath)) {
+      throw new Error("Missing fake folder");
+    }
+    if (this.getAbstractFileByPath(newPath) !== null) {
+      throw new Error(`Folder already exists: ${newPath}`);
+    }
+
+    const folderMoves = [...this.folders]
+      .filter((path) => path === oldPath || path.startsWith(`${oldPath}/`))
+      .sort((left, right) => left.length - right.length)
+      .map((path) => ({
+        entry: this.folderEntry(path),
+        oldPath: path,
+        newPath: `${newPath}${path.slice(oldPath.length)}`,
+      }));
+    const fileMoves = [...this.files]
+      .filter(([path]) => path.startsWith(`${oldPath}/`))
+      .map(([path, entry]) => ({
+        entry,
+        oldPath: path,
+        newPath: `${newPath}${path.slice(oldPath.length)}`,
+      }));
+
+    for (const { oldPath: path } of folderMoves) {
+      this.folders.delete(path);
+      this.folderEntries.delete(path);
+    }
+    for (const { oldPath: path } of fileMoves) {
+      this.files.delete(path);
+    }
+    for (const move of folderMoves) {
+      move.entry.path = move.newPath;
+      move.entry.name = move.newPath.slice(move.newPath.lastIndexOf("/") + 1);
+      this.folders.add(move.newPath);
+      this.folderEntries.set(move.newPath, move.entry);
+    }
+    for (const move of fileMoves) {
+      move.entry.file.path = move.newPath;
+      move.entry.file.name = move.newPath.slice(move.newPath.lastIndexOf("/") + 1);
+      this.files.set(move.newPath, move.entry);
+    }
+  }
+
   private folderEntry(path: string): FakeFolder {
     const existing = this.folderEntries.get(path);
     if (existing !== undefined) {
@@ -206,8 +260,13 @@ class FakeFileManager {
     },
   );
 
-  readonly renameFile = vi.fn(async (file: TFile, newPath: string) => {
+  readonly renameFile = vi.fn(async (file: TAbstractFile, newPath: string) => {
     this.beforeRename?.(newPath);
+    if ((file as FakeFolder)._fakeKind === "folder") {
+      this.vault.moveFolder(file as FakeFolder, newPath);
+      this.afterRename?.();
+      return;
+    }
     const entry = this.vault.files.get(file.path);
     if (entry === undefined) {
       throw new Error("Missing fake file");
@@ -287,6 +346,13 @@ class FakeFolderOwnershipStorage implements ProjectSyncFolderOwnershipStorage {
     });
   }
 
+  async relocateOwnedFolders(inputs: readonly ManagedFolderRelocation[]): Promise<void> {
+    this.registry = relocateOwnedFolders(this.registry, inputs, () => {
+      this.nextCreationId++;
+      return `test-folder-${this.nextCreationId}`;
+    });
+  }
+
   async releaseOwnedFolderPath(mappingId: string, path: string): Promise<void> {
     await this.releaseOwnedFolderPaths(mappingId, [path]);
   }
@@ -295,6 +361,9 @@ class FakeFolderOwnershipStorage implements ProjectSyncFolderOwnershipStorage {
     this.registry = releaseOwnedFolderPaths(this.registry, mappingId, paths);
   }
 }
+
+const portableTestPathKey = (path: string): string =>
+  path.normalize("NFC").toLocaleLowerCase("en-US");
 
 const frontmatterInfo = (content: string) => {
   if (!content.startsWith("---\n")) {
@@ -606,6 +675,593 @@ describe("ObsidianProjectSyncVault", () => {
     expect(fileManager.trashFile).toHaveBeenCalledWith(
       expect.objectContaining({ path: "Sync/Parent" }),
     );
+  });
+
+  it("recases an owned project folder to Todoist's exact spelling with its whole subtree", async () => {
+    const root = makeProject("root", { name: "Root" });
+    const lowercaseProject = makeProject("logistics", { name: "logistics", parentId: root.id });
+    const task = makeTask("logistics-task", {
+      content: "Application",
+      project: lowercaseProject,
+    });
+    const initial: ProjectSyncSnapshot = {
+      rootProjectId: root.id,
+      projects: [root, lowercaseProject],
+      tasks: [{ task, completed: false }],
+      syncedAt: "2026-08-19T00:00:00.000Z",
+    };
+    await adapter.reconcile(initial, mapping);
+    const originalFolder = vault.getFolderByPath("Sync/logistics");
+    const originalTaskFile = vault.files.get("Sync/logistics/Application.md")?.file;
+    const userBase = vault.addFile("Sync/logistics/Logistics.base", "views: []\n");
+    const canonicalProject = { ...lowercaseProject, name: "Logistics" };
+    const canonical: ProjectSyncSnapshot = {
+      ...initial,
+      projects: [root, canonicalProject],
+      tasks: [{ task: { ...task, project: canonicalProject }, completed: false }],
+      syncedAt: "2026-08-19T01:00:00.000Z",
+    };
+
+    const recased = await adapter.reconcile(canonical, mapping);
+
+    expect(recased.conflicts).toEqual([]);
+    expect(vault.getFolderByPath("Sync/Logistics")).toBe(originalFolder);
+    expect(vault.getFolderByPath("Sync/logistics")).toBeNull();
+    expect(vault.files.get("Sync/Logistics/Application.md")?.file).toBe(originalTaskFile);
+    expect(vault.files.get("Sync/Logistics/Logistics.base")?.file).toBe(userBase);
+    expect(vault.files.get("Sync/Logistics/Logistics.base")?.content).toBe("views: []\n");
+    expect(folderOwnershipStorage.listOwnedFolders(mapping.id)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          ownerKind: "project",
+          ownerId: lowercaseProject.id,
+          path: "Sync/Logistics",
+          generation: 2,
+        }),
+      ]),
+    );
+    expect(folderOwnershipStorage.listOwnedFolders(mapping.id)).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ path: "Sync/logistics" })]),
+    );
+
+    vi.clearAllMocks();
+    const settled = await adapter.reconcile(canonical, mapping);
+    expect(settled.conflicts).toEqual([]);
+    expect(fileManager.renameFile).not.toHaveBeenCalled();
+  });
+
+  it("rebases every owned descendant when a parent project folder changes casing", async () => {
+    const root = makeProject("root", { name: "Root" });
+    const lowercaseProject = makeProject("logistics", { name: "logistics", parentId: root.id });
+    const childProject = makeProject("operations", {
+      name: "Operations",
+      parentId: lowercaseProject.id,
+    });
+    const parentTask = makeTask("checklist", { content: "Checklist", project: childProject });
+    const childTask = makeTask("step", {
+      content: "Step",
+      parentId: parentTask.id,
+      project: childProject,
+    });
+    const initial: ProjectSyncSnapshot = {
+      rootProjectId: root.id,
+      projects: [root, lowercaseProject, childProject],
+      tasks: [
+        { task: parentTask, completed: false },
+        { task: childTask, completed: false },
+      ],
+      syncedAt: "2026-08-19T00:00:00.000Z",
+    };
+    await adapter.reconcile(initial, mapping);
+    const canonicalProject = { ...lowercaseProject, name: "Logistics" };
+    const canonical: ProjectSyncSnapshot = {
+      ...initial,
+      projects: [root, canonicalProject, childProject],
+      syncedAt: "2026-08-19T01:00:00.000Z",
+    };
+
+    const recased = await adapter.reconcile(canonical, mapping);
+
+    expect(recased.conflicts).toEqual([]);
+    expect(vault.files.has("Sync/Logistics/Operations/Checklist/Checklist.md")).toBe(true);
+    expect(vault.files.has("Sync/Logistics/Operations/Checklist/Step.md")).toBe(true);
+    const ownedPaths = folderOwnershipStorage
+      .listOwnedFolders(mapping.id)
+      .map(({ path }) => path)
+      .sort();
+    expect(ownedPaths).toEqual([
+      "Sync/Logistics",
+      "Sync/Logistics/Operations",
+      "Sync/Logistics/Operations/Checklist",
+    ]);
+    expect(ownedPaths.some((path) => path.startsWith("Sync/logistics"))).toBe(false);
+  });
+
+  it("uses a safe temporary Vault path when a direct case-only folder rename is unavailable", async () => {
+    const root = makeProject("root", { name: "Root" });
+    const lowercaseProject = makeProject("logistics", { name: "logistics", parentId: root.id });
+    const task = makeTask("logistics-task", {
+      content: "Application",
+      project: lowercaseProject,
+    });
+    const initial: ProjectSyncSnapshot = {
+      rootProjectId: root.id,
+      projects: [root, lowercaseProject],
+      tasks: [{ task, completed: false }],
+      syncedAt: "2026-08-19T00:00:00.000Z",
+    };
+    await adapter.reconcile(initial, mapping);
+    const canonicalProject = { ...lowercaseProject, name: "Logistics" };
+    let rejectedDirectRename = false;
+    fileManager.beforeRename = (newPath) => {
+      if (newPath === "Sync/Logistics" && !rejectedDirectRename) {
+        rejectedDirectRename = true;
+        throw new Error("Direct case-only rename is unavailable");
+      }
+    };
+
+    const result = await adapter.reconcile(
+      {
+        ...initial,
+        projects: [root, canonicalProject],
+        tasks: [{ task: { ...task, project: canonicalProject }, completed: false }],
+        syncedAt: "2026-08-19T01:00:00.000Z",
+      },
+      mapping,
+    );
+
+    expect(result.conflicts).toEqual([]);
+    expect(rejectedDirectRename).toBe(true);
+    expect(vault.getFolderByPath("Sync/Logistics")).not.toBeNull();
+    expect(vault.getFolderByPath("Sync/logistics")).toBeNull();
+    expect([...vault.folders].some((path) => path.includes("tasks-bridge-recase"))).toBe(false);
+    expect(folderOwnershipStorage.listOwnedFolders(mapping.id)).toEqual([
+      expect.objectContaining({ path: "Sync/Logistics", generation: 2 }),
+    ]);
+  });
+
+  it("accepts a folder fallback rename that reaches the exact target before reporting an error", async () => {
+    const root = makeProject("root", { name: "Root" });
+    const lowercaseProject = makeProject("logistics", { name: "logistics", parentId: root.id });
+    const task = makeTask("logistics-task", {
+      content: "Application",
+      project: lowercaseProject,
+    });
+    const initial: ProjectSyncSnapshot = {
+      rootProjectId: root.id,
+      projects: [root, lowercaseProject],
+      tasks: [{ task, completed: false }],
+      syncedAt: "2026-08-19T00:00:00.000Z",
+    };
+    await adapter.reconcile(initial, mapping);
+    const canonicalProject = { ...lowercaseProject, name: "Logistics" };
+    let rejectedDirectRename = false;
+    let rejectedCompletedFallback = false;
+    fileManager.beforeRename = (newPath) => {
+      if (newPath === "Sync/Logistics" && !rejectedDirectRename) {
+        rejectedDirectRename = true;
+        throw new Error("Direct case-only rename is unavailable");
+      }
+    };
+    fileManager.afterRename = () => {
+      if (!rejectedCompletedFallback && vault.getFolderByPath("Sync/Logistics") !== null) {
+        rejectedCompletedFallback = true;
+        throw new Error("Link maintenance failed after the folder moved");
+      }
+    };
+
+    const result = await adapter.reconcile(
+      {
+        ...initial,
+        projects: [root, canonicalProject],
+        tasks: [{ task: { ...task, project: canonicalProject }, completed: false }],
+        syncedAt: "2026-08-19T01:00:00.000Z",
+      },
+      mapping,
+    );
+
+    expect(result.conflicts).toEqual([]);
+    expect(rejectedDirectRename).toBe(true);
+    expect(rejectedCompletedFallback).toBe(true);
+    expect(vault.getFolderByPath("Sync/Logistics")).not.toBeNull();
+    expect(vault.getFolderByPath("Sync/logistics")).toBeNull();
+    expect(folderOwnershipStorage.listOwnedFolders(mapping.id)).toEqual([
+      expect.objectContaining({ path: "Sync/Logistics", generation: 2 }),
+    ]);
+  });
+
+  it("recognizes a restored folder when the rollback reports an error after moving it", async () => {
+    const root = makeProject("root", { name: "Root" });
+    const lowercaseProject = makeProject("logistics", { name: "logistics", parentId: root.id });
+    const task = makeTask("logistics-task", {
+      content: "Application",
+      project: lowercaseProject,
+    });
+    const initial: ProjectSyncSnapshot = {
+      rootProjectId: root.id,
+      projects: [root, lowercaseProject],
+      tasks: [{ task, completed: false }],
+      syncedAt: "2026-08-19T00:00:00.000Z",
+    };
+    await adapter.reconcile(initial, mapping);
+    const canonicalProject = { ...lowercaseProject, name: "Logistics" };
+    let targetAttempts = 0;
+    let rejectedCompletedRollback = false;
+    fileManager.beforeRename = (newPath) => {
+      if (newPath === "Sync/Logistics") {
+        targetAttempts++;
+        throw new Error(
+          targetAttempts === 1
+            ? "Direct case-only rename is unavailable"
+            : "Fallback target rename failed",
+        );
+      }
+    };
+    fileManager.afterRename = () => {
+      if (
+        !rejectedCompletedRollback &&
+        targetAttempts === 2 &&
+        vault.getFolderByPath("Sync/logistics") !== null
+      ) {
+        rejectedCompletedRollback = true;
+        throw new Error("Link maintenance failed after the folder rollback");
+      }
+    };
+
+    await expect(
+      adapter.reconcile(
+        {
+          ...initial,
+          projects: [root, canonicalProject],
+          tasks: [{ task: { ...task, project: canonicalProject }, completed: false }],
+          syncedAt: "2026-08-19T01:00:00.000Z",
+        },
+        mapping,
+      ),
+    ).rejects.toThrow("Fallback target rename failed");
+
+    expect(targetAttempts).toBe(2);
+    expect(rejectedCompletedRollback).toBe(true);
+    expect(vault.getFolderByPath("Sync/logistics")).not.toBeNull();
+    expect(vault.getFolderByPath("Sync/Logistics")).toBeNull();
+    expect([...vault.folders].some((path) => path.includes("tasks-bridge-recase"))).toBe(false);
+    expect(folderOwnershipStorage.listOwnedFolders(mapping.id)).toEqual([
+      expect.objectContaining({ path: "Sync/logistics", generation: 1 }),
+    ]);
+  });
+
+  it("recases an owned parent-task folder and its self-note to Todoist's exact spelling", async () => {
+    const root = makeProject("root", { name: "Root" });
+    const lowercaseParent = makeTask("course", { content: "course", project: root });
+    const child = makeTask("chapter", {
+      content: "Chapter",
+      parentId: lowercaseParent.id,
+      project: root,
+    });
+    const initial: ProjectSyncSnapshot = {
+      rootProjectId: root.id,
+      projects: [root],
+      tasks: [
+        { task: lowercaseParent, completed: false },
+        { task: child, completed: false },
+      ],
+      syncedAt: "2026-08-19T00:00:00.000Z",
+    };
+    await adapter.reconcile(initial, mapping);
+    const originalFolder = vault.getFolderByPath("Sync/course");
+    const originalParentFile = vault.files.get("Sync/course/course.md")?.file;
+    const originalChildFile = vault.files.get("Sync/course/Chapter.md")?.file;
+    const userBase = vault.addFile("Sync/course/Course.base", "views: []\n");
+    const canonicalParent = { ...lowercaseParent, content: "Course" };
+    const canonical: ProjectSyncSnapshot = {
+      ...initial,
+      tasks: [
+        { task: canonicalParent, completed: false },
+        { task: child, completed: false },
+      ],
+      syncedAt: "2026-08-19T01:00:00.000Z",
+    };
+
+    const recased = await adapter.reconcile(canonical, mapping);
+
+    expect(recased.conflicts).toEqual([]);
+    expect(vault.getFolderByPath("Sync/Course")).toBe(originalFolder);
+    expect(vault.getFolderByPath("Sync/course")).toBeNull();
+    expect(vault.files.get("Sync/Course/Course.md")?.file).toBe(originalParentFile);
+    expect(vault.files.get("Sync/Course/Chapter.md")?.file).toBe(originalChildFile);
+    expect(vault.files.get("Sync/Course/Course.base")?.file).toBe(userBase);
+    expect(folderOwnershipStorage.listOwnedFolders(mapping.id)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          ownerKind: "task",
+          ownerId: lowercaseParent.id,
+          path: "Sync/Course",
+          generation: 2,
+        }),
+      ]),
+    );
+
+    vi.clearAllMocks();
+    const settled = await adapter.reconcile(canonical, mapping);
+    expect(settled.conflicts).toEqual([]);
+    expect(fileManager.renameFile).not.toHaveBeenCalled();
+  });
+
+  it("recases a managed leaf task note and preserves its user-authored content", async () => {
+    const root = makeProject("root", { name: "Root" });
+    const lowercaseTask = makeTask("wifi", { content: "wifi", project: root });
+    const initial: ProjectSyncSnapshot = {
+      rootProjectId: root.id,
+      projects: [root],
+      tasks: [{ task: lowercaseTask, completed: false }],
+      syncedAt: "2026-08-19T00:00:00.000Z",
+    };
+    await adapter.reconcile(initial, mapping);
+    const originalFile = vault.files.get("Sync/wifi.md")?.file;
+    const originalEntry = vault.files.get("Sync/wifi.md");
+    if (originalEntry === undefined) {
+      throw new Error("Expected the initial managed note");
+    }
+    originalEntry.content += "\nUser-authored notes stay here.\n";
+    const canonicalTask = { ...lowercaseTask, content: "WIFI" };
+    const canonical: ProjectSyncSnapshot = {
+      ...initial,
+      tasks: [{ task: canonicalTask, completed: false }],
+      syncedAt: "2026-08-19T01:00:00.000Z",
+    };
+
+    const recased = await adapter.reconcile(canonical, mapping);
+
+    expect(recased).toMatchObject({ moved: 1 });
+    expect(recased.conflicts).toEqual([]);
+    expect(vault.files.has("Sync/wifi.md")).toBe(false);
+    expect(vault.files.get("Sync/WIFI.md")?.file).toBe(originalFile);
+    expect(vault.files.get("Sync/WIFI.md")?.content).toContain("User-authored notes stay here.");
+
+    vi.clearAllMocks();
+    const settled = await adapter.reconcile(canonical, mapping);
+    expect(settled.conflicts).toEqual([]);
+    expect(fileManager.renameFile).not.toHaveBeenCalled();
+  });
+
+  it("uses a safe temporary Vault path when a direct case-only note rename is unavailable", async () => {
+    const root = makeProject("root", { name: "Root" });
+    const lowercaseTask = makeTask("wifi", { content: "wifi", project: root });
+    const initial: ProjectSyncSnapshot = {
+      rootProjectId: root.id,
+      projects: [root],
+      tasks: [{ task: lowercaseTask, completed: false }],
+      syncedAt: "2026-08-19T00:00:00.000Z",
+    };
+    await adapter.reconcile(initial, mapping);
+    const originalFile = vault.files.get("Sync/wifi.md")?.file;
+    const canonicalTask = { ...lowercaseTask, content: "WIFI" };
+    let rejectedDirectRename = false;
+    fileManager.beforeRename = (newPath) => {
+      if (newPath === "Sync/WIFI.md" && !rejectedDirectRename) {
+        rejectedDirectRename = true;
+        throw new Error("Direct case-only rename is unavailable");
+      }
+    };
+
+    const result = await adapter.reconcile(
+      {
+        ...initial,
+        tasks: [{ task: canonicalTask, completed: false }],
+        syncedAt: "2026-08-19T01:00:00.000Z",
+      },
+      mapping,
+    );
+
+    expect(result).toMatchObject({ moved: 1 });
+    expect(result.conflicts).toEqual([]);
+    expect(rejectedDirectRename).toBe(true);
+    expect(vault.files.get("Sync/WIFI.md")?.file).toBe(originalFile);
+    expect(vault.files.has("Sync/wifi.md")).toBe(false);
+    expect([...vault.files.keys()].some((path) => path.includes("tasks-bridge-recase"))).toBe(
+      false,
+    );
+  });
+
+  it("accepts a note fallback rename that reaches the exact target before reporting an error", async () => {
+    const root = makeProject("root", { name: "Root" });
+    const lowercaseTask = makeTask("wifi", { content: "wifi", project: root });
+    const initial: ProjectSyncSnapshot = {
+      rootProjectId: root.id,
+      projects: [root],
+      tasks: [{ task: lowercaseTask, completed: false }],
+      syncedAt: "2026-08-19T00:00:00.000Z",
+    };
+    await adapter.reconcile(initial, mapping);
+    const originalFile = vault.files.get("Sync/wifi.md")?.file;
+    const canonicalTask = { ...lowercaseTask, content: "WIFI" };
+    let rejectedDirectRename = false;
+    let rejectedCompletedFallback = false;
+    fileManager.beforeRename = (newPath) => {
+      if (newPath === "Sync/WIFI.md" && !rejectedDirectRename) {
+        rejectedDirectRename = true;
+        throw new Error("Direct case-only rename is unavailable");
+      }
+    };
+    fileManager.afterRename = () => {
+      if (!rejectedCompletedFallback && vault.files.has("Sync/WIFI.md")) {
+        rejectedCompletedFallback = true;
+        throw new Error("Link maintenance failed after the note moved");
+      }
+    };
+
+    const result = await adapter.reconcile(
+      {
+        ...initial,
+        tasks: [{ task: canonicalTask, completed: false }],
+        syncedAt: "2026-08-19T01:00:00.000Z",
+      },
+      mapping,
+    );
+
+    expect(result).toMatchObject({ moved: 1 });
+    expect(result.conflicts).toEqual([]);
+    expect(rejectedDirectRename).toBe(true);
+    expect(rejectedCompletedFallback).toBe(true);
+    expect(vault.files.get("Sync/WIFI.md")?.file).toBe(originalFile);
+    expect(vault.files.has("Sync/wifi.md")).toBe(false);
+  });
+
+  it("recognizes a restored note when the rollback reports an error after moving it", async () => {
+    const root = makeProject("root", { name: "Root" });
+    const lowercaseTask = makeTask("wifi", { content: "wifi", project: root });
+    const initial: ProjectSyncSnapshot = {
+      rootProjectId: root.id,
+      projects: [root],
+      tasks: [{ task: lowercaseTask, completed: false }],
+      syncedAt: "2026-08-19T00:00:00.000Z",
+    };
+    await adapter.reconcile(initial, mapping);
+    const originalFile = vault.files.get("Sync/wifi.md")?.file;
+    const canonicalTask = { ...lowercaseTask, content: "WIFI" };
+    let targetAttempts = 0;
+    let rejectedCompletedRollback = false;
+    fileManager.beforeRename = (newPath) => {
+      if (newPath === "Sync/WIFI.md") {
+        targetAttempts++;
+        throw new Error(
+          targetAttempts === 1
+            ? "Direct case-only rename is unavailable"
+            : "Fallback target rename failed",
+        );
+      }
+    };
+    fileManager.afterRename = () => {
+      if (!rejectedCompletedRollback && targetAttempts === 2 && vault.files.has("Sync/wifi.md")) {
+        rejectedCompletedRollback = true;
+        throw new Error("Link maintenance failed after the note rollback");
+      }
+    };
+
+    await expect(
+      adapter.reconcile(
+        {
+          ...initial,
+          tasks: [{ task: canonicalTask, completed: false }],
+          syncedAt: "2026-08-19T01:00:00.000Z",
+        },
+        mapping,
+      ),
+    ).rejects.toThrow("Fallback target rename failed");
+
+    expect(targetAttempts).toBe(2);
+    expect(rejectedCompletedRollback).toBe(true);
+    expect(vault.files.get("Sync/wifi.md")?.file).toBe(originalFile);
+    expect(vault.files.has("Sync/WIFI.md")).toBe(false);
+    expect([...vault.files.keys()].some((path) => path.includes("tasks-bridge-recase"))).toBe(
+      false,
+    );
+  });
+
+  it("does not recase or claim an unmanaged case-variant project folder", async () => {
+    const root = makeProject("root", { name: "Root" });
+    const child = makeProject("logistics", { name: "Logistics", parentId: root.id });
+    const task = makeTask("logistics-task", { content: "Application", project: child });
+    vault.folders.add("Sync/logistics");
+    const unmanagedFolder = vault.getFolderByPath("Sync/logistics");
+    const userBase = vault.addFile("Sync/logistics/Personal.base", "views: []\n");
+
+    const result = await adapter.reconcile(
+      {
+        rootProjectId: root.id,
+        projects: [root, child],
+        tasks: [{ task, completed: false }],
+        syncedAt: "2026-08-19T01:00:00.000Z",
+      },
+      mapping,
+    );
+
+    expect(result.conflicts).toEqual([
+      expect.objectContaining({ path: "Sync/logistics", projectionBlocked: true }),
+    ]);
+    expect(vault.getFolderByPath("Sync/logistics")).toBe(unmanagedFolder);
+    expect(vault.getFolderByPath("Sync/Logistics")).toBeNull();
+    expect(vault.files.get("Sync/logistics/Personal.base")?.file).toBe(userBase);
+    expect(vault.files.has("Sync/Logistics/Application.md")).toBe(false);
+    expect(folderOwnershipStorage.listOwnedFolders(mapping.id)).toEqual([]);
+    expect(fileManager.renameFile).not.toHaveBeenCalled();
+    expect(fileManager.trashFile).not.toHaveBeenCalled();
+  });
+
+  it("does not recase a case-variant folder owned by a different Todoist project", async () => {
+    const root = makeProject("root", { name: "Root" });
+    const child = makeProject("logistics", { name: "Logistics", parentId: root.id });
+    const task = makeTask("logistics-task", { content: "Application", project: child });
+    vault.folders.add("Sync/logistics");
+    const wrongOwnerFolder = vault.getFolderByPath("Sync/logistics");
+    await folderOwnershipStorage.recordCreatedFolder({
+      mappingId: mapping.id,
+      rootProjectId: root.id,
+      ownerKind: "project",
+      ownerId: "another-project",
+      path: "Sync/logistics",
+    });
+
+    const result = await adapter.reconcile(
+      {
+        rootProjectId: root.id,
+        projects: [root, child],
+        tasks: [{ task, completed: false }],
+        syncedAt: "2026-08-19T01:00:00.000Z",
+      },
+      mapping,
+    );
+
+    expect(result.conflicts).toEqual([
+      expect.objectContaining({ path: "Sync/logistics", projectionBlocked: true }),
+    ]);
+    expect(vault.getFolderByPath("Sync/logistics")).toBe(wrongOwnerFolder);
+    expect(vault.getFolderByPath("Sync/Logistics")).toBeNull();
+    expect(folderOwnershipStorage.listOwnedFolders(mapping.id)).toEqual([
+      expect.objectContaining({ ownerId: "another-project", path: "Sync/logistics" }),
+    ]);
+    expect(fileManager.renameFile).not.toHaveBeenCalled();
+  });
+
+  it("preserves a target folder that appears while an owned folder is being recased", async () => {
+    const root = makeProject("root", { name: "Root" });
+    const lowercaseProject = makeProject("logistics", { name: "logistics", parentId: root.id });
+    const task = makeTask("logistics-task", {
+      content: "Application",
+      project: lowercaseProject,
+    });
+    const initial: ProjectSyncSnapshot = {
+      rootProjectId: root.id,
+      projects: [root, lowercaseProject],
+      tasks: [{ task, completed: false }],
+      syncedAt: "2026-08-19T00:00:00.000Z",
+    };
+    await adapter.reconcile(initial, mapping);
+    const canonicalProject = { ...lowercaseProject, name: "Logistics" };
+    let racedFolder: FakeFolder | null = null;
+    fileManager.beforeRename = (newPath) => {
+      if (newPath === "Sync/Logistics" && racedFolder === null) {
+        vault.folders.add(newPath);
+        racedFolder = vault.getFolderByPath(newPath);
+      }
+    };
+
+    const result = await adapter.reconcile(
+      {
+        ...initial,
+        projects: [root, canonicalProject],
+        tasks: [{ task: { ...task, project: canonicalProject }, completed: false }],
+        syncedAt: "2026-08-19T01:00:00.000Z",
+      },
+      mapping,
+    );
+
+    expect(result.conflicts).toEqual([
+      expect.objectContaining({ path: "Sync/logistics", projectionBlocked: true }),
+    ]);
+    expect(vault.getFolderByPath("Sync/Logistics")).toBe(racedFolder);
+    expect(vault.getFolderByPath("Sync/logistics")).not.toBeNull();
+    expect(fileManager.trashFile).not.toHaveBeenCalledWith(racedFolder);
   });
 
   it("keeps an owned folder from a previous mapping root tracked until user content is removed", async () => {

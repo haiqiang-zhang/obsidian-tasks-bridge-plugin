@@ -32,6 +32,11 @@ const runtime = vi.hoisted(() => ({
 }));
 
 vi.mock("obsidian", () => ({
+  normalizePath: (path: string) =>
+    path
+      .split("/")
+      .filter((segment) => segment !== "")
+      .join("/"),
   MarkdownRenderChild: class {
     public readonly containerEl: HTMLElement;
 
@@ -1478,7 +1483,7 @@ describe("TodoistPlugin async lifecycle", () => {
     );
   });
 
-  it("releases an owned path when a Vault delete or rename event replaces its folder", async () => {
+  it("releases an owned path when a Vault delete event replaces its folder", async () => {
     const services = makeServices();
     runtime.loadData.mockResolvedValueOnce({
       ...makeSettings({ projectSyncMappings: [workProjectSyncMapping] }),
@@ -1512,6 +1517,142 @@ describe("TodoistPlugin async lifecycle", () => {
       expect.objectContaining({
         [PROJECT_SYNC_FOLDER_OWNERSHIP_DATA_KEY]: expect.objectContaining({ records: [] }),
       }),
+    );
+  });
+
+  it("keeps ownership across a case-only rename so Project sync can restore Todoist's casing", async () => {
+    const services = makeServices();
+    runtime.loadData.mockResolvedValueOnce({
+      ...makeSettings({ projectSyncMappings: [workProjectSyncMapping] }),
+      [PROJECT_SYNC_FOLDER_OWNERSHIP_DATA_KEY]: {
+        version: 1,
+        records: [
+          {
+            creationId: "created-child",
+            mappingId: "mapping-work",
+            rootProjectId: "work",
+            ownerKind: "project",
+            ownerId: "child",
+            path: "Task Projects/Work/child",
+          },
+        ],
+        tombstones: [],
+      },
+    });
+    const plugin = makePlugin(services);
+    await plugin.onload();
+    runtime.saveData.mockClear();
+
+    vaultActivityListener("rename")(
+      { path: "Task Projects/Work/CHILD" },
+      "Task Projects/Work/child",
+    );
+    await flushPromises();
+
+    expect(plugin.projectSyncFolderOwnershipStorage.listOwnedFolders("mapping-work")).toEqual([
+      expect.objectContaining({ path: "Task Projects/Work/child" }),
+    ]);
+    expect(runtime.saveData).not.toHaveBeenCalled();
+  });
+
+  it("does not revoke ownership for an internal folder rename", async () => {
+    const services = makeServices();
+    runtime.loadData.mockResolvedValueOnce({
+      ...makeSettings({ projectSyncMappings: [workProjectSyncMapping] }),
+      [PROJECT_SYNC_FOLDER_OWNERSHIP_DATA_KEY]: {
+        version: 1,
+        records: [
+          {
+            creationId: "created-child",
+            mappingId: "mapping-work",
+            rootProjectId: "work",
+            ownerKind: "project",
+            ownerId: "child",
+            path: "Task Projects/Work/Child",
+          },
+        ],
+        tombstones: [],
+      },
+    });
+    const plugin = makePlugin(services);
+    await plugin.onload();
+    runtime.saveData.mockClear();
+
+    await plugin.runProjectSyncVaultMutation(
+      ["Task Projects/Work/Child", "Task Projects/Work/Renamed"],
+      async () => {
+        vaultActivityListener("rename")(
+          { path: "Task Projects/Work/Renamed" },
+          "Task Projects/Work/Child",
+        );
+      },
+    );
+    await flushPromises();
+
+    expect(plugin.projectSyncFolderOwnershipStorage.listOwnedFolders("mapping-work")).toEqual([
+      expect.objectContaining({ path: "Task Projects/Work/Child" }),
+    ]);
+    expect(runtime.saveData).not.toHaveBeenCalled();
+  });
+
+  it("still revokes ownership when an internal cleanup deletes an owned folder", async () => {
+    const services = makeServices();
+    runtime.loadData.mockResolvedValueOnce({
+      ...makeSettings({ projectSyncMappings: [workProjectSyncMapping] }),
+      [PROJECT_SYNC_FOLDER_OWNERSHIP_DATA_KEY]: {
+        version: 1,
+        records: [
+          {
+            creationId: "created-child",
+            mappingId: "mapping-work",
+            rootProjectId: "work",
+            ownerKind: "project",
+            ownerId: "child",
+            path: "Task Projects/Work/Child",
+          },
+        ],
+        tombstones: [],
+      },
+    });
+    const plugin = makePlugin(services);
+    await plugin.onload();
+
+    await plugin.runProjectSyncVaultMutation(["Task Projects/Work/Child"], async () => {
+      vaultActivityListener("delete")({ path: "Task Projects/Work/Child" });
+    });
+    await vi.waitFor(() =>
+      expect(plugin.projectSyncFolderOwnershipStorage.listOwnedFolders("mapping-work")).toEqual([]),
+    );
+  });
+
+  it("releases ownership when an external rename moves the folder to another portable path", async () => {
+    const services = makeServices();
+    runtime.loadData.mockResolvedValueOnce({
+      ...makeSettings({ projectSyncMappings: [workProjectSyncMapping] }),
+      [PROJECT_SYNC_FOLDER_OWNERSHIP_DATA_KEY]: {
+        version: 1,
+        records: [
+          {
+            creationId: "created-child",
+            mappingId: "mapping-work",
+            rootProjectId: "work",
+            ownerKind: "project",
+            ownerId: "child",
+            path: "Task Projects/Work/Child",
+          },
+        ],
+        tombstones: [],
+      },
+    });
+    const plugin = makePlugin(services);
+    await plugin.onload();
+
+    vaultActivityListener("rename")(
+      { path: "Task Projects/Work/User renamed" },
+      "Task Projects/Work/Child",
+    );
+    await vi.waitFor(() =>
+      expect(plugin.projectSyncFolderOwnershipStorage.listOwnedFolders("mapping-work")).toEqual([]),
     );
   });
 
