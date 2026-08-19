@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v2.10.3 (2026-08-19)
+
 ### 🐛 Bug Fixes
 
 - Project sync now enforces Todoist's exact capitalization for every managed project folder, parent-task folder, and task note. Case-only renames no longer create recurring conflicts, while Todoist task identities, user-authored content, and cross-device folder ownership remain intact.
