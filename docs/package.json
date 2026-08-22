@@ -1,6 +1,6 @@
 {
   "name": "@tasks-bridge/docs",
-  "version": "2.10.3",
+  "version": "2.10.4",
   "private": true,
   "license": "MIT",
   "type": "module",
