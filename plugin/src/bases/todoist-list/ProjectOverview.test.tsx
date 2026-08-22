@@ -93,6 +93,25 @@ describe("ProjectOverview", () => {
     expect(screen.getByText("2 projects · 3 tasks · 67% complete")).toBeVisible();
   });
 
+  it("renders a permanently expanded static overview when collapsing is unavailable", () => {
+    const onCollapsedChange = vi.fn();
+    renderOverview(makeModel(), {
+      collapsed: true,
+      collapsible: false,
+      onCollapsedChange,
+    });
+
+    const region = screen.getByRole("region", { name: "Project overview" });
+    expect(region).toHaveAttribute("data-collapsible", "false");
+    expect(region).not.toHaveAttribute("data-collapsed");
+    expect(within(region).queryByRole("button", { name: /Project overview/ })).toBeNull();
+    expect(region.querySelector(".todoist-bases-project-overview-disclosure")).toBeNull();
+    expect(region.querySelector(".todoist-bases-project-overview-header")).toBeVisible();
+    expect(within(region).getByRole("group", { name: "Project completion totals" })).toBeVisible();
+    expect(within(region).getByRole("region", { name: "Completion activity" })).toBeVisible();
+    expect(onCollapsedChange).not.toHaveBeenCalled();
+  });
+
   it("does not expose a separate Project Sync status or hierarchy source", () => {
     renderOverview();
 

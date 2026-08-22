@@ -11,6 +11,7 @@ export type ProjectOverviewProps = {
   model: ProjectOverviewModel;
   scopeLabel: string;
   collapsed: boolean;
+  collapsible?: boolean;
   completionHeatmapRange: CompletionHeatmapRange;
   onCollapsedChange: (collapsed: boolean) => void;
   onCompletionHeatmapRangeChange: (range: CompletionHeatmapRange) => void;
@@ -26,6 +27,7 @@ export const ProjectOverview: React.FC<ProjectOverviewProps> = ({
   model,
   scopeLabel,
   collapsed,
+  collapsible = true,
   completionHeatmapRange,
   onCollapsedChange,
   onCompletionHeatmapRangeChange,
@@ -33,42 +35,55 @@ export const ProjectOverview: React.FC<ProjectOverviewProps> = ({
   const instanceId = useId();
   const headingId = `${instanceId}-heading`;
   const bodyId = `${instanceId}-body`;
+  const isCollapsed = collapsible && collapsed;
+  const headerContent = (
+    <>
+      <span className="todoist-bases-project-overview-header-leading">
+        {collapsible && (
+          <span aria-hidden="true" className="todoist-bases-project-overview-disclosure">
+            <ObsidianIcon
+              id={isCollapsed ? "lucide-chevron-right" : "lucide-chevron-down"}
+              size="xs"
+            />
+          </span>
+        )}
+        <span className="todoist-bases-project-overview-title-group">
+          <span className="todoist-bases-project-overview-title" id={headingId}>
+            Project overview
+          </span>
+          <span className="todoist-bases-project-overview-scope" title={scopeLabel}>
+            {scopeLabel}
+          </span>
+        </span>
+      </span>
+      <span className="todoist-bases-project-overview-header-summary">
+        {projectSummaryLabel(model)}
+      </span>
+    </>
+  );
 
   return (
     <section
       aria-labelledby={headingId}
       className="todoist-bases-project-overview"
-      data-collapsed={collapsed || undefined}
+      data-collapsed={isCollapsed || undefined}
+      data-collapsible={collapsible}
     >
-      <button
-        aria-controls={bodyId}
-        aria-expanded={!collapsed}
-        className="todoist-bases-project-overview-toggle"
-        onClick={() => onCollapsedChange(!collapsed)}
-        type="button"
-      >
-        <span className="todoist-bases-project-overview-header-leading">
-          <span aria-hidden="true" className="todoist-bases-project-overview-disclosure">
-            <ObsidianIcon
-              id={collapsed ? "lucide-chevron-right" : "lucide-chevron-down"}
-              size="xs"
-            />
-          </span>
-          <span className="todoist-bases-project-overview-title-group">
-            <span className="todoist-bases-project-overview-title" id={headingId}>
-              Project overview
-            </span>
-            <span className="todoist-bases-project-overview-scope" title={scopeLabel}>
-              {scopeLabel}
-            </span>
-          </span>
-        </span>
-        <span className="todoist-bases-project-overview-header-summary">
-          {projectSummaryLabel(model)}
-        </span>
-      </button>
+      {collapsible ? (
+        <button
+          aria-controls={bodyId}
+          aria-expanded={!isCollapsed}
+          className="todoist-bases-project-overview-toggle"
+          onClick={() => onCollapsedChange(!isCollapsed)}
+          type="button"
+        >
+          {headerContent}
+        </button>
+      ) : (
+        <header className="todoist-bases-project-overview-header">{headerContent}</header>
+      )}
 
-      <div className="todoist-bases-project-overview-content" hidden={collapsed} id={bodyId}>
+      <div className="todoist-bases-project-overview-content" hidden={isCollapsed} id={bodyId}>
         <ProjectOverviewBody
           completionHeatmapRange={completionHeatmapRange}
           model={model}

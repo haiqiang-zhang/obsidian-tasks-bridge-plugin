@@ -189,6 +189,7 @@ export class TasksListView extends BasesView implements HoverParent {
     this.reactRoot.render(
       <TodoistList
         actions={this.actions}
+        layoutContainerEl={this.containerEl}
         model={model}
         navigation={navigation}
         onProjectOverviewCollapsedChange={(collapsed) =>

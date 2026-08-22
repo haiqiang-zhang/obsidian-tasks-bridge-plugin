@@ -41,12 +41,19 @@ describe("Tasks List styles", () => {
     const css = compileStyles();
     const list = ruleBody(css, ".todoist-bases-list");
     const disclosure = ruleBody(css, ".todoist-bases-disclosure");
+    const overviewDisclosure = ruleBody(css, ".todoist-bases-project-overview-disclosure");
 
     expect(list).toContain("--todoist-bases-disclosure-size: var(--size-4-6)");
     expect(disclosure).toContain("width: var(--todoist-bases-disclosure-size)");
     expect(disclosure).toContain("min-height: var(--todoist-bases-disclosure-size)");
+    expect(overviewDisclosure).toContain("width: var(--todoist-bases-disclosure-size)");
+    expect(overviewDisclosure).toContain("height: var(--todoist-bases-disclosure-size)");
+    expect(overviewDisclosure).toContain("flex: 0 0 var(--todoist-bases-disclosure-size)");
     expect(css).toContain("@media (pointer: coarse)");
     expect(css).toContain("--todoist-bases-disclosure-size: 44px");
+    expect(css).toMatch(
+      /padding-inline-start:\s*calc\(var\(--todoist-bases-disclosure-size\) \+ var\(--size-4-2\)\)/,
+    );
     expect(disclosure).not.toContain("background");
     expect(disclosure).not.toContain("box-shadow");
   });
@@ -82,19 +89,154 @@ describe("Tasks List styles", () => {
     expect(css).not.toContain('[data-loading="true"] .todoist-bases-task-checkbox');
   });
 
+  it("aligns the project tree with the overview while preserving hierarchy indentation", () => {
+    const css = compileStyles();
+    const container = ruleBody(css, ".todoist-bases-list-container");
+    const content = ruleBody(css, ".todoist-bases-list-content");
+    const tree = ruleBody(css, ".todoist-bases-list-tree");
+    const leading = ruleBody(css, ".todoist-bases-project-leading");
+    const projectIconWithoutDisclosure = ruleBody(
+      css,
+      ".todoist-bases-project-row:not([data-has-task-content]) .todoist-bases-project-icon",
+    );
+    const projectIcon = ruleBody(css, "\n.todoist-bases-project-icon");
+    const rows = ruleBody(
+      css,
+      ".todoist-bases-project-row,\n.todoist-bases-section-row,\n.todoist-bases-task-row",
+    );
+
+    expect(container).toContain("container: todoist-bases-list/inline-size");
+    expect(content).toContain("inline-size: 100%");
+    expect(content).toContain(
+      "border: var(--bases-table-container-border-width, 1px) solid var(--background-modifier-border)",
+    );
+    expect(content).not.toContain("max-inline-size");
+    expect(content).not.toContain("box-shadow");
+    expect(tree).not.toContain("margin-inline");
+    expect(leading).toContain("min-height: var(--todoist-bases-disclosure-size)");
+    expect(leading).toContain(
+      "padding-inline-start: calc(var(--todoist-bases-depth) * var(--todoist-bases-indent))",
+    );
+    expect(projectIconWithoutDisclosure).toContain("width: var(--todoist-bases-disclosure-size)");
+    expect(projectIconWithoutDisclosure).toContain("height: var(--todoist-bases-disclosure-size)");
+    expect(projectIcon).toContain("justify-content: center");
+    expect(rows).toContain(
+      "border-block-end: var(--bases-table-row-border-width, 1px) solid var(--bases-table-border-color, var(--background-modifier-border))",
+    );
+    expect(css).toMatch(
+      /@container todoist-bases-list \(max-width: 760px\)[\s\S]*?\.todoist-bases-project-statistics \{[\s\S]*?margin-inline-start: calc\(var\(--todoist-bases-depth\) \* var\(--todoist-bases-indent\) \+ var\(--todoist-bases-project-label-offset\)\)/,
+    );
+    expect(css).toMatch(
+      /@container todoist-bases-list \(max-width: 760px\)[\s\S]*?\.todoist-bases-project-statistics \{[\s\S]*?justify-self: stretch/,
+    );
+    expect(css).toMatch(
+      /@container todoist-bases-list \(max-width: 460px\)[\s\S]*?\.todoist-bases-project-statistics:not\(\[data-empty=true\]\) \{\s*grid-template-columns: minmax\(0, 1fr\) auto/,
+    );
+    expect(css).toMatch(
+      /@container todoist-bases-list \(min-width: 1200px\)[\s\S]*?\.todoist-bases-list-content \{[\s\S]*?grid-template-columns: minmax\(20rem, 24rem\) minmax\(0, 1fr\)/,
+    );
+    expect(css).not.toContain("@media (max-width");
+  });
+
+  it("uses a shadowless Overview card only in the wide split layout", () => {
+    const css = compileStyles();
+    const content = ruleBody(css, ".todoist-bases-list-content");
+    const main = ruleBody(css, ".todoist-bases-list-main");
+    const overview = ruleBody(css, ".todoist-bases-project-overview");
+    const overviewContent = ruleBody(css, ".todoist-bases-project-overview-content");
+    const sharedHeader = ruleBody(
+      css,
+      ".todoist-bases-project-overview-toggle,\n.todoist-bases-project-overview-header",
+    );
+    const wideStart = css.indexOf("@container todoist-bases-list (min-width: 1200px)");
+    const wideEnd = css.indexOf("@container todoist-bases-list (max-width: 600px)", wideStart);
+    expect(wideStart).toBeGreaterThanOrEqual(0);
+    expect(wideEnd).toBeGreaterThan(wideStart);
+    const wideCss = css.slice(wideStart, wideEnd);
+    const wideContent = ruleBody(wideCss, ".todoist-bases-list-content");
+    const wideOverview = ruleBody(wideCss, ".todoist-bases-project-overview");
+    const wideOverviewContent = ruleBody(wideCss, ".todoist-bases-project-overview-content");
+    const wideBody = ruleBody(wideCss, ".todoist-bases-project-overview-body");
+    const widePercentage = ruleBody(wideCss, ".todoist-bases-project-overview-percentage");
+    const wideMetric = ruleBody(wideCss, ".todoist-bases-project-overview-metric");
+    const wideLastMetric = ruleBody(wideCss, ".todoist-bases-project-overview-metric:last-child");
+    const wideHeatmap = ruleBody(
+      wideCss,
+      ".todoist-bases-project-overview .tasks-bridge-completion-heatmap",
+    );
+
+    expect(content).toContain("background: var(--background-primary)");
+    expect(content).toContain("overflow: hidden");
+    expect(content).toContain(
+      "border: var(--bases-table-container-border-width, 1px) solid var(--background-modifier-border)",
+    );
+    expect(content).toContain(
+      "border-radius: var(--bases-table-container-border-radius, var(--radius-m))",
+    );
+    expect(main).toContain("background: var(--background-primary)");
+    expect(overview).toContain("background: var(--background-primary)");
+    expect(overview).toContain("border-bottom: 1px solid var(--background-modifier-border)");
+    expect(overview).not.toContain("border-radius");
+    expect(overviewContent).toContain("background: var(--background-primary)");
+    expect(css).not.toContain("background: var(--background-primary-alt)");
+    expect(sharedHeader).toContain("padding-inline: var(--size-4-2)");
+    expect(css).not.toContain(".todoist-bases-project-overview-header:hover");
+    expect(css).not.toContain(
+      ".todoist-bases-project-overview-header .todoist-bases-project-overview-header-summary",
+    );
+    expect(wideContent).toContain("align-items: start");
+    expect(wideContent).toContain("overflow: visible");
+    expect(wideContent).toContain("border: 0");
+    expect(wideContent).toContain("border-radius: 0");
+    expect(wideContent).toContain("background: transparent");
+    expect(wideContent).toContain("grid-template-columns: minmax(20rem, 24rem) minmax(0, 1fr)");
+    expect(wideContent).toContain("column-gap: var(--size-4-4)");
+    expect(wideContent).not.toContain("border-inline-end");
+    expect(wideOverview).toContain("align-self: start");
+    expect(wideOverview).toContain(
+      "border: var(--bases-cards-border-width, var(--border-width)) solid var(--background-modifier-border)",
+    );
+    expect(wideOverview).toContain("border-radius: var(--radius-l)");
+    expect(wideOverview).toContain("background: var(--background-primary)");
+    expect(wideOverview).toContain("box-shadow: none");
+    expect(wideOverviewContent).toContain("border-block-start: 0");
+    expect(wideOverviewContent).toContain("background: transparent");
+    expect(wideBody).toContain("padding: 0 var(--size-4-3) var(--size-4-3)");
+    expect(widePercentage).toContain("padding: 0");
+    expect(widePercentage).toContain("border: 0");
+    expect(widePercentage).toContain("border-radius: 0");
+    expect(widePercentage).toContain("background: transparent");
+    expect(wideMetric).toContain("border: 0");
+    expect(wideLastMetric).toContain("grid-column: 1/-1");
+    expect(wideHeatmap).toContain("padding: 0");
+    expect(wideHeatmap).toContain("border: 0");
+    expect(wideHeatmap).toContain("border-radius: 0");
+    expect(wideHeatmap).toContain("background: transparent");
+    expect(css).toMatch(
+      /@container todoist-bases-list \(min-width: 1200px\)[\s\S]*?\.todoist-bases-project-overview-toggle,\s*\.todoist-bases-project-overview-header \{[\s\S]*?padding: var\(--size-4-3\)/,
+    );
+  });
+
   it("lays out project statistics responsively with native progress styling", () => {
     const css = compileStyles();
     const row = ruleBody(css, ".todoist-bases-project-row");
     const statistics = ruleBody(css, ".todoist-bases-project-statistics");
     const progress = ruleBody(css, ".todoist-bases-project-progress");
 
-    expect(row).toContain("minmax(15rem, 38%)");
-    expect(statistics).toContain("grid-template-columns: minmax(9.5rem, auto) minmax(5rem, 1fr)");
+    expect(row).toContain("grid-template-columns: minmax(0, 1fr) minmax(18rem, 20rem)");
+    expect(statistics).toContain("max-width: 20rem");
+    expect(statistics).toContain(
+      "grid-template-columns: minmax(4.5rem, auto) minmax(5rem, 10rem) 4ch",
+    );
     expect(statistics).not.toContain("font-family");
     expect(progress).toContain("appearance: none");
     expect(progress).toContain("background: var(--background-modifier-border)");
     expect(css).toContain("background: var(--interactive-accent)");
     expect(css).toContain("@container todoist-bases-list (max-width: 760px)");
+    expect(css).toContain("@container todoist-bases-list (max-width: 460px)");
+    expect(css).toMatch(
+      /\.todoist-bases-project-statistics:not\(\[data-empty=true\]\) \.todoist-bases-project-progress \{[\s\S]*?grid-column: 1\/-1;[\s\S]*?grid-row: 2/,
+    );
     expect(statistics).not.toContain("box-shadow");
     expect(progress).not.toContain("box-shadow");
   });

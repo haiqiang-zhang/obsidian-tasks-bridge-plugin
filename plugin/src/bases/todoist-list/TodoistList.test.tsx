@@ -1,5 +1,5 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { afterEach, describe, expect, it, type Mock, vi } from "vitest";
 
 import { todoistListProjectScopeKey } from "./model";
 import { TodoistList } from "./TodoistList";
@@ -16,6 +16,8 @@ import type {
 
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   vi.useRealTimers();
 });
 
@@ -186,7 +188,10 @@ const renderList = (
       rootProjectId={currentRootProjectId}
     />
   );
-  const rendered = render(makeElement(model));
+  const layoutContainerEl = document.createElement("div");
+  layoutContainerEl.className = "todoist-bases-list-container";
+  document.body.append(layoutContainerEl);
+  const rendered = render(makeElement(model), { container: layoutContainerEl });
   if (expandProjectTasks && model.taskCount > 0) {
     fireEvent.click(screen.getByRole("button", { name: "Expand all project tasks" }));
   }
@@ -211,6 +216,16 @@ describe("TodoistList", () => {
   it("keeps the content toolbar focused on counts and tree controls", () => {
     renderList(makeModel(makeProject("root", "Root", [makeTask("root-task")])), makeActions());
 
+    const content = document.querySelector<HTMLElement>(".todoist-bases-list-content");
+    const main = document.querySelector<HTMLElement>(".todoist-bases-list-main");
+    expect(content).toContainElement(screen.getByRole("region", { name: "Project overview" }));
+    expect(content).toContainElement(main);
+    expect(main).toContainElement(
+      screen.getByText("Root", { selector: ".todoist-bases-project-name" }),
+    );
+    expect(content).toContainElement(
+      screen.getByText("Root", { selector: ".todoist-bases-project-name" }),
+    );
     expect(screen.queryByRole("button", { name: /^Root:/ })).not.toBeInTheDocument();
     expect(
       screen.getByText("Current Base result", {
@@ -251,7 +266,12 @@ describe("TodoistList", () => {
     const rootRow = screen
       .getByText("Root", { selector: ".todoist-bases-project-name" })
       .closest(".todoist-bases-project-row");
-    expect(rootRow).toHaveTextContent("0 / 1 completed·0%");
+    expect(rootRow?.querySelector(".todoist-bases-project-statistics-count")).toHaveTextContent(
+      "0 / 1",
+    );
+    expect(
+      rootRow?.querySelector(".todoist-bases-project-statistics-percentage"),
+    ).toHaveTextContent("0%");
     expect(screen.getByRole("progressbar", { name: "Root completion" })).toHaveAttribute(
       "value",
       "0",
@@ -308,6 +328,96 @@ describe("TodoistList", () => {
 
     rerenderList(model, contextProjects, true, "root");
     expect(toggle).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("keeps the wide sidebar expanded without overwriting the saved narrow state", () => {
+    let layoutWidth = 1280;
+    const observerRecords: Array<{
+      callback: ResizeObserverCallback;
+      disconnect: Mock<() => void>;
+      targets: Element[];
+    }> = [];
+    class MockResizeObserver {
+      private readonly record: (typeof observerRecords)[number];
+
+      public constructor(callback: ResizeObserverCallback) {
+        this.record = { callback, disconnect: vi.fn(), targets: [] };
+        observerRecords.push(this.record);
+      }
+
+      public observe(element: Element): void {
+        this.record.targets.push(element);
+      }
+
+      public disconnect(): void {
+        this.record.disconnect();
+      }
+
+      public unobserve(): void {}
+    }
+    vi.stubGlobal("ResizeObserver", MockResizeObserver);
+    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(function (
+      this: HTMLElement,
+    ) {
+      return this.classList.contains("todoist-bases-list-container") ? layoutWidth : 0;
+    });
+
+    const onProjectOverviewCollapsedChange = vi.fn();
+    const model = makeModel(makeProject("root", "Root", [makeTask("root-task")]));
+    const { unmount } = renderList(
+      model,
+      makeActions(),
+      makeNavigation(),
+      "root",
+      [makeProjectOption("root", "Root")],
+      true,
+      onProjectOverviewCollapsedChange,
+    );
+
+    const list = document.querySelector<HTMLElement>(".todoist-bases-list");
+    const overview = screen.getByRole("region", { name: "Project overview" });
+    const layoutObserver = observerRecords.find((record) =>
+      record.targets.some((target) => target.classList.contains("todoist-bases-list-container")),
+    );
+    expect(layoutObserver).toBeDefined();
+    expect(list).toHaveAttribute("data-layout", "wide");
+    expect(within(overview).queryByRole("button", { name: /Project overview/ })).toBeNull();
+    expect(
+      within(overview).getByRole("group", { name: "Project completion totals" }),
+    ).toBeVisible();
+
+    const resizeLayout = (width: number) => {
+      layoutWidth = width;
+      const target = layoutObserver?.targets[0];
+      if (target === undefined) {
+        throw new Error("The layout container was not observed.");
+      }
+      act(() =>
+        layoutObserver?.callback(
+          [{ contentRect: { width } as DOMRectReadOnly, target } as ResizeObserverEntry],
+          {} as ResizeObserver,
+        ),
+      );
+    };
+
+    resizeLayout(900);
+    const narrowToggle = within(overview).getByRole("button", { name: /Project overview/ });
+    expect(list).not.toHaveAttribute("data-layout");
+    expect(narrowToggle).toHaveAttribute("aria-expanded", "false");
+    expect(
+      document.getElementById(narrowToggle.getAttribute("aria-controls") ?? ""),
+    ).not.toBeVisible();
+
+    resizeLayout(1280);
+    expect(list).toHaveAttribute("data-layout", "wide");
+    expect(within(overview).queryByRole("button", { name: /Project overview/ })).toBeNull();
+    expect(
+      within(overview).getByRole("group", { name: "Project completion totals" }),
+    ).toBeVisible();
+    expect(onProjectOverviewCollapsedChange).not.toHaveBeenCalled();
+
+    unmount();
+    expect(layoutObserver?.disconnect).toHaveBeenCalledOnce();
   });
 
   it("does not change Project Overview totals from a newer context snapshot", () => {
@@ -472,8 +582,27 @@ describe("TodoistList", () => {
     renderList(makeModel(root), makeActions(), makeNavigation(), null, null, false, vi.fn(), false);
 
     expect(screen.getByText("Child", { selector: ".todoist-bases-project-name" })).toBeVisible();
-    expect(screen.getByRole("button", { name: "Show tasks in project Root" })).toBeDisabled();
+    expect(
+      screen.queryByRole("button", { name: "Show tasks in project Root" }),
+    ).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Show tasks in project Child" })).toBeEnabled();
+
+    const rootRow = screen
+      .getByText("Root", { selector: ".todoist-bases-project-name" })
+      .closest(".todoist-bases-project-row");
+    const childRow = screen
+      .getByText("Child", { selector: ".todoist-bases-project-name" })
+      .closest(".todoist-bases-project-row");
+    expect(rootRow).not.toHaveAttribute("data-has-task-content");
+    expect(childRow).toHaveAttribute("data-has-task-content", "true");
+    expect(rootRow).toHaveAttribute("data-project-depth", "0");
+    expect(childRow).toHaveAttribute("data-project-depth", "1");
+    expect(rootRow?.querySelector(".todoist-bases-project-leading")).toContainElement(
+      rootRow?.querySelector(".todoist-bases-project-icon") ?? null,
+    );
+    expect(childRow?.querySelector(".todoist-bases-project-leading")).toContainElement(
+      screen.getByRole("button", { name: "Show tasks in project Child" }),
+    );
   });
 
   it("shows an empty project statistic without exposing a misleading progress value", () => {
@@ -484,7 +613,7 @@ describe("TodoistList", () => {
       .getByText("Empty", { selector: ".todoist-bases-project-name" })
       .closest(".todoist-bases-project-row");
     expect(row).toHaveTextContent("No tasks");
-    expect(row?.querySelector(".todoist-bases-project-progress")).toBeInTheDocument();
+    expect(row?.querySelector(".todoist-bases-project-progress")).not.toBeInTheDocument();
     expect(screen.queryByRole("progressbar", { name: "Empty completion" })).not.toBeInTheDocument();
   });
 
@@ -511,7 +640,12 @@ describe("TodoistList", () => {
     const row = screen
       .getByText("Root", { selector: ".todoist-bases-project-name" })
       .closest(".todoist-bases-project-row");
-    expect(row).toHaveTextContent("1 / 2 completed·50%·1 unavailable");
+    expect(row?.querySelector(".todoist-bases-project-statistics-count")).toHaveTextContent(
+      "1 / 2·1 unavailable",
+    );
+    expect(row?.querySelector(".todoist-bases-project-statistics-percentage")).toHaveTextContent(
+      "50%",
+    );
     const progress = screen.getByRole("progressbar", {
       name: "Root completion, 1 unavailable task",
     });

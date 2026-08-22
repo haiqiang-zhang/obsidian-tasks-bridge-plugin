@@ -53,8 +53,10 @@
   margin-inline-start: auto;
 }
 
-.todoist-bases-project-overview {
-  margin: var(--size-4-3) var(--size-4-2);
+.todoist-bases-list-content {
+  box-sizing: border-box;
+  inline-size: 100%;
+  margin-block-start: var(--size-4-3);
   overflow: hidden;
   border: var(--bases-table-container-border-width, 1px) solid
     var(--background-modifier-border);
@@ -62,7 +64,20 @@
   background: var(--background-primary);
 }
 
-.todoist-bases-project-overview-toggle {
+.todoist-bases-list-main {
+  min-width: 0;
+  background: var(--background-primary);
+}
+
+.todoist-bases-project-overview {
+  overflow: hidden;
+  border-bottom: 1px solid var(--background-modifier-border);
+  background: var(--background-primary);
+}
+
+.todoist-bases-project-overview-toggle,
+.todoist-bases-project-overview-header {
+  box-sizing: border-box;
   display: grid;
   width: 100%;
   height: var(--bases-header-height, 44px);
@@ -70,16 +85,19 @@
   align-items: center;
   padding-block: 0;
   padding-inline: var(--size-4-2);
-  border: 0;
-  border-radius: inherit;
   background: transparent;
-  box-shadow: none;
   color: var(--text-normal);
   font-family: var(--font-interface);
   line-height: var(--line-height-tight);
   text-align: start;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr) auto;
   column-gap: var(--size-4-4);
+}
+
+.todoist-bases-project-overview-toggle {
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
 
   &:hover {
     background: var(--background-modifier-hover);
@@ -102,9 +120,9 @@
 
 .todoist-bases-project-overview-disclosure {
   display: inline-flex;
-  width: var(--size-4-6);
-  height: var(--size-4-6);
-  flex: 0 0 var(--size-4-6);
+  width: var(--todoist-bases-disclosure-size);
+  height: var(--todoist-bases-disclosure-size);
+  flex: 0 0 var(--todoist-bases-disclosure-size);
   align-items: center;
   justify-content: center;
   color: var(--text-muted);
@@ -148,7 +166,7 @@
 
 .todoist-bases-project-overview-content {
   border-top: 1px solid var(--background-modifier-border);
-  background: var(--background-primary-alt);
+  background: var(--background-primary);
 
   &[hidden] {
     display: none;
@@ -288,6 +306,7 @@
 
 .todoist-bases-list-groups {
   min-width: 0;
+  padding-block: var(--size-2-2);
 }
 
 .todoist-bases-list-group + .todoist-bases-list-group {
@@ -326,9 +345,8 @@
 .todoist-bases-project-row,
 .todoist-bases-section-row,
 .todoist-bases-task-row {
-  padding-inline-start: calc(
-    var(--size-4-1) + var(--todoist-bases-depth) * var(--todoist-bases-indent)
-  );
+  border-block-end: var(--bases-table-row-border-width, 1px) solid
+    var(--bases-table-border-color, var(--background-modifier-border));
   border-radius: var(--radius-s);
 
   &:hover,
@@ -337,19 +355,46 @@
   }
 }
 
+.todoist-bases-section-row,
+.todoist-bases-task-row {
+  padding-inline-start: calc(
+    var(--size-4-2) + var(--todoist-bases-depth) * var(--todoist-bases-indent)
+  );
+}
+
 .todoist-bases-project-row {
   display: grid;
   min-height: var(--bases-table-row-height, var(--size-4-10));
   align-items: center;
   padding-block: var(--todoist-bases-row-padding);
-  padding-inline-end: var(--size-4-2);
-  grid-template-columns:
-    var(--todoist-bases-disclosure-size) var(--size-4-5) minmax(8rem, 1fr)
-    minmax(15rem, 38%);
+  padding-inline: var(--size-4-2);
+  grid-template-columns: minmax(0, 1fr) minmax(18rem, 20rem);
+  column-gap: var(--size-4-4);
+}
+
+.todoist-bases-project-leading {
+  display: flex;
+  min-width: 0;
+  min-height: var(--todoist-bases-disclosure-size);
+  align-items: center;
+  padding-inline-start: calc(
+    var(--todoist-bases-depth) * var(--todoist-bases-indent)
+  );
   gap: var(--size-4-2);
 }
 
+.todoist-bases-project-row:not([data-has-task-content])
+  .todoist-bases-project-icon {
+  width: var(--todoist-bases-disclosure-size);
+  height: var(--todoist-bases-disclosure-size);
+  flex-basis: var(--todoist-bases-disclosure-size);
+}
+
 .todoist-bases-project-icon {
+  width: var(--size-4-5);
+  height: var(--size-4-5);
+  flex: 0 0 var(--size-4-5);
+  justify-content: center;
   color: var(--text-muted);
 }
 
@@ -363,9 +408,13 @@
 .todoist-bases-project-name {
   overflow: hidden;
   min-width: 0;
-  font-weight: var(--font-medium);
+  font-weight: var(--font-normal);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.todoist-bases-project-row[data-project-depth="0"] .todoist-bases-project-name {
+  font-weight: var(--font-medium);
 }
 
 .todoist-bases-section-count {
@@ -379,31 +428,40 @@
 .todoist-bases-project-statistics {
   display: grid;
   min-width: 0;
+  width: 100%;
+  max-width: 20rem;
   align-items: center;
-  grid-template-columns: minmax(9.5rem, auto) minmax(5rem, 1fr);
-  gap: var(--size-4-3);
+  justify-self: end;
+  grid-template-columns: minmax(4.5rem, auto) minmax(5rem, 10rem) 4ch;
+  gap: var(--size-4-2);
   color: var(--text-muted);
   font-size: var(--font-ui-smaller);
   font-variant-numeric: tabular-nums;
   font-weight: var(--font-normal);
 
   &[data-empty="true"] {
+    grid-template-columns: minmax(0, 1fr);
     color: var(--text-faint);
   }
 }
 
+.todoist-bases-project-statistics-count,
 .todoist-bases-project-statistics-label {
   display: inline-flex;
   min-width: 0;
   align-items: baseline;
-  justify-content: flex-end;
   gap: var(--size-2-2);
   white-space: nowrap;
+}
 
-  strong {
-    color: var(--text-normal);
-    font-weight: var(--font-medium);
-  }
+.todoist-bases-project-statistics-label {
+  justify-content: flex-end;
+}
+
+.todoist-bases-project-statistics-percentage {
+  justify-self: end;
+  color: var(--text-normal);
+  font-weight: var(--font-medium);
 }
 
 .todoist-bases-project-statistics-separator {
@@ -687,16 +745,98 @@
   }
 }
 
-@media (hover: none), (max-width: 600px) {
-  .todoist-bases-task-actions {
-    opacity: 1;
+@container todoist-bases-list (min-width: 1200px) {
+  .todoist-bases-list-content {
+    display: grid;
+    align-items: start;
+    overflow: visible;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    grid-template-columns: minmax(20rem, 24rem) minmax(0, 1fr);
+    column-gap: var(--size-4-4);
+  }
+
+  .todoist-bases-project-overview {
+    box-sizing: border-box;
+    min-width: 0;
+    align-self: start;
+    border: var(--bases-cards-border-width, var(--border-width)) solid
+      var(--background-modifier-border);
+    border-radius: var(--radius-l);
+    background: var(--background-primary);
+    box-shadow: none;
+  }
+
+  .todoist-bases-project-overview-toggle,
+  .todoist-bases-project-overview-header {
+    height: auto;
+    min-height: var(--bases-header-height, 44px);
+    align-content: start;
+    padding: var(--size-4-3);
+    grid-template-columns: minmax(0, 1fr);
+    row-gap: var(--size-4-2);
+  }
+
+  .todoist-bases-project-overview-header-leading {
+    align-items: flex-start;
+  }
+
+  .todoist-bases-project-overview-title-group {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: var(--size-2-2);
+  }
+
+  .todoist-bases-project-overview-header-summary {
+    justify-self: start;
+    white-space: normal;
+  }
+
+  .todoist-bases-project-overview-content {
+    border-block-start: 0;
+    background: transparent;
+  }
+
+  .todoist-bases-project-overview-toggle
+    .todoist-bases-project-overview-header-summary {
+    padding-inline-start: calc(
+      var(--todoist-bases-disclosure-size) + var(--size-4-2)
+    );
+  }
+
+  .todoist-bases-project-overview-body {
+    padding: 0 var(--size-4-3) var(--size-4-3);
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--size-4-3);
+  }
+
+  .todoist-bases-project-overview-percentage {
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+  }
+
+  .todoist-bases-project-overview-metric {
+    border: 0;
+  }
+
+  .todoist-bases-project-overview-metric:last-child {
+    grid-column: 1 / -1;
+  }
+
+  .todoist-bases-project-overview .tasks-bridge-completion-heatmap {
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
   }
 }
 
-@media (max-width: 600px) {
-  .todoist-bases-list-toolbar-summary {
-    flex-wrap: wrap;
-    white-space: normal;
+@container todoist-bases-list (max-width: 600px) {
+  .todoist-bases-task-actions {
+    opacity: 1;
   }
 }
 
@@ -719,29 +859,53 @@
     row-gap: var(--size-2-2);
   }
 
-  .todoist-bases-project-overview-header-summary {
-    padding-inline-start: calc(var(--size-4-6) + var(--size-4-2));
+  .todoist-bases-project-overview-toggle
+    .todoist-bases-project-overview-header-summary {
+    padding-inline-start: calc(
+      var(--todoist-bases-disclosure-size) + var(--size-4-2)
+    );
     justify-self: start;
   }
 
   .todoist-bases-project-row {
-    grid-template-columns:
-      var(--todoist-bases-disclosure-size) var(--size-4-5) minmax(0, 1fr);
+    --todoist-bases-project-label-offset: calc(
+      var(--todoist-bases-disclosure-size) + var(--size-4-2)
+    );
+
+    grid-template-columns: minmax(0, 1fr);
+    row-gap: var(--size-2-1);
+  }
+
+  .todoist-bases-project-row[data-has-task-content] {
+    --todoist-bases-project-label-offset: calc(
+      var(--todoist-bases-disclosure-size) + var(--size-4-2) + var(--size-4-5) +
+        var(--size-4-2)
+    );
   }
 
   .todoist-bases-project-statistics {
-    grid-column: 3;
-    grid-template-columns: minmax(0, 1fr);
-    gap: var(--size-2-2);
+    width: auto;
+    max-width: none;
+    margin-inline-start: calc(
+      var(--todoist-bases-depth) * var(--todoist-bases-indent) +
+        var(--todoist-bases-project-label-offset)
+    );
+    justify-self: stretch;
+    grid-template-columns: minmax(4.5rem, auto) minmax(5rem, 1fr) 4ch;
+    gap: var(--size-4-2);
   }
 
   .todoist-bases-project-statistics-label {
     justify-content: flex-start;
   }
-
 }
 
 @container todoist-bases-list (max-width: 460px) {
+  .todoist-bases-list-content {
+    inline-size: 100%;
+    margin-block-start: var(--size-4-2);
+  }
+
   .todoist-bases-project-overview-toggle {
     padding: var(--size-4-2);
   }
@@ -771,6 +935,29 @@
 
   .todoist-bases-project-overview-percentage {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .todoist-bases-project-statistics:not([data-empty="true"]) {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .todoist-bases-project-statistics-count {
+    overflow: hidden;
+    grid-column: 1;
+    grid-row: 1;
+    text-overflow: ellipsis;
+  }
+
+  .todoist-bases-project-statistics-percentage {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .todoist-bases-project-statistics:not([data-empty="true"])
+    .todoist-bases-project-progress {
+    max-width: none;
+    grid-column: 1 / -1;
+    grid-row: 2;
   }
 }
 

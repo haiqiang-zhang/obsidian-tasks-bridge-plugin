@@ -4,6 +4,7 @@ import {
   type MouseEvent as ReactMouseEvent,
   useEffect,
   useId,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -33,6 +34,7 @@ import type {
 
 const readinessRefreshIntervalMs = 1000;
 const percentageScale = 100;
+const wideLayoutMinimumWidthPx = 1200;
 
 export type TodoistListProps = {
   model: TodoistListModel;
@@ -41,6 +43,7 @@ export type TodoistListProps = {
   actions: TodoistListActions;
   navigation: TodoistListNavigation;
   rootProjectOptions: readonly TodoistListProjectOption[];
+  layoutContainerEl?: HTMLElement;
   projectOverviewCollapsed: boolean;
   completionHeatmapRange: CompletionHeatmapRange;
   onProjectOverviewCollapsedChange: (collapsed: boolean) => void;
@@ -54,6 +57,7 @@ export const TodoistList: React.FC<TodoistListProps> = ({
   actions,
   navigation,
   rootProjectOptions,
+  layoutContainerEl,
   projectOverviewCollapsed,
   completionHeatmapRange,
   onProjectOverviewCollapsedChange,
@@ -65,6 +69,7 @@ export const TodoistList: React.FC<TodoistListProps> = ({
   const [overviewCollapsed, setOverviewCollapsed] = useState(projectOverviewCollapsed);
   const [heatmapRange, setHeatmapRange] = useState(completionHeatmapRange);
   const [ready, setReady] = useState(() => readReady(actions));
+  const wideLayout = useWideLayout(listRef, layoutContainerEl);
 
   useEffect(() => setOverviewCollapsed(projectOverviewCollapsed), [projectOverviewCollapsed]);
   useEffect(() => setHeatmapRange(completionHeatmapRange), [completionHeatmapRange]);
@@ -152,7 +157,12 @@ export const TodoistList: React.FC<TodoistListProps> = ({
   const diagnosticsMessage = makeDiagnosticsMessage(model);
 
   return (
-    <div className="todoist-bases-list" data-density={options.density} ref={listRef}>
+    <div
+      className="todoist-bases-list"
+      data-density={options.density}
+      data-layout={wideLayout ? "wide" : undefined}
+      ref={listRef}
+    >
       <div className="todoist-bases-list-toolbar">
         <output
           className="todoist-bases-list-toolbar-summary"
@@ -192,63 +202,112 @@ export const TodoistList: React.FC<TodoistListProps> = ({
         </div>
       </div>
 
-      <ProjectOverview
-        collapsed={overviewCollapsed}
-        completionHeatmapRange={heatmapRange}
-        model={projectOverviewModel}
-        onCollapsedChange={changeOverviewCollapsed}
-        onCompletionHeatmapRangeChange={changeHeatmapRange}
-        scopeLabel={projectOverviewScopeLabel}
-      />
+      <div className="todoist-bases-list-content">
+        <ProjectOverview
+          collapsed={wideLayout ? false : overviewCollapsed}
+          collapsible={!wideLayout}
+          completionHeatmapRange={heatmapRange}
+          model={projectOverviewModel}
+          onCollapsedChange={changeOverviewCollapsed}
+          onCompletionHeatmapRangeChange={changeHeatmapRange}
+          scopeLabel={projectOverviewScopeLabel}
+        />
 
-      {!rootAvailable && (
-        <output className="todoist-bases-list-notice">
-          <ObsidianIcon id="lucide-circle-alert" size="s" />
-          <span>
-            The selected root project is no longer available. Open Configure view and choose another
-            Root project.
-          </span>
-        </output>
-      )}
+        <div className="todoist-bases-list-main">
+          {!rootAvailable && (
+            <output className="todoist-bases-list-notice">
+              <ObsidianIcon id="lucide-circle-alert" size="s" />
+              <span>
+                The selected root project is no longer available. Open Configure view and choose
+                another Root project.
+              </span>
+            </output>
+          )}
 
-      {diagnosticsMessage !== null && (
-        <output className="todoist-bases-list-notice">
-          <ObsidianIcon id="lucide-info" size="s" />
-          <span>{diagnosticsMessage}</span>
-        </output>
-      )}
+          {diagnosticsMessage !== null && (
+            <output className="todoist-bases-list-notice">
+              <ObsidianIcon id="lucide-info" size="s" />
+              <span>{diagnosticsMessage}</span>
+            </output>
+          )}
 
-      {!hasScopedProjects && model.taskCount === 0 && <EmptyState model={model} />}
-      {!hasScopedProjects && model.taskCount > 0 && scopedTaskCount === 0 && (
-        <div className="todoist-bases-list-empty">
-          <ObsidianIcon id="lucide-list-filter" size="xl" />
-          <strong>No tasks under this project match the Base filters.</strong>
-          <span>
-            Open Configure view to choose another Root project, or adjust the Base filters.
-          </span>
+          {!hasScopedProjects && model.taskCount === 0 && <EmptyState model={model} />}
+          {!hasScopedProjects && model.taskCount > 0 && scopedTaskCount === 0 && (
+            <div className="todoist-bases-list-empty">
+              <ObsidianIcon id="lucide-list-filter" size="xl" />
+              <strong>No tasks under this project match the Base filters.</strong>
+              <span>
+                Open Configure view to choose another Root project, or adjust the Base filters.
+              </span>
+            </div>
+          )}
+          {hasScopedProjects && (
+            <div className="todoist-bases-list-groups">
+              {scopedGroups.map((group) => (
+                <GroupBranch
+                  actions={actions}
+                  collapsed={collapsedBranches}
+                  expandedProjectTasks={expandedProjectTasks}
+                  group={group}
+                  key={group.key}
+                  navigation={navigation}
+                  options={options}
+                  ready={ready}
+                  rootIsSelected={rootProjectId !== null}
+                  toggleCollapsed={toggleCollapsed}
+                  toggleProjectTasks={toggleProjectTasks}
+                />
+              ))}
+            </div>
+          )}
         </div>
-      )}
-      {hasScopedProjects && (
-        <div className="todoist-bases-list-groups">
-          {scopedGroups.map((group) => (
-            <GroupBranch
-              actions={actions}
-              collapsed={collapsedBranches}
-              expandedProjectTasks={expandedProjectTasks}
-              group={group}
-              key={group.key}
-              navigation={navigation}
-              options={options}
-              ready={ready}
-              rootIsSelected={rootProjectId !== null}
-              toggleCollapsed={toggleCollapsed}
-              toggleProjectTasks={toggleProjectTasks}
-            />
-          ))}
-        </div>
-      )}
+      </div>
     </div>
   );
+};
+
+const useWideLayout = (
+  listRef: React.RefObject<HTMLDivElement | null>,
+  layoutContainerEl?: HTMLElement,
+): boolean => {
+  const [wideLayout, setWideLayout] = useState(false);
+
+  useLayoutEffect(() => {
+    const listElement = listRef.current;
+    if (listElement === null) {
+      return;
+    }
+
+    const containerElement =
+      layoutContainerEl ??
+      listElement.closest<HTMLElement>(".todoist-bases-list-container") ??
+      listElement;
+    const viewWindow = containerElement.ownerDocument.defaultView;
+    const updateWidth = (width = containerElement.clientWidth) => {
+      const nextWideLayout = width >= wideLayoutMinimumWidthPx;
+      setWideLayout((current) => (current === nextWideLayout ? current : nextWideLayout));
+    };
+
+    const updateFromLayout = () => updateWidth();
+    updateFromLayout();
+    const ResizeObserverConstructor = viewWindow?.ResizeObserver;
+    if (ResizeObserverConstructor === undefined) {
+      viewWindow?.addEventListener("resize", updateFromLayout);
+      return () => viewWindow?.removeEventListener("resize", updateFromLayout);
+    }
+
+    const resizeObserver = new ResizeObserverConstructor((entries) => {
+      const containerEntry = entries.find((entry) => entry.target === containerElement);
+      updateWidth(containerEntry?.contentRect.width);
+    });
+    resizeObserver.observe(containerElement);
+
+    return () => {
+      resizeObserver.disconnect();
+    };
+  }, [layoutContainerEl, listRef]);
+
+  return wideLayout;
 };
 
 type BranchProps = {
@@ -337,20 +396,30 @@ const ProjectBranch: React.FC<
       data-project-id={project.id}
       data-tasks-expanded={tasksExpanded || undefined}
     >
-      <div className="todoist-bases-project-row" style={indentationStyle(depth)}>
-        <DisclosureButton
-          collapsed={!tasksExpanded}
-          controlsId={taskContentId}
-          disabled={!hasOwnContent}
-          label={`${tasksExpanded ? "Hide" : "Show"} tasks in project ${project.name}`}
-          onClick={() => toggleProjectTasks(key)}
-        />
-        <ObsidianIcon className="todoist-bases-project-icon" id="lucide-folder" size="s" />
-        <span className="todoist-bases-project-main">
-          <span className="todoist-bases-project-name" title={project.pathNames.join(" / ")}>
-            {project.name}
+      <div
+        className="todoist-bases-project-row"
+        data-has-task-content={hasOwnContent || undefined}
+        data-project-depth={depth}
+        style={indentationStyle(depth)}
+      >
+        <span className="todoist-bases-project-leading">
+          {hasOwnContent && (
+            <DisclosureButton
+              collapsed={!tasksExpanded}
+              controlsId={taskContentId}
+              label={`${tasksExpanded ? "Hide" : "Show"} tasks in project ${project.name}`}
+              onClick={() => toggleProjectTasks(key)}
+            />
+          )}
+          <ObsidianIcon className="todoist-bases-project-icon" id="lucide-folder" size="s" />
+          <span className="todoist-bases-project-main">
+            <span className="todoist-bases-project-name" title={project.pathNames.join(" / ")}>
+              {project.name}
+            </span>
+            {rootIsSelected && depth === 0 && (
+              <span className="todoist-bases-root-badge">Root</span>
+            )}
           </span>
-          {rootIsSelected && depth === 0 && <span className="todoist-bases-root-badge">Root</span>}
         </span>
         <ProjectRowStatistics name={project.name} statistics={statistics} />
       </div>
@@ -482,7 +551,6 @@ const ProjectRowStatistics: React.FC<{
         <span className="todoist-bases-project-statistics-label">
           {hasUnavailable ? `${statistics.unavailable} unavailable` : "No tasks"}
         </span>
-        <span aria-hidden="true" className="todoist-bases-project-progress" />
       </span>
     );
   }
@@ -497,12 +565,10 @@ const ProjectRowStatistics: React.FC<{
       className="todoist-bases-project-statistics"
       title={`${name}: ${statistics.completed} of ${statistics.total} available tasks completed, ${percentage}%${unavailableLabel}, including child projects`}
     >
-      <span aria-hidden="true" className="todoist-bases-project-statistics-label">
+      <span aria-hidden="true" className="todoist-bases-project-statistics-count">
         <span>
-          {statistics.completed} / {statistics.total} completed
+          {statistics.completed} / {statistics.total}
         </span>
-        <span className="todoist-bases-project-statistics-separator">·</span>
-        <strong>{percentage}%</strong>
         {statistics.unavailable > 0 && (
           <>
             <span className="todoist-bases-project-statistics-separator">·</span>
@@ -516,6 +582,9 @@ const ProjectRowStatistics: React.FC<{
         max={statistics.total}
         value={statistics.completed}
       />
+      <strong aria-hidden="true" className="todoist-bases-project-statistics-percentage">
+        {percentage}%
+      </strong>
     </span>
   );
 };

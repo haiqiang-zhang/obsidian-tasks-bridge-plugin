@@ -295,6 +295,9 @@ describe("TasksListView", () => {
       projectContext: null,
     });
     const element = runtime.render.mock.calls[0]?.[0] as ReactElement<TodoistListProps>;
+    expect(element.props.layoutContainerEl).toBe(
+      parentEl.querySelector(".todoist-bases-list-container"),
+    );
     expect(element.props.options).toEqual({
       density: "compact",
       showDescriptions: false,
