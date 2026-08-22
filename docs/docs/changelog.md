@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### ✨ Improvements
+
+- Redesigned the Tasks List Project overview as a responsive, native-styled card in wide Base views while preserving the compact collapsible layout on narrower and mobile views.
+
 ## v2.10.3 (2026-08-19)
 
 ### 🐛 Bug Fixes
