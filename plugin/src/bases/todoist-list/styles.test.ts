@@ -272,14 +272,19 @@ describe("Tasks List styles", () => {
     expect(row).toContain("grid-template-columns: minmax(0, 1fr) minmax(18rem, 20rem)");
     expect(statistics).toContain("max-width: 20rem");
     expect(statistics).toContain(
-      "grid-template-columns: minmax(4.5rem, auto) minmax(5rem, 10rem) 4ch",
+      "grid-template-columns: minmax(4.5rem, auto) minmax(5rem, 10rem) minmax(5ch, max-content)",
     );
+    const percentage = ruleBody(css, ".todoist-bases-project-statistics-percentage");
+    expect(percentage).toContain("white-space: nowrap");
     expect(statistics).not.toContain("font-family");
     expect(progress).toContain("appearance: none");
     expect(progress).toContain("background: var(--background-modifier-border)");
     expect(css).toContain("background: var(--interactive-accent)");
     expect(css).toContain("@container todoist-bases-list (max-width: 760px)");
     expect(css).toContain("@container todoist-bases-list (max-width: 460px)");
+    expect(css).toMatch(
+      /@container todoist-bases-list \(max-width: 760px\)[\s\S]*?\.todoist-bases-project-statistics \{[\s\S]*?grid-template-columns: minmax\(4\.5rem, auto\) minmax\(5rem, 1fr\) minmax\(5ch, max-content\)/,
+    );
     expect(css).toMatch(
       /\.todoist-bases-project-statistics:not\(\[data-empty=true\]\) \.todoist-bases-project-progress \{[\s\S]*?grid-column: 1\/-1;[\s\S]*?grid-row: 2/,
     );

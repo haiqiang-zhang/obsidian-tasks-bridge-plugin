@@ -452,7 +452,7 @@
   max-width: 20rem;
   align-items: center;
   justify-self: end;
-  grid-template-columns: minmax(4.5rem, auto) minmax(5rem, 10rem) 4ch;
+  grid-template-columns: minmax(4.5rem, auto) minmax(5rem, 10rem) minmax(5ch, max-content);
   gap: var(--size-4-2);
   color: var(--text-muted);
   font-size: var(--font-ui-smaller);
@@ -482,6 +482,7 @@
   justify-self: end;
   color: var(--text-normal);
   font-weight: var(--font-medium);
+  white-space: nowrap;
 }
 
 .todoist-bases-project-statistics-separator {
@@ -909,7 +910,7 @@
         var(--todoist-bases-project-label-offset)
     );
     justify-self: stretch;
-    grid-template-columns: minmax(4.5rem, auto) minmax(5rem, 1fr) 4ch;
+    grid-template-columns: minmax(4.5rem, auto) minmax(5rem, 1fr) minmax(5ch, max-content);
     gap: var(--size-4-2);
   }
 
