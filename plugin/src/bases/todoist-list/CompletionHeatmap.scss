@@ -1,6 +1,7 @@
 .tasks-bridge-completion-heatmap {
   --tasks-bridge-heatmap-cell-size: 11px;
   --tasks-bridge-heatmap-hit-size: var(--tasks-bridge-heatmap-cell-size);
+  --tasks-bridge-heatmap-surface: var(--background-primary);
   --tasks-bridge-heatmap-level-0: var(--background-secondary);
   --tasks-bridge-heatmap-level-1: color-mix(
     in oklch,
@@ -142,7 +143,7 @@
   max-width: none;
   padding: 0;
   border: 0;
-  background: var(--background-primary);
+  background: transparent;
   overflow: visible;
   text-overflow: clip;
   vertical-align: middle;
@@ -157,7 +158,7 @@
   inset-inline-start: 0;
   width: var(--size-4-7, 28px);
   min-width: var(--size-4-7, 28px);
-  background: var(--background-primary);
+  background: var(--tasks-bridge-heatmap-surface);
 }
 
 .tasks-bridge-completion-heatmap

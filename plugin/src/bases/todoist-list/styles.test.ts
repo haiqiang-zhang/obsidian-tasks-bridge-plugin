@@ -41,7 +41,7 @@ describe("Tasks List styles", () => {
     const css = compileStyles();
     const list = ruleBody(css, ".todoist-bases-list");
     const disclosure = ruleBody(css, ".todoist-bases-disclosure");
-    const overviewDisclosure = ruleBody(css, ".todoist-bases-project-overview-disclosure");
+    const overviewDisclosure = ruleBody(css, "\n.todoist-bases-project-overview-disclosure");
 
     expect(list).toContain("--todoist-bases-disclosure-size: var(--size-4-6)");
     expect(disclosure).toContain("width: var(--todoist-bases-disclosure-size)");
@@ -89,9 +89,10 @@ describe("Tasks List styles", () => {
     expect(css).not.toContain('[data-loading="true"] .todoist-bases-task-checkbox');
   });
 
-  it("aligns the project tree with the overview while preserving hierarchy indentation", () => {
+  it("keeps the project tree edge-to-edge while preserving hierarchy indentation", () => {
     const css = compileStyles();
     const container = ruleBody(css, ".todoist-bases-list-container");
+    const list = ruleBody(css, ".todoist-bases-list");
     const content = ruleBody(css, ".todoist-bases-list-content");
     const tree = ruleBody(css, ".todoist-bases-list-tree");
     const leading = ruleBody(css, ".todoist-bases-project-leading");
@@ -104,13 +105,24 @@ describe("Tasks List styles", () => {
       css,
       ".todoist-bases-project-row,\n.todoist-bases-section-row,\n.todoist-bases-task-row",
     );
-
-    expect(container).toContain("container: todoist-bases-list/inline-size");
-    expect(content).toContain("inline-size: 100%");
-    expect(content).toContain(
-      "border: var(--bases-table-container-border-width, 1px) solid var(--background-modifier-border)",
+    const rowDividers = ruleBody(
+      css,
+      ".todoist-bases-project-row::after,\n.todoist-bases-section-row::after,\n.todoist-bases-task-row::after",
     );
+
+    expect(css).not.toContain("scrollbar-gutter");
+    expect(container).toContain("container: todoist-bases-list/inline-size");
+    expect(list).toContain("padding: 0 0 var(--size-4-4)");
+    expect(list).not.toContain("padding-inline");
+    expect(content).toContain("box-sizing: border-box");
+    expect(content).toContain("inline-size: 100%");
+    expect(content).toContain("overflow: visible");
+    expect(content).toContain("border: 0");
+    expect(content).toContain("border-radius: 0");
+    expect(content).toContain("background: transparent");
     expect(content).not.toContain("max-inline-size");
+    expect(content).not.toContain("margin-inline-start");
+    expect(content).not.toContain("margin-inline-end");
     expect(content).not.toContain("box-shadow");
     expect(tree).not.toContain("margin-inline");
     expect(leading).toContain("min-height: var(--todoist-bases-disclosure-size)");
@@ -120,9 +132,18 @@ describe("Tasks List styles", () => {
     expect(projectIconWithoutDisclosure).toContain("width: var(--todoist-bases-disclosure-size)");
     expect(projectIconWithoutDisclosure).toContain("height: var(--todoist-bases-disclosure-size)");
     expect(projectIcon).toContain("justify-content: center");
-    expect(rows).toContain(
-      "border-block-end: var(--bases-table-row-border-width, 1px) solid var(--bases-table-border-color, var(--background-modifier-border))",
+    expect(rows).toContain("position: relative");
+    expect(rows).not.toContain("border-block-end");
+    expect(rowDividers).toContain('content: ""');
+    expect(rowDividers).toContain("position: absolute");
+    expect(rowDividers).toContain("inset-block-end: 0");
+    expect(rowDividers).toContain("inset-inline: var(--size-4-2)");
+    expect(rowDividers).toContain("block-size: var(--bases-table-row-border-width, 1px)");
+    expect(rowDividers).toContain(
+      "background: var(--bases-table-border-color, var(--background-modifier-border))",
     );
+    expect(rowDividers).toContain("pointer-events: none");
+    expect(rowDividers).not.toContain("border-radius");
     expect(css).toMatch(
       /@container todoist-bases-list \(max-width: 760px\)[\s\S]*?\.todoist-bases-project-statistics \{[\s\S]*?margin-inline-start: calc\(var\(--todoist-bases-depth\) \* var\(--todoist-bases-indent\) \+ var\(--todoist-bases-project-label-offset\)\)/,
     );
@@ -138,7 +159,7 @@ describe("Tasks List styles", () => {
     expect(css).not.toContain("@media (max-width");
   });
 
-  it("uses a shadowless Overview card only in the wide split layout", () => {
+  it("uses spacing around a locally inset, shadowless Overview card", () => {
     const css = compileStyles();
     const content = ruleBody(css, ".todoist-bases-list-content");
     const main = ruleBody(css, ".todoist-bases-list-main");
@@ -147,6 +168,23 @@ describe("Tasks List styles", () => {
     const sharedHeader = ruleBody(
       css,
       ".todoist-bases-project-overview-toggle,\n.todoist-bases-project-overview-header",
+    );
+    const groups = ruleBody(css, ".todoist-bases-list-groups");
+    const toggle = ruleBody(
+      css,
+      ".todoist-bases-project-overview > .todoist-bases-project-overview-toggle",
+    );
+    const hoverToggle = ruleBody(
+      css,
+      ".todoist-bases-project-overview > .todoist-bases-project-overview-toggle:hover",
+    );
+    const focusToggle = ruleBody(
+      css,
+      ".todoist-bases-project-overview > .todoist-bases-project-overview-toggle:focus-visible",
+    );
+    const hoverDisclosure = ruleBody(
+      css,
+      ".todoist-bases-project-overview > .todoist-bases-project-overview-toggle:hover .todoist-bases-project-overview-disclosure",
     );
     const wideStart = css.indexOf("@container todoist-bases-list (min-width: 1200px)");
     const wideEnd = css.indexOf("@container todoist-bases-list (max-width: 600px)", wideStart);
@@ -165,21 +203,32 @@ describe("Tasks List styles", () => {
       ".todoist-bases-project-overview .tasks-bridge-completion-heatmap",
     );
 
-    expect(content).toContain("background: var(--background-primary)");
-    expect(content).toContain("overflow: hidden");
-    expect(content).toContain(
-      "border: var(--bases-table-container-border-width, 1px) solid var(--background-modifier-border)",
-    );
-    expect(content).toContain(
-      "border-radius: var(--bases-table-container-border-radius, var(--radius-m))",
-    );
+    expect(content).toContain("background: transparent");
+    expect(content).toContain("overflow: visible");
+    expect(content).toContain("border: 0");
+    expect(content).toContain("border-radius: 0");
     expect(main).toContain("background: var(--background-primary)");
-    expect(overview).toContain("background: var(--background-primary)");
-    expect(overview).toContain("border-bottom: 1px solid var(--background-modifier-border)");
-    expect(overview).not.toContain("border-radius");
-    expect(overviewContent).toContain("background: var(--background-primary)");
-    expect(css).not.toContain("background: var(--background-primary-alt)");
+    expect(overview).toContain("background: var(--background-primary-alt)");
+    expect(overview).toContain("margin-inline: var(--size-4-2)");
+    expect(overview).toContain("margin-block-end: var(--size-4-3)");
+    expect(overview).toContain("border: 0");
+    expect(overview).toContain("border-radius: var(--radius-l)");
+    expect(overview).toContain("box-shadow: none");
+    expect(overview).not.toContain("border-bottom");
+    expect(main).not.toContain("border-block-start");
+    expect(main).not.toContain("border-top");
+    expect(overviewContent).toContain("border-top: 1px solid var(--background-modifier-border)");
+    expect(overviewContent).toContain("background: transparent");
+    expect(groups).toContain("padding-block: var(--size-2-2)");
     expect(sharedHeader).toContain("padding-inline: var(--size-4-2)");
+    expect(toggle).toContain("background: inherit");
+    expect(hoverToggle).toContain("background: inherit");
+    expect(hoverToggle).toContain("box-shadow: none");
+    expect(focusToggle).toContain("background: inherit");
+    expect(focusToggle).toContain(
+      "box-shadow: inset 0 0 0 2px var(--background-modifier-border-focus)",
+    );
+    expect(hoverDisclosure).toContain("color: var(--text-normal)");
     expect(css).not.toContain(".todoist-bases-project-overview-header:hover");
     expect(css).not.toContain(
       ".todoist-bases-project-overview-header .todoist-bases-project-overview-header-summary",
@@ -193,12 +242,8 @@ describe("Tasks List styles", () => {
     expect(wideContent).toContain("column-gap: var(--size-4-4)");
     expect(wideContent).not.toContain("border-inline-end");
     expect(wideOverview).toContain("align-self: start");
-    expect(wideOverview).toContain(
-      "border: var(--bases-cards-border-width, var(--border-width)) solid var(--background-modifier-border)",
-    );
-    expect(wideOverview).toContain("border-radius: var(--radius-l)");
-    expect(wideOverview).toContain("background: var(--background-primary)");
-    expect(wideOverview).toContain("box-shadow: none");
+    expect(wideOverview).toContain("margin-inline: var(--size-4-2) 0");
+    expect(wideOverview).toContain("margin-block-end: 0");
     expect(wideOverviewContent).toContain("border-block-start: 0");
     expect(wideOverviewContent).toContain("background: transparent");
     expect(wideBody).toContain("padding: 0 var(--size-4-3) var(--size-4-3)");
@@ -212,6 +257,7 @@ describe("Tasks List styles", () => {
     expect(wideHeatmap).toContain("border: 0");
     expect(wideHeatmap).toContain("border-radius: 0");
     expect(wideHeatmap).toContain("background: transparent");
+    expect(wideHeatmap).toContain("--tasks-bridge-heatmap-surface: var(--background-primary-alt)");
     expect(css).toMatch(
       /@container todoist-bases-list \(min-width: 1200px\)[\s\S]*?\.todoist-bases-project-overview-toggle,\s*\.todoist-bases-project-overview-header \{[\s\S]*?padding: var\(--size-4-3\)/,
     );

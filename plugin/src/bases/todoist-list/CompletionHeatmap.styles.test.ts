@@ -41,6 +41,10 @@ describe("Completion heatmap styles", () => {
       css,
       ".tasks-bridge-completion-heatmap .tasks-bridge-completion-heatmap-grid :is(.tasks-bridge-completion-heatmap-corner, .tasks-bridge-completion-heatmap-month, .tasks-bridge-completion-heatmap-weekday, .tasks-bridge-completion-heatmap-day, .tasks-bridge-completion-heatmap-outside)",
     );
+    const stickyLabels = ruleBody(
+      css,
+      ".tasks-bridge-completion-heatmap .tasks-bridge-completion-heatmap-grid :is(.tasks-bridge-completion-heatmap-corner, .tasks-bridge-completion-heatmap-weekday)",
+    );
     const days = ruleBody(
       css,
       ".tasks-bridge-completion-heatmap .tasks-bridge-completion-heatmap-grid :is(.tasks-bridge-completion-heatmap-day, .tasks-bridge-completion-heatmap-outside)",
@@ -56,8 +60,10 @@ describe("Completion heatmap styles", () => {
     expect(cells).toContain("max-width: none");
     expect(cells).toContain("padding: 0");
     expect(cells).toContain("border: 0");
+    expect(cells).toContain("background: transparent");
     expect(cells).toContain("overflow: visible");
     expect(cells).toContain("text-overflow: clip");
+    expect(stickyLabels).toContain("background: var(--tasks-bridge-heatmap-surface)");
     expect(days).toContain("width: var(--tasks-bridge-heatmap-hit-size)");
     expect(days).toContain("min-width: var(--tasks-bridge-heatmap-hit-size)");
     expect(css).not.toContain(".markdown-rendered");
