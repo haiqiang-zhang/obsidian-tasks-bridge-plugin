@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v2.10.6 (2026-08-23)
+
 ### 🐛 Bug Fixes
 
 - Kept project completion percentages such as `100%` on one line in full and embedded Base views, preventing oversized project rows across interface fonts.
