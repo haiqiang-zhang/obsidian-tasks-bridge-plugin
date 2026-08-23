@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v2.10.5 (2026-08-23)
+
 ### 🐛 Bug Fixes
 
 - Aligned the Tasks List with native Base edges while keeping Project overview as an inset surface, and removed mismatched backgrounds from heatmap labels and out-of-range dates.
