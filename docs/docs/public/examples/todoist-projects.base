@@ -18,6 +18,10 @@ views:
     name: "Tasks List"
     # Set this to a Todoist project ID through Configure view > Project scope.
     # Leave it absent to show all synchronized projects.
+    # Configure view > Project overview > Completion activity date.
+    # "completed-date" is Completion date (default).
+    # "deadline-first" is Deadline date, then completion date.
+    tasksProjectOverviewCompletionDate: completed-date
     todoistDensity: comfortable
     todoistShowDescriptions: true
     todoistShowSections: true

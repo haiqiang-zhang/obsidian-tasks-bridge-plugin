@@ -89,7 +89,7 @@ describe("Tasks List styles", () => {
     expect(css).not.toContain('[data-loading="true"] .todoist-bases-task-checkbox');
   });
 
-  it("keeps the project tree edge-to-edge while preserving hierarchy indentation", () => {
+  it("aligns the Overview and project tree within one shared content gutter", () => {
     const css = compileStyles();
     const container = ruleBody(css, ".todoist-bases-list-container");
     const list = ruleBody(css, ".todoist-bases-list");
@@ -112,10 +112,13 @@ describe("Tasks List styles", () => {
 
     expect(css).not.toContain("scrollbar-gutter");
     expect(container).toContain("container: todoist-bases-list/inline-size");
+    expect(list).toContain("--todoist-bases-content-gutter: var(--size-4-4)");
     expect(list).toContain("padding: 0 0 var(--size-4-4)");
-    expect(list).not.toContain("padding-inline");
     expect(content).toContain("box-sizing: border-box");
     expect(content).toContain("inline-size: 100%");
+    expect(content).toContain("padding-inline: var(--todoist-bases-content-gutter)");
+    expect(content).not.toContain("padding-left");
+    expect(content).not.toContain("padding-right");
     expect(content).toContain("overflow: visible");
     expect(content).toContain("border: 0");
     expect(content).toContain("border-radius: 0");
@@ -159,7 +162,7 @@ describe("Tasks List styles", () => {
     expect(css).not.toContain("@media (max-width");
   });
 
-  it("uses spacing around a locally inset, shadowless Overview card", () => {
+  it("uses the shared content gutter around a shadowless Overview card", () => {
     const css = compileStyles();
     const content = ruleBody(css, ".todoist-bases-list-content");
     const main = ruleBody(css, ".todoist-bases-list-main");
@@ -209,7 +212,7 @@ describe("Tasks List styles", () => {
     expect(content).toContain("border-radius: 0");
     expect(main).toContain("background: var(--background-primary)");
     expect(overview).toContain("background: var(--background-primary-alt)");
-    expect(overview).toContain("margin-inline: var(--size-4-2)");
+    expect(overview).toContain("margin-inline: 0");
     expect(overview).toContain("margin-block-end: var(--size-4-3)");
     expect(overview).toContain("border: 0");
     expect(overview).toContain("border-radius: var(--radius-l)");
@@ -242,7 +245,7 @@ describe("Tasks List styles", () => {
     expect(wideContent).toContain("column-gap: var(--size-4-4)");
     expect(wideContent).not.toContain("border-inline-end");
     expect(wideOverview).toContain("align-self: start");
-    expect(wideOverview).toContain("margin-inline: var(--size-4-2) 0");
+    expect(wideOverview).toContain("margin-inline: 0");
     expect(wideOverview).toContain("margin-block-end: 0");
     expect(wideOverviewContent).toContain("border-block-start: 0");
     expect(wideOverviewContent).toContain("background: transparent");

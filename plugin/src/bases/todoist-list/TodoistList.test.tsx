@@ -2,6 +2,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { afterEach, describe, expect, it, type Mock, vi } from "vitest";
 
 import { todoistListProjectScopeKey } from "./model";
+import type { ProjectOverviewCompletionDateMode } from "./projectOverviewModel";
 import { TodoistList } from "./TodoistList";
 import type {
   TodoistListActions,
@@ -168,12 +169,14 @@ const renderList = (
   projectOverviewCollapsed = false,
   onProjectOverviewCollapsedChange = vi.fn(),
   expandProjectTasks = true,
+  projectOverviewCompletionDateMode: ProjectOverviewCompletionDateMode = "completed-date",
 ) => {
   const makeElement = (
     currentModel: TodoistListModel,
     currentRootProjectOptions = rootProjectOptions,
     currentOverviewCollapsed = projectOverviewCollapsed,
     currentRootProjectId = rootProjectId,
+    currentProjectOverviewCompletionDateMode = projectOverviewCompletionDateMode,
   ) => (
     <TodoistList
       actions={actions}
@@ -184,6 +187,7 @@ const renderList = (
       onProjectOverviewCollapsedChange={onProjectOverviewCollapsedChange}
       options={{ density: "comfortable", showDescriptions: true, showSections: true }}
       projectOverviewCollapsed={currentOverviewCollapsed}
+      projectOverviewCompletionDateMode={currentProjectOverviewCompletionDateMode}
       rootProjectOptions={currentRootProjectOptions ?? currentModel.projects}
       rootProjectId={currentRootProjectId}
     />
@@ -205,9 +209,16 @@ const renderList = (
       nextRootProjectOptions = rootProjectOptions,
       nextOverviewCollapsed = projectOverviewCollapsed,
       nextRootProjectId = rootProjectId,
+      nextProjectOverviewCompletionDateMode = projectOverviewCompletionDateMode,
     ) =>
       rendered.rerender(
-        makeElement(nextModel, nextRootProjectOptions, nextOverviewCollapsed, nextRootProjectId),
+        makeElement(
+          nextModel,
+          nextRootProjectOptions,
+          nextOverviewCollapsed,
+          nextRootProjectId,
+          nextProjectOverviewCompletionDateMode,
+        ),
       ),
   };
 };
@@ -279,6 +290,36 @@ describe("TodoistList", () => {
     expect(screen.getByRole("progressbar", { name: "Root completion" })).toHaveAttribute(
       "max",
       "1",
+    );
+  });
+
+  it("rebuilds completion activity when the configured date mode changes", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-12T12:00:00.000Z"));
+    const task = makeTask("completed", "completed", {
+      completedAt: "2026-08-10T12:00:00.000Z",
+      deadline: "2026-08-08",
+    });
+    const model = makeModel(makeProject("root", "Root", [task]));
+    const { rerenderList } = renderList(model);
+
+    expect(
+      screen.getByRole("gridcell", { name: "1 task completion on August 10, 2026." }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("gridcell", { name: "No task completions on August 8, 2026." }),
+    ).toBeInTheDocument();
+
+    rerenderList(model, null, false, null, "deadline-first");
+
+    expect(
+      screen.getByRole("gridcell", { name: "No task completions on August 10, 2026." }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("gridcell", { name: "1 task completion on August 8, 2026." }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Project overview" })).toHaveTextContent(
+      "1 project · 1 task · 100% complete",
     );
   });
 

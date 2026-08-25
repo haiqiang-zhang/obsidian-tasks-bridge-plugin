@@ -1,6 +1,6 @@
 export type CompletionHeatmapEvent = Readonly<{
   id: string;
-  completedAt: string | number | Date;
+  date: string | number | Date;
 }>;
 
 export type CompletionHeatmapRelativeRange =
@@ -131,6 +131,9 @@ export const isCompletionHeatmapRange = (value: unknown): value is CompletionHea
 
   return parseCalendarYearRange(value) !== null;
 };
+
+export const isCompletionHeatmapDateKey = (value: unknown): value is string =>
+  typeof value === "string" && civilDateFromKey(value) !== null;
 
 export const buildCompletionHeatmapModel = (
   input: BuildCompletionHeatmapModelInput,
@@ -385,12 +388,9 @@ const civilDateFromKey = (key: string): CivilDate | null => {
   const month = Number.parseInt(match[2] ?? "", 10);
   const day = Number.parseInt(match[3] ?? "", 10);
   const candidate = { year, month, day };
-  if (civilDateKey(candidate) !== key) {
-    return null;
-  }
-
   const normalized = civilDateToDate(candidate);
   if (
+    civilDateKey(candidate) !== key ||
     normalized.getUTCFullYear() !== year ||
     normalized.getUTCMonth() + FIRST_MONTH !== month ||
     normalized.getUTCDate() !== day
@@ -407,11 +407,22 @@ const validEventCivilDates = (
 ): CivilDate[] => {
   const datesByEventId = new Map<string, CivilDate>();
   for (const event of events) {
+    if (datesByEventId.has(event.id)) {
+      continue;
+    }
+    if (typeof event.date === "string") {
+      const calendarDate = civilDateFromKey(event.date);
+      if (calendarDate !== null) {
+        datesByEventId.set(event.id, calendarDate);
+        continue;
+      }
+      if (DATE_KEY_PATTERN.test(event.date)) {
+        continue;
+      }
+    }
     const instant =
-      event.completedAt instanceof Date
-        ? new Date(event.completedAt.getTime())
-        : new Date(event.completedAt);
-    if (Number.isFinite(instant.getTime()) && !datesByEventId.has(event.id)) {
+      event.date instanceof Date ? new Date(event.date.getTime()) : new Date(event.date);
+    if (Number.isFinite(instant.getTime())) {
       datesByEventId.set(event.id, instantToCivilDate(instant, formatter));
     }
   }

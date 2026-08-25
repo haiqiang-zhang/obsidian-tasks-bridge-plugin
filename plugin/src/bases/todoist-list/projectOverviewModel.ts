@@ -1,5 +1,15 @@
-import type { CompletionHeatmapEvent } from "./completionHeatmapModel";
+import { type CompletionHeatmapEvent, isCompletionHeatmapDateKey } from "./completionHeatmapModel";
 import type { TodoistListGroup, TodoistListProject, TodoistListTaskNode } from "./types";
+
+export type ProjectOverviewCompletionDateMode = "completed-date" | "deadline-first";
+
+export const DEFAULT_PROJECT_OVERVIEW_COMPLETION_DATE_MODE: ProjectOverviewCompletionDateMode =
+  "completed-date";
+
+export const isProjectOverviewCompletionDateMode = (
+  value: unknown,
+): value is ProjectOverviewCompletionDateMode =>
+  value === "completed-date" || value === "deadline-first";
 
 export type ProjectOverviewCounts = {
   active: number;
@@ -41,6 +51,7 @@ const completionRate = (counts: ProjectOverviewCounts): number | null => {
 /** Summarizes exactly the task entries supplied by the root-scoped Base result. */
 export const buildProjectOverviewModel = (
   groups: readonly TodoistListGroup[],
+  completionDateMode: ProjectOverviewCompletionDateMode = DEFAULT_PROJECT_OVERVIEW_COMPLETION_DATE_MODE,
 ): ProjectOverviewModel => {
   const counts = groups.reduce((result, group) => addCounts(result, group.counts), emptyCounts());
   const projectScopeKeys = new Set<string>();
@@ -52,10 +63,11 @@ export const buildProjectOverviewModel = (
       return;
     }
     taskScopeKeys.add(task.scopeKey);
-    if (task.completedAt !== undefined) {
+    const activityDate = projectOverviewCompletionDate(task, completionDateMode);
+    if (activityDate !== undefined) {
       completionEvents.push({
         id: `base:${task.scopeKey}`,
-        completedAt: task.completedAt,
+        date: activityDate,
       });
     }
     for (const child of task.children) {
@@ -92,4 +104,17 @@ export const buildProjectOverviewModel = (
     projectCount: projectScopeKeys.size,
     completionRate: completionRate(counts),
   };
+};
+
+const projectOverviewCompletionDate = (
+  task: TodoistListTaskNode,
+  mode: ProjectOverviewCompletionDateMode,
+): string | undefined => {
+  if (task.status !== "completed") {
+    return undefined;
+  }
+  if (mode === "deadline-first" && isCompletionHeatmapDateKey(task.deadline)) {
+    return task.deadline;
+  }
+  return task.completedAt;
 };

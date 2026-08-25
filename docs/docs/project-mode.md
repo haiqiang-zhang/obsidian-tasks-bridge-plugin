@@ -179,12 +179,13 @@ Project and section headers, nested task indentation, descriptions, status count
 
 You can also start with the [Tasks List Base template](https://haiqiang-zhang.github.io/obsidian-tasks-bridge-plugin/examples/todoist-projects.base). Download it into the Vault, then adjust its filters and properties in Obsidian.
 
-Open **Configure view** in the Bases toolbar to customize Tasks List. Native Obsidian controls keep these settings in two clear groups:
+Open **Configure view** in the Bases toolbar to customize Tasks List. Native Obsidian controls keep these settings in three clear groups:
 
 - **Project scope** contains **Root project**.
+- **Project overview** contains **Completion activity date**. **Completion date** is the default; **Deadline date, then completion date** uses a completed task's deadline when available and falls back to its completion date.
 - **Appearance** contains **Density**, **Show descriptions**, and **Show sections**.
 
-Obsidian stores every choice in that individual view's entry in the `.base` file, so different views of the same Base can keep different scopes and layouts.
+Obsidian stores every choice in that individual view's entry in the `.base` file, so different views of the same Base can keep different scopes and layouts. The completion-activity choice is stored as `tasksProjectOverviewCompletionDate`.
 
 :::note Managed Project sync notes only
 
@@ -222,7 +223,9 @@ Select the **Project overview** header to collapse or expand the panel. That cho
 
 The completion heatmap initially shows the last year. Use its Obsidian range menu to switch among the last 4 weeks, 3 months, 6 months, the last year, or any calendar year represented by the current Base result. The menu follows Obsidian's **Native menus** preference, and the chosen range is saved for the individual Base view. Month and weekday labels, Obsidian tooltips, a Less-to-More intensity legend, horizontal scrolling on narrow screens, and keyboard navigation follow the familiar GitHub contribution-calendar interaction. Select one day to inspect its count, or select a second day while holding **Shift** to summarize the complete date range between them.
 
-The heatmap reads `todoist_completed_at` from tasks in the current Base result and selected root. Each matching task with a completion timestamp contributes one completion on that day. Tasks excluded by a Base filter, the result limit, or **Root project** do not contribute.
+By default, the heatmap places each completed task on its `todoist_completed_at` value (**Completion date**). Under **Configure view → Project overview → Completion activity date**, choose **Deadline date, then completion date** to use a completed task's valid `todoist_deadline` when available and fall back to `todoist_completed_at` otherwise. A task without either date is not plotted. Tasks excluded by a Base filter, the result limit, or **Root project** do not contribute.
+
+This setting changes only the activity date used by the heatmap. Total, active, completed, and unavailable counts, the completion percentage, and per-project progress remain based on each task's current status.
 
 :::info One Base result, one statistics scope
 

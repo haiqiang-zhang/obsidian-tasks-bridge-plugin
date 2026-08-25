@@ -72,7 +72,7 @@ vi.mock("obsidian", () => ({
 
 const NOW = new Date("2026-08-12T12:00:00.000Z");
 
-const event = (id: string, completedAt: string): CompletionHeatmapEvent => ({ id, completedAt });
+const event = (id: string, date: string): CompletionHeatmapEvent => ({ id, date });
 
 beforeEach(() => {
   closeMenuMock.mockClear();

@@ -10,7 +10,7 @@ import {
 
 const NOW = new Date("2026-08-12T12:00:00.000Z");
 
-const event = (id: string, completedAt: string): CompletionHeatmapEvent => ({ id, completedAt });
+const event = (id: string, date: string): CompletionHeatmapEvent => ({ id, date });
 
 describe("buildCompletionHeatmapModel", () => {
   it("builds a Sunday-first 7-row week grid for a rolling range", () => {
@@ -66,6 +66,39 @@ describe("buildCompletionHeatmapModel", () => {
     expect(losAngeles.daysByKey.get("2026-08-12")?.count).toBe(0);
     expect(shanghai.daysByKey.get("2026-08-11")?.count).toBe(0);
     expect(shanghai.daysByKey.get("2026-08-12")?.count).toBe(1);
+  });
+
+  it("keeps a date-only activity on the same calendar day in every time zone", () => {
+    const events = [event("deadline", "2026-08-12")];
+    const losAngeles = buildCompletionHeatmapModel({
+      events,
+      now: NOW,
+      range: "last-4-weeks",
+      timeZone: "America/Los_Angeles",
+    });
+    const shanghai = buildCompletionHeatmapModel({
+      events,
+      now: NOW,
+      range: "last-4-weeks",
+      timeZone: "Asia/Shanghai",
+    });
+
+    expect(losAngeles.daysByKey.get("2026-08-11")?.count).toBe(0);
+    expect(losAngeles.daysByKey.get("2026-08-12")?.count).toBe(1);
+    expect(shanghai.daysByKey.get("2026-08-11")?.count).toBe(0);
+    expect(shanghai.daysByKey.get("2026-08-12")?.count).toBe(1);
+  });
+
+  it("ignores an invalid date-only activity instead of normalizing it to another day", () => {
+    const model = buildCompletionHeatmapModel({
+      events: [event("invalid-deadline", "2026-02-30")],
+      now: NOW,
+      range: "last-year",
+      timeZone: "UTC",
+    });
+
+    expect(model.totalCount).toBe(0);
+    expect(model.daysByKey.get("2026-03-02")?.count).toBe(0);
   });
 
   it("keeps local calendar days correct across a daylight-saving transition", () => {

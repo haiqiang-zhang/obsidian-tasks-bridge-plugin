@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### ✨ Improvements
+
+- Added a per-view **Completion activity date** setting under **Configure view → Project overview**. **Completion date** remains the default; **Deadline date, then completion date** uses a completed task's deadline when available and falls back to its completion date without changing status-based totals, completion percentages, or per-project progress.
+
 ## v2.10.6 (2026-08-23)
 
 ### 🐛 Bug Fixes

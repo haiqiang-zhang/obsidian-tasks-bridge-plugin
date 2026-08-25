@@ -105,6 +105,7 @@ const makeController = (
   projectOverviewCollapsed = false,
   completionHeatmapRange: unknown = "last-3-months",
   rootProjectId?: string,
+  projectOverviewCompletionDateMode?: unknown,
 ) => {
   const groupedData = [{ entries: [], hasKey: () => false }];
   const config = {
@@ -120,6 +121,9 @@ const makeController = (
       }
       if (key === "tasksCompletionHeatmapRange") {
         return completionHeatmapRange;
+      }
+      if (key === "tasksProjectOverviewCompletionDate") {
+        return projectOverviewCompletionDateMode;
       }
       if (key === "todoistRootProjectId") {
         return rootProjectId;
@@ -170,6 +174,22 @@ describe("TasksListView", () => {
             displayName: "Root project",
             options: {
               __tasks_bridge_all_synchronized_projects__: "All synchronized projects",
+            },
+          }),
+        ],
+      },
+      {
+        type: "group",
+        displayName: "Project overview",
+        items: [
+          expect.objectContaining({
+            type: "dropdown",
+            key: "tasksProjectOverviewCompletionDate",
+            displayName: "Completion activity date",
+            default: "completed-date",
+            options: {
+              "completed-date": "Completion date",
+              "deadline-first": "Deadline date, then completion date",
             },
           }),
         ],
@@ -304,6 +324,7 @@ describe("TasksListView", () => {
       showSections: true,
     });
     expect(element.props.projectOverviewCollapsed).toBe(true);
+    expect(element.props.projectOverviewCompletionDateMode).toBe("completed-date");
     expect(element.props.completionHeatmapRange).toBe("last-3-months");
 
     element.props.onProjectOverviewCollapsedChange(true);
@@ -418,7 +439,12 @@ describe("TasksListView", () => {
   });
 
   it("falls back to Last year when the persisted heatmap range is invalid", async () => {
-    const { controller } = makeController(false, "unsupported-range");
+    const { controller } = makeController(
+      false,
+      "unsupported-range",
+      undefined,
+      "unsupported-date-mode",
+    );
     const parentEl = document.createElement("div");
     const view = createTasksListViewRegistration(actions(), projectContext()).factory(
       controller,
@@ -430,6 +456,23 @@ describe("TasksListView", () => {
 
     const element = runtime.render.mock.calls[0]?.[0] as ReactElement<TodoistListProps>;
     expect(element.props.completionHeatmapRange).toBe("last-year");
+    expect(element.props.projectOverviewCompletionDateMode).toBe("completed-date");
+    view.onunload();
+  });
+
+  it("forwards a saved deadline-first completion activity mode", async () => {
+    const { controller } = makeController(false, "last-year", undefined, "deadline-first");
+    const parentEl = document.createElement("div");
+    const view = createTasksListViewRegistration(actions(), projectContext()).factory(
+      controller,
+      parentEl,
+    ) as TasksListView;
+
+    view.onDataUpdated();
+    await Promise.resolve();
+
+    const element = runtime.render.mock.calls[0]?.[0] as ReactElement<TodoistListProps>;
+    expect(element.props.projectOverviewCompletionDateMode).toBe("deadline-first");
     view.onunload();
   });
 

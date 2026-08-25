@@ -15,7 +15,10 @@ import { ObsidianIcon, ObsidianLoadingIcon } from "@/ui/components/obsidian-icon
 import type { CompletionHeatmapRange } from "./completionHeatmapModel";
 import { scopeTodoistListGroups } from "./model";
 import { ProjectOverview } from "./ProjectOverview";
-import { buildProjectOverviewModel } from "./projectOverviewModel";
+import {
+  buildProjectOverviewModel,
+  type ProjectOverviewCompletionDateMode,
+} from "./projectOverviewModel";
 import type {
   TodoistListActions,
   TodoistListCounts,
@@ -45,6 +48,7 @@ export type TodoistListProps = {
   rootProjectOptions: readonly TodoistListProjectOption[];
   layoutContainerEl?: HTMLElement;
   projectOverviewCollapsed: boolean;
+  projectOverviewCompletionDateMode: ProjectOverviewCompletionDateMode;
   completionHeatmapRange: CompletionHeatmapRange;
   onProjectOverviewCollapsedChange: (collapsed: boolean) => void;
   onCompletionHeatmapRangeChange: (range: CompletionHeatmapRange) => void;
@@ -59,6 +63,7 @@ export const TodoistList: React.FC<TodoistListProps> = ({
   rootProjectOptions,
   layoutContainerEl,
   projectOverviewCollapsed,
+  projectOverviewCompletionDateMode,
   completionHeatmapRange,
   onProjectOverviewCollapsedChange,
   onCompletionHeatmapRangeChange,
@@ -97,8 +102,8 @@ export const TodoistList: React.FC<TodoistListProps> = ({
     [model.groups, rootProjectId],
   );
   const projectOverviewModel = useMemo(
-    () => buildProjectOverviewModel(scopedGroups),
-    [scopedGroups],
+    () => buildProjectOverviewModel(scopedGroups, projectOverviewCompletionDateMode),
+    [projectOverviewCompletionDateMode, scopedGroups],
   );
   const scopedCounts = useMemo(
     () =>

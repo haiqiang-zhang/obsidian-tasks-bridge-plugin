@@ -13,6 +13,11 @@ import { selectProjectHierarchy } from "@/project-sync";
 
 import { type CompletionHeatmapRange, isCompletionHeatmapRange } from "./completionHeatmapModel";
 import { buildTodoistListModel } from "./model";
+import {
+  DEFAULT_PROJECT_OVERVIEW_COMPLETION_DATE_MODE,
+  isProjectOverviewCompletionDateMode,
+  type ProjectOverviewCompletionDateMode,
+} from "./projectOverviewModel";
 import { TodoistList } from "./TodoistList";
 import type {
   TodoistListActions,
@@ -32,6 +37,7 @@ const densityConfigKey = "todoistDensity";
 const showDescriptionsConfigKey = "todoistShowDescriptions";
 const showSectionsConfigKey = "todoistShowSections";
 const projectOverviewCollapsedConfigKey = "tasksProjectOverviewCollapsed";
+const projectOverviewCompletionDateConfigKey = "tasksProjectOverviewCompletionDate";
 const completionHeatmapRangeConfigKey = "tasksCompletionHeatmapRange";
 const defaultCompletionHeatmapRange: CompletionHeatmapRange = "last-year";
 const allSynchronizedProjectsValue = "__tasks_bridge_all_synchronized_projects__";
@@ -50,6 +56,22 @@ export const tasksListViewOptions = (
         displayName: "Root project",
         default: allSynchronizedProjectsValue,
         options: buildRootProjectDropdownOptions(projectContext, config),
+      },
+    ],
+  },
+  {
+    type: "group",
+    displayName: "Project overview",
+    items: [
+      {
+        type: "dropdown",
+        key: projectOverviewCompletionDateConfigKey,
+        displayName: "Completion activity date",
+        default: DEFAULT_PROJECT_OVERVIEW_COMPLETION_DATE_MODE,
+        options: {
+          "completed-date": "Completion date",
+          "deadline-first": "Deadline date, then completion date",
+        },
       },
     ],
   },
@@ -170,6 +192,9 @@ export class TasksListView extends BasesView implements HoverParent {
     const completionHeatmapRange = readCompletionHeatmapRange(
       this.config.get(completionHeatmapRangeConfigKey),
     );
+    const projectOverviewCompletionDateMode = readProjectOverviewCompletionDateMode(
+      this.config.get(projectOverviewCompletionDateConfigKey),
+    );
     const options = this.readOptions();
     const navigation: TodoistListNavigation = {
       openFile: (filePath, newLeaf) => {
@@ -201,6 +226,7 @@ export class TasksListView extends BasesView implements HoverParent {
         }
         options={options}
         projectOverviewCollapsed={projectOverviewCollapsed}
+        projectOverviewCompletionDateMode={projectOverviewCompletionDateMode}
         rootProjectOptions={collectRootProjectOptions(this.projectContext, projectContext)}
         rootProjectId={rootProjectId}
       />,
@@ -219,6 +245,13 @@ export class TasksListView extends BasesView implements HoverParent {
 
 const readOptionalString = (value: unknown): string | null =>
   typeof value === "string" && value.trim() !== "" ? value : null;
+
+const readProjectOverviewCompletionDateMode = (
+  value: unknown,
+): ProjectOverviewCompletionDateMode =>
+  isProjectOverviewCompletionDateMode(value)
+    ? value
+    : DEFAULT_PROJECT_OVERVIEW_COMPLETION_DATE_MODE;
 
 const readRootProjectId = (value: unknown): string | null => {
   const projectId = readOptionalString(value);
