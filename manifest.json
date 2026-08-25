@@ -1,7 +1,7 @@
 {
   "id": "tasks-bridge",
   "name": "Tasks Bridge",
-  "version": "2.10.6",
+  "version": "2.10.7",
   "minAppVersion": "1.13.1",
   "description": "Sync and interact with tasks stored in external task-management services.",
   "author": "Haiqiang Zhang and Jamie Brynes",
