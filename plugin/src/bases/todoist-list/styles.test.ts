@@ -177,6 +177,10 @@ describe("Tasks List styles", () => {
       css,
       ".todoist-bases-project-overview > .todoist-bases-project-overview-toggle",
     );
+    const collapsedToggle = ruleBody(
+      css,
+      ".todoist-bases-project-overview[data-collapsed=true] > .todoist-bases-project-overview-toggle",
+    );
     const hoverToggle = ruleBody(
       css,
       ".todoist-bases-project-overview > .todoist-bases-project-overview-toggle:hover",
@@ -225,6 +229,8 @@ describe("Tasks List styles", () => {
     expect(groups).toContain("padding-block: var(--size-2-2)");
     expect(sharedHeader).toContain("padding-inline: var(--size-4-2)");
     expect(toggle).toContain("background: inherit");
+    expect(toggle).toContain("border-radius: var(--radius-l) var(--radius-l) 0 0");
+    expect(collapsedToggle).toContain("border-radius: inherit");
     expect(hoverToggle).toContain("background: inherit");
     expect(hoverToggle).toContain("box-shadow: none");
     expect(focusToggle).toContain("background: inherit");

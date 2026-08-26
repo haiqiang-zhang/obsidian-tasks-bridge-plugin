@@ -102,7 +102,7 @@
 
 .todoist-bases-project-overview > .todoist-bases-project-overview-toggle {
   border: 0;
-  border-radius: 0;
+  border-radius: var(--radius-l) var(--radius-l) 0 0;
   background: inherit;
   box-shadow: none;
 
@@ -120,6 +120,11 @@
     box-shadow: inset 0 0 0 2px var(--background-modifier-border-focus);
     outline: none;
   }
+}
+
+.todoist-bases-project-overview[data-collapsed="true"]
+  > .todoist-bases-project-overview-toggle {
+  border-radius: inherit;
 }
 
 .todoist-bases-project-overview-header-leading {
