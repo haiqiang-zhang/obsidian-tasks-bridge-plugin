@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v2.10.9 (2026-08-26)
+
 ### 🐛 Bug Fixes
 
 - Matched the Project overview focus frame to the card's rounded corners in both expanded and collapsed states.
