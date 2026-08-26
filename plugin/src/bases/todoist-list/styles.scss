@@ -781,6 +781,9 @@
   }
 
   .todoist-bases-project-overview {
+    position: sticky;
+    z-index: 1;
+    inset-block-start: var(--size-4-3);
     min-width: 0;
     align-self: start;
     margin-inline: 0;

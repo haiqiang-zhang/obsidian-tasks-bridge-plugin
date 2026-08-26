@@ -244,6 +244,11 @@ describe("Tasks List styles", () => {
     expect(wideContent).toContain("grid-template-columns: minmax(20rem, 24rem) minmax(0, 1fr)");
     expect(wideContent).toContain("column-gap: var(--size-4-4)");
     expect(wideContent).not.toContain("border-inline-end");
+    expect(overview).not.toContain("position: sticky");
+    expect(wideOverview).toContain("position: sticky");
+    expect(wideOverview).toContain("z-index: 1");
+    expect(wideOverview).toContain("inset-block-start: var(--size-4-3)");
+    expect(wideOverview).not.toContain("position: fixed");
     expect(wideOverview).toContain("align-self: start");
     expect(wideOverview).toContain("margin-inline: 0");
     expect(wideOverview).toContain("margin-block-end: 0");

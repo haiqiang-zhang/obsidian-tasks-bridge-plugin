@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### ✨ Improvements
+
+- Kept the Project overview card visible while scrolling the project tree in wide Tasks List views, with native spacing and natural narrow/mobile flow.
+
 ## v2.10.7 (2026-08-25)
 
 ### ✨ Improvements

@@ -219,7 +219,7 @@ Every statistic uses the same current result supplied by Obsidian Bases. Native 
 
 Unavailable rows remain part of the total and the matching project row. Because they no longer have a reliable active-or-completed state, the completion percentage uses only active and completed tasks as its denominator.
 
-Select the **Project overview** header to collapse or expand the panel. That choice is saved for the individual Base view. When no managed task matches the current Base result and selected root, the view reports the empty result instead of substituting whole-project statistics.
+Select the **Project overview** header to collapse or expand the panel. That choice is saved for the individual Base view. In a wide Tasks List, the expanded panel stays visible beside the project tree while you scroll. Narrow and mobile layouts keep it in the normal document flow. When no managed task matches the current Base result and selected root, the view reports the empty result instead of substituting whole-project statistics.
 
 The completion heatmap initially shows the last year. Use its Obsidian range menu to switch among the last 4 weeks, 3 months, 6 months, the last year, or any calendar year represented by the current Base result. The menu follows Obsidian's **Native menus** preference, and the chosen range is saved for the individual Base view. Month and weekday labels, Obsidian tooltips, a Less-to-More intensity legend, horizontal scrolling on narrow screens, and keyboard navigation follow the familiar GitHub contribution-calendar interaction. Select one day to inspect its count, or select a second day while holding **Shift** to summarize the complete date range between them.
 
