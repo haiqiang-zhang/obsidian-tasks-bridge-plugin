@@ -22,7 +22,8 @@ export type SubscriptionResult =
   | { type: "not-ready" };
 
 export type OnSubscriptionChange = (result: SubscriptionResult) => void;
-export type Refresh = () => Promise<void>;
+export type RefreshOptions = { forceMetadata?: boolean };
+export type Refresh = (options?: RefreshOptions) => Promise<void>;
 export type LoadMoreCompleted = () => Promise<void>;
 
 type SubscriptionId = number;

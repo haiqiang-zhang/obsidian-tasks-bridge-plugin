@@ -7,7 +7,9 @@
 }
 
 .todoist-query {
-  --todoist-query-actions-width: calc(var(--size-4-18) + var(--size-4-6));
+  --todoist-query-actions-width: calc(
+    var(--size-4-18) + var(--size-4-6) + var(--size-2-1)
+  );
 
   position: relative;
 
@@ -25,12 +27,17 @@
 
   &.is-untitled
     .todoist-query-content
-    > .todoist-tasks-list:first-child
-    > .todoist-task-container:first-child,
-  &.is-untitled
-    .todoist-query-content
     > .todoist-group:first-child
     > .todoist-group-title:first-child {
+    padding-inline-end: var(--todoist-query-actions-width);
+  }
+
+  &.is-untitled
+    .todoist-query-content
+    > .todoist-tasks-list:first-child
+    > .todoist-task-container:first-child
+    > .todoist-task
+    > .todoist-task-content {
     padding-inline-end: var(--todoist-query-actions-width);
   }
 

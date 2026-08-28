@@ -13,6 +13,7 @@ import {
   type TodoistListProjectContextSource,
 } from "@/bases/todoist-list";
 import { registerCommands } from "@/commands";
+import type { DataAccessor } from "@/data/hydrate";
 import { QueryCache } from "@/data/queryCache";
 import type { CompletedTasksProgress } from "@/data/subscriptions";
 import type { Task } from "@/data/task";
@@ -653,6 +654,13 @@ export default class TodoistPlugin extends Plugin {
       return;
     }
     if (!this.queryCache.set(filter, tasks, updatedAt, completedTasks, completedTasksProgress)) {
+      return;
+    }
+    await this.persistQueryCache();
+  }
+
+  async rebindQueryCacheMetadata(data: DataAccessor): Promise<void> {
+    if (this.disposed || !this.queryCache.rebindMetadata(data)) {
       return;
     }
     await this.persistQueryCache();

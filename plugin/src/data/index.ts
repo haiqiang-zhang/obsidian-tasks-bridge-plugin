@@ -12,13 +12,14 @@ import type {
 } from "@/api/domain/task";
 import type { UserInfo } from "@/api/domain/user";
 import { mapApiError } from "@/data/errors";
-import { type DataAccessor, hydrate } from "@/data/hydrate";
+import { type DataAccessor, hydrate, rebindTaskMetadataList } from "@/data/hydrate";
 import { Repository } from "@/data/repository";
 import {
   type CompletedTasksProgress,
   type LoadMoreCompleted,
   type OnSubscriptionChange,
   type Refresh,
+  type RefreshOptions,
   SubscriptionManager,
   type SubscriptionResult,
   type UnsubscribeCallback,
@@ -32,6 +33,7 @@ export type {
   LoadMoreCompleted,
   OnSubscriptionChange,
   Refresh,
+  RefreshOptions,
   SubscriptionResult,
 } from "@/data/subscriptions";
 
@@ -55,6 +57,7 @@ export class TodoistRemoteMutationFollowupError extends Error {
 }
 
 type TodoistAdapterOptions = {
+  onMetadataUpdated?: (data: DataAccessor) => Promise<void> | void;
   onTaskClosed?: (taskId: TaskId, completedAt: Date) => Promise<void> | void;
 };
 
@@ -68,6 +71,8 @@ type InFlightMetadataSync = {
   accountGeneration: number;
   promise: Promise<boolean>;
 };
+
+const queryMetadataBatchWindowMs = 1000;
 
 export class TodoistAdapter {
   public actions = {
@@ -94,7 +99,10 @@ export class TodoistAdapter {
 
   private accountGeneration = 0;
   private hasSynced = false;
+  private lastMetadataRepositoriesSyncAtMs: number | undefined;
   private metadataSyncInFlight: InFlightMetadataSync | undefined;
+  private metadataRepositoriesSyncInFlight: InFlightMetadataSync | undefined;
+  private readonly onMetadataUpdated: TodoistAdapterOptions["onMetadataUpdated"];
   private readonly onTaskClosed: TodoistAdapterOptions["onTaskClosed"];
   private syncToken: SyncToken = "*";
 
@@ -105,6 +113,7 @@ export class TodoistAdapter {
     this.subscriptions = new SubscriptionManager<Subscription>();
     this.completedSubscriptions = new Map();
     this.tasksPendingClose = [];
+    this.onMetadataUpdated = options.onMetadataUpdated;
     this.onTaskClosed = options.onTaskClosed;
   }
 
@@ -178,9 +187,43 @@ export class TodoistAdapter {
   private async performMetadataSync(accountGeneration: number): Promise<boolean> {
     const [, metadataSucceeded] = await Promise.all([
       this.syncUserInfo(accountGeneration),
-      this.syncMetadataRepositories(accountGeneration),
+      this.syncMetadataRepositoriesCoalesced(accountGeneration),
     ]);
     return metadataSucceeded;
+  }
+
+  private syncMetadataRepositoriesCoalesced(accountGeneration: number): Promise<boolean> {
+    if (this.metadataRepositoriesSyncInFlight?.accountGeneration === accountGeneration) {
+      return this.metadataRepositoriesSyncInFlight.promise;
+    }
+
+    const promise = this.syncMetadataRepositories(accountGeneration).finally(() => {
+      if (this.metadataRepositoriesSyncInFlight?.promise === promise) {
+        this.metadataRepositoriesSyncInFlight = undefined;
+      }
+    });
+    this.metadataRepositoriesSyncInFlight = { accountGeneration, promise };
+    return promise;
+  }
+
+  private syncQueryMetadataRepositories(
+    accountGeneration: number,
+    force = false,
+  ): Promise<boolean> {
+    const elapsed =
+      this.lastMetadataRepositoriesSyncAtMs === undefined
+        ? undefined
+        : Date.now() - this.lastMetadataRepositoriesSyncAtMs;
+    if (
+      !force &&
+      accountGeneration === this.accountGeneration &&
+      elapsed !== undefined &&
+      elapsed >= 0 &&
+      elapsed < queryMetadataBatchWindowMs
+    ) {
+      return Promise.resolve(true);
+    }
+    return this.syncMetadataRepositoriesCoalesced(accountGeneration);
   }
 
   private async syncUserInfo(accountGeneration: number): Promise<void> {
@@ -212,7 +255,30 @@ export class TodoistAdapter {
       this.sections.applyDiff(response.sections);
       this.labels.applyDiff(response.labels);
       this.syncToken = response.syncToken;
-      return true;
+      this.lastMetadataRepositoriesSyncAtMs = Date.now();
+
+      for (const subscription of this.allSubscriptions()) {
+        try {
+          subscription.rebindMetadata();
+        } catch (error: unknown) {
+          console.error(
+            "Failed to rebind a Todoist query subscription after metadata sync:",
+            error,
+          );
+        }
+      }
+
+      if (accountGeneration !== this.accountGeneration) {
+        return false;
+      }
+
+      try {
+        await this.onMetadataUpdated?.(this.data());
+      } catch (error: unknown) {
+        console.error("Failed to update Todoist query caches after metadata sync:", error);
+      }
+
+      return accountGeneration === this.accountGeneration;
     } catch (error) {
       console.error("Failed to sync metadata:", error);
       return false;
@@ -229,6 +295,10 @@ export class TodoistAdapter {
 
   public listActiveProjects(): Project[] {
     return Array.from(this.projects.iterActive());
+  }
+
+  public rebindTaskMetadata(tasks: Task[]): Task[] {
+    return rebindTaskMetadataList(tasks, this.data());
   }
 
   public async getProjectTasks(projectId: ProjectId): Promise<ProjectTaskSnapshot> {
@@ -302,6 +372,7 @@ export class TodoistAdapter {
             initialTasks,
             true,
             completedTasksProgress,
+            (tasks) => this.rebindTaskMetadata(tasks),
           ),
         };
         this.completedSubscriptions.set(query, entry);
@@ -325,7 +396,11 @@ export class TodoistAdapter {
         }
       };
 
-      return [unsubscribe, entry.subscription.update, entry.subscription.loadMoreCompleted];
+      return [
+        unsubscribe,
+        this.makeMetadataFirstRefresh(entry.subscription),
+        this.makeMetadataFirstHistoryLoad(entry.subscription),
+      ];
     }
 
     const subscription = new Subscription(
@@ -335,6 +410,7 @@ export class TodoistAdapter {
       initialTasks,
       false,
       undefined,
+      (tasks) => this.rebindTaskMetadata(tasks),
     );
     const unsubscribeCallback = subscription.subscribe(callback);
     const unsubscribeFromManager = this.subscriptions.subscribe(subscription);
@@ -343,16 +419,40 @@ export class TodoistAdapter {
         unsubscribeCallback();
         unsubscribeFromManager();
       },
-      subscription.update,
-      subscription.loadMoreCompleted,
+      this.makeMetadataFirstRefresh(subscription),
+      this.makeMetadataFirstHistoryLoad(subscription),
     ];
+  }
+
+  private makeMetadataFirstRefresh(subscription: Subscription): Refresh {
+    return async (options?: RefreshOptions) => {
+      const accountGeneration = this.accountGeneration;
+      await this.syncQueryMetadataRepositories(accountGeneration, options?.forceMetadata === true);
+      if (accountGeneration !== this.accountGeneration) {
+        return;
+      }
+      await subscription.update();
+    };
+  }
+
+  private makeMetadataFirstHistoryLoad(subscription: Subscription): LoadMoreCompleted {
+    return async () => {
+      const accountGeneration = this.accountGeneration;
+      await this.syncQueryMetadataRepositories(accountGeneration, true);
+      if (accountGeneration !== this.accountGeneration) {
+        return;
+      }
+      await subscription.loadMoreCompleted();
+    };
   }
 
   public reset(): void {
     this.accountGeneration++;
     this.api.clear();
     this.hasSynced = false;
+    this.lastMetadataRepositoriesSyncAtMs = undefined;
     this.metadataSyncInFlight = undefined;
+    this.metadataRepositoriesSyncInFlight = undefined;
     this.syncToken = "*";
     this.userInfo = undefined;
     this.projects.clear();
@@ -596,6 +696,7 @@ type SubscriptionFetcher = () => Promise<QueryFetchResult | undefined>;
 type CompletedTasksFetcher = (
   request: CompletedTasksPageRequest,
 ) => Promise<CompletedTasksPage | undefined>;
+type TaskMetadataRebinder = (tasks: Task[]) => Task[];
 
 class Subscription {
   private readonly userCallbacks = new Set<OnSubscriptionChange>();
@@ -603,6 +704,8 @@ class Subscription {
   private readonly fetchCompletedTasksPage: CompletedTasksFetcher | undefined;
   private readonly filter: (task: Task) => boolean;
   private readonly completedTasks: boolean;
+  private readonly rebindTaskMetadata: TaskMetadataRebinder;
+  private readonly initialMetadataWasRebound: boolean;
 
   private result: SubscriptionResult;
   private lastSuccessfulTasks: Task[];
@@ -622,20 +725,23 @@ class Subscription {
     initialTasks: Task[],
     completedTasks: boolean,
     completedTasksProgress: CompletedTasksProgress | undefined,
+    rebindTaskMetadata: TaskMetadataRebinder,
   ) {
     this.fetch = fetch;
     this.fetchCompletedTasksPage = fetchCompletedTasksPage;
     this.filter = filter;
     this.completedTasks = completedTasks;
+    this.rebindTaskMetadata = rebindTaskMetadata;
     this.completedTasksProgress = cloneCompletedTasksProgress(completedTasksProgress);
-    this.result = this.makeSuccessResult(initialTasks, { type: "none" });
-    this.lastSuccessfulTasks = initialTasks;
+    this.lastSuccessfulTasks = this.rebindTaskMetadata(initialTasks);
+    this.initialMetadataWasRebound = this.lastSuccessfulTasks !== initialTasks;
+    this.result = this.makeSuccessResult(this.lastSuccessfulTasks, { type: "none" });
   }
 
   public subscribe(callback: OnSubscriptionChange, emitCurrent = false): UnsubscribeCallback {
     this.userCallbacks.add(callback);
-    if (emitCurrent) {
-      this.emitResultTo(callback, false);
+    if (emitCurrent || this.initialMetadataWasRebound) {
+      this.emitResultToSafely(callback, false);
     }
     return () => this.userCallbacks.delete(callback);
   }
@@ -647,6 +753,18 @@ class Subscription {
   public update = async (): Promise<void> => {
     await this.getOrStartRefresh();
   };
+
+  public rebindMetadata(): boolean {
+    const tasks = this.rebindTaskMetadata(this.lastSuccessfulTasks);
+    if (tasks === this.lastSuccessfulTasks) {
+      return false;
+    }
+
+    this.lastSuccessfulTasks = tasks;
+    this.result = this.makeSuccessResult(tasks, { type: "none" });
+    this.callback();
+    return true;
+  }
 
   private getOrStartRefresh(): Promise<void> {
     if (this.refreshInFlight !== undefined) {
@@ -734,6 +852,7 @@ class Subscription {
           type: "not-ready",
         };
       } else {
+        this.lastSuccessfulTasks = this.rebindTaskMetadata(this.lastSuccessfulTasks);
         let tasks = data.activeTasks;
         if (this.completedTasks && data.completedTasksPage !== undefined) {
           const cachedCompletedTasks = this.lastSuccessfulTasks.filter(isTaskCompleted);
@@ -786,13 +905,24 @@ class Subscription {
       type: "none",
     });
     for (const callback of this.userCallbacks) {
-      callback(result);
+      this.notifySafely(callback, result);
     }
   };
 
   private emitResult(includePersistenceMetadata: boolean): void {
     for (const callback of this.userCallbacks) {
+      this.emitResultToSafely(callback, includePersistenceMetadata);
+    }
+  }
+
+  private emitResultToSafely(
+    callback: OnSubscriptionChange,
+    includePersistenceMetadata: boolean,
+  ): void {
+    try {
       this.emitResultTo(callback, includePersistenceMetadata);
+    } catch (error: unknown) {
+      console.error("Failed to notify a Todoist query subscription:", error);
     }
   }
 
@@ -806,6 +936,14 @@ class Subscription {
       }
     }
     callback(result);
+  }
+
+  private notifySafely(callback: OnSubscriptionChange, result: SubscriptionResult): void {
+    try {
+      callback(result);
+    } catch (error: unknown) {
+      console.error("Failed to notify a Todoist query subscription:", error);
+    }
   }
 
   public complete(id: TaskId, completedAt: Date) {
@@ -856,6 +994,7 @@ class Subscription {
     }
 
     this.completedTasksProgress = advanceCompletedTasksProgress(this.completedTasksProgress, page);
+    this.lastSuccessfulTasks = this.rebindTaskMetadata(this.lastSuccessfulTasks);
     this.lastSuccessfulTasks = mergeActiveAndCompletedTasks(
       this.lastSuccessfulTasks.filter((task) => !isTaskCompleted(task)),
       page.tasks,

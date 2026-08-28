@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 
+import type { Label } from "@/api/domain/label";
+import type { Project } from "@/api/domain/project";
+import type { Section } from "@/api/domain/section";
 import { QueryCache } from "@/data/queryCache";
-import { makeTask } from "@/factories/data";
+import { Repository } from "@/data/repository";
+import { makeLabel, makeProject, makeSection, makeTask } from "@/factories/data";
 
 describe("QueryCache", () => {
   it("loads and returns a cached query", () => {
@@ -228,6 +232,69 @@ describe("QueryCache", () => {
     const completedAt = new Date("2026-08-09T07:00:00.000Z");
     cache.completeTaskInAll("task-1", completedAt);
     expect(cache.get("today", true)?.completedTasksProgress).toEqual(progress);
+  });
+
+  it("rebinds metadata across active and completed caches without changing freshness or history", () => {
+    const cache = new QueryCache();
+    const updatedAt = new Date("2026-08-09T06:00:00.000Z");
+    const oldProject = makeProject("project-1", { name: "Old project" });
+    const oldSection = makeSection("section-1", { name: "Old section" });
+    const oldLabel = makeLabel("label-1", { name: "Old label" });
+    const active = makeTask("active", {
+      project: oldProject,
+      section: oldSection,
+      labels: [oldLabel],
+    });
+    const completed = makeTask("completed", {
+      completedAt: "2026-01-01T00:00:00.000Z",
+      project: oldProject,
+      section: oldSection,
+      labels: [oldLabel],
+    });
+    const progress = {
+      latestUntil: updatedAt.toISOString(),
+      historyStart: "2007-01-01T00:00:00.000Z",
+      loadedWindowCount: 3,
+      frontiers: [],
+    };
+    cache.set("active", [active], updatedAt);
+    cache.set("history", [completed], updatedAt, true, progress);
+
+    const projects = new Repository<string, Project>();
+    const sections = new Repository<string, Section>();
+    const labels = new Repository<string, Label>();
+    const currentProject = makeProject("project-1", { name: "Renamed project" });
+    const currentSection = makeSection("section-1", { name: "Renamed section" });
+    const currentLabel = makeLabel("label-1", { name: "Renamed label" });
+    projects.applyDiff([currentProject]);
+    sections.applyDiff([currentSection]);
+    labels.applyDiff([currentLabel]);
+
+    expect(cache.rebindMetadata({ projects, sections, labels })).toBe(true);
+    expect(cache.get("active")).toEqual({
+      tasks: [
+        {
+          ...active,
+          project: currentProject,
+          section: currentSection,
+          labels: [currentLabel],
+        },
+      ],
+      updatedAt,
+    });
+    expect(cache.get("history", true)).toEqual({
+      tasks: [
+        {
+          ...completed,
+          project: currentProject,
+          section: currentSection,
+          labels: [currentLabel],
+        },
+      ],
+      updatedAt,
+      completedTasksProgress: progress,
+    });
+    expect(cache.rebindMetadata({ projects, sections, labels })).toBe(false);
   });
 
   it("migrates the one-frontier completed-history cache without discarding progress", () => {

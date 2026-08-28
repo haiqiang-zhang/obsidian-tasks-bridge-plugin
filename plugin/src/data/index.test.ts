@@ -360,7 +360,7 @@ describe("TodoistAdapter", () => {
   });
 
   describe("metadata sync", () => {
-    it("refreshes account metadata without updating query subscriptions", async () => {
+    it("refreshes account metadata without refetching query tasks", async () => {
       await adapter.initialize(mockApi);
       adapter.subscribe("#test", vi.fn());
       vi.mocked(mockApi.getTasks).mockClear();
@@ -379,6 +379,230 @@ describe("TodoistAdapter", () => {
       expect(adapter.listActiveProjects()).toEqual([project]);
       expect(mockApi.getTasks).not.toHaveBeenCalled();
       expect(mockApi.getCompletedTasksPage).not.toHaveBeenCalled();
+    });
+
+    it("refreshes metadata before a Query Block task request and hydrates renamed projects", async () => {
+      const dateNow = vi.spyOn(Date, "now").mockReturnValue(0);
+      const oldProject = makeProject("project-1", { name: "Old project" });
+      const renamedProject = makeProject("project-1", { name: "Renamed project" });
+      vi.mocked(mockApi.sync)
+        .mockResolvedValueOnce(makeSyncResponse({ projects: [oldProject] }))
+        .mockResolvedValueOnce(
+          makeSyncResponse({ syncToken: "token-2", projects: [renamedProject] }),
+        );
+      vi.mocked(mockApi.getTasks).mockResolvedValueOnce([
+        makeApiTask({ id: "renamed-task", projectId: oldProject.id }),
+      ]);
+      await adapter.initialize(mockApi);
+      dateNow.mockReturnValue(1000);
+      vi.mocked(mockApi.getUser).mockClear();
+
+      try {
+        const { result } = await subscribeAndRefresh(adapter);
+
+        expect(mockApi.sync).toHaveBeenLastCalledWith("token-1");
+        expect(mockApi.getUser).not.toHaveBeenCalled();
+        expect(vi.mocked(mockApi.sync).mock.invocationCallOrder[1]).toBeLessThan(
+          vi.mocked(mockApi.getTasks).mock.invocationCallOrder[0] ?? Number.MAX_SAFE_INTEGER,
+        );
+        expect(result).toMatchObject({
+          type: "success",
+          tasks: [{ id: "renamed-task", project: renamedProject }],
+        });
+      } finally {
+        dateNow.mockRestore();
+      }
+    });
+
+    it("emits metadata-rebound cached tasks as soon as a Query Block subscribes", async () => {
+      const oldProject = makeProject("project-1", { name: "Old project" });
+      const renamedProject = makeProject("project-1", { name: "Renamed project" });
+      vi.mocked(mockApi.sync).mockResolvedValueOnce(
+        makeSyncResponse({ projects: [renamedProject] }),
+      );
+      await adapter.initialize(mockApi);
+      const callback = vi.fn();
+
+      adapter.subscribe("#test", callback, [makeTask("cached", { project: oldProject })]);
+
+      expect(callback).toHaveBeenCalledOnce();
+      expect(callback).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "success",
+          tasks: [expect.objectContaining({ id: "cached", project: renamedProject })],
+          cacheEffect: { type: "none" },
+        }),
+      );
+      expect(mockApi.getTasks).not.toHaveBeenCalled();
+    });
+
+    it("continues rebinding every subscription and the persisted cache when one listener throws", async () => {
+      const oldProject = makeProject("project-1", { name: "Old project" });
+      const renamedProject = makeProject("project-1", { name: "Renamed project" });
+      const onMetadataUpdated = vi.fn();
+      adapter = new TodoistAdapter({ onMetadataUpdated });
+      vi.mocked(mockApi.sync)
+        .mockResolvedValueOnce(makeSyncResponse({ projects: [oldProject] }))
+        .mockResolvedValueOnce(
+          makeSyncResponse({ syncToken: "token-2", projects: [renamedProject] }),
+        );
+      await adapter.initialize(mockApi);
+      const listenerError = new Error("listener failed");
+      const throwingListener = vi.fn(() => {
+        throw listenerError;
+      });
+      let captured: SubscriptionResult = { type: "not-ready" };
+      adapter.subscribe(
+        "#test",
+        throwingListener,
+        [makeTask("cached", { project: oldProject })],
+        true,
+      );
+      adapter.subscribe(
+        "#test",
+        (result) => {
+          captured = result;
+        },
+        [],
+        true,
+      );
+      onMetadataUpdated.mockClear();
+      const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+      try {
+        await expect(adapter.syncMetadata()).resolves.toBe(true);
+
+        expect(captured).toMatchObject({
+          type: "success",
+          tasks: [{ id: "cached", project: renamedProject }],
+        });
+        expect(onMetadataUpdated).toHaveBeenCalledOnce();
+        expect(error).toHaveBeenCalledWith(
+          "Failed to notify a Todoist query subscription:",
+          listenerError,
+        );
+      } finally {
+        error.mockRestore();
+      }
+    });
+
+    it("rebinds mounted active and completed history after metadata-only sync", async () => {
+      const oldProject = makeProject("project-1", { name: "Old project" });
+      const renamedProject = makeProject("project-1", { name: "Renamed project" });
+      vi.mocked(mockApi.sync)
+        .mockResolvedValueOnce(makeSyncResponse({ projects: [oldProject] }))
+        .mockResolvedValueOnce(
+          makeSyncResponse({ syncToken: "token-2", projects: [renamedProject] }),
+        );
+      await adapter.initialize(mockApi);
+      vi.mocked(mockApi.getTasks).mockClear();
+      vi.mocked(mockApi.getCompletedTasksPage).mockClear();
+      let captured: SubscriptionResult = { type: "not-ready" };
+      adapter.subscribe(
+        "#test",
+        (result) => {
+          captured = result;
+        },
+        [
+          makeTask("active", { project: oldProject }),
+          makeTask("historical", {
+            completedAt: "2025-01-01T00:00:00.000Z",
+            project: oldProject,
+          }),
+        ],
+        true,
+      );
+
+      await adapter.syncMetadata();
+
+      expect(mockApi.getTasks).not.toHaveBeenCalled();
+      expect(mockApi.getCompletedTasksPage).not.toHaveBeenCalled();
+      expect(captured).toMatchObject({
+        type: "success",
+        tasks: [
+          { id: "active", project: renamedProject },
+          { id: "historical", project: renamedProject },
+        ],
+        cacheEffect: { type: "none" },
+      });
+    });
+
+    it("coalesces concurrent Query Block metadata preflights", async () => {
+      const dateNow = vi.spyOn(Date, "now").mockReturnValue(0);
+      await adapter.initialize(mockApi);
+      dateNow.mockReturnValue(1000);
+      const metadata = deferred<SyncResponse>();
+      vi.mocked(mockApi.sync).mockImplementationOnce(async () => await metadata.promise);
+      vi.mocked(mockApi.sync).mockClear();
+      vi.mocked(mockApi.getUser).mockClear();
+      vi.mocked(mockApi.getTasks).mockClear();
+      const [, firstRefresh] = adapter.subscribe("#first", vi.fn());
+      const [, secondRefresh] = adapter.subscribe("#second", vi.fn());
+
+      try {
+        const first = firstRefresh();
+        const second = secondRefresh();
+
+        expect(mockApi.sync).toHaveBeenCalledOnce();
+        expect(mockApi.getUser).not.toHaveBeenCalled();
+        expect(mockApi.getTasks).not.toHaveBeenCalled();
+        metadata.resolve(makeSyncResponse({ syncToken: "token-2" }));
+        await Promise.all([first, second]);
+
+        expect(mockApi.getTasks).toHaveBeenCalledTimes(2);
+        expect(mockApi.getTasks).toHaveBeenCalledWith("#first");
+        expect(mockApi.getTasks).toHaveBeenCalledWith("#second");
+      } finally {
+        dateNow.mockRestore();
+      }
+    });
+
+    it("batches Query Block metadata preflights immediately after a shared metadata sync", async () => {
+      const dateNow = vi.spyOn(Date, "now").mockReturnValue(0);
+      try {
+        await adapter.initialize(mockApi);
+        vi.mocked(mockApi.sync).mockClear();
+        vi.mocked(mockApi.getUser).mockClear();
+        const [, firstRefresh] = adapter.subscribe("#first", vi.fn());
+        const [, secondRefresh] = adapter.subscribe("#second", vi.fn());
+
+        await Promise.all([firstRefresh(), secondRefresh()]);
+
+        expect(mockApi.sync).not.toHaveBeenCalled();
+        expect(mockApi.getUser).not.toHaveBeenCalled();
+        expect(mockApi.getTasks).toHaveBeenCalledTimes(2);
+
+        await firstRefresh({ forceMetadata: true });
+        expect(mockApi.sync).toHaveBeenCalledOnce();
+        expect(mockApi.getUser).not.toHaveBeenCalled();
+      } finally {
+        dateNow.mockRestore();
+      }
+    });
+
+    it("still refreshes Query Block tasks when metadata preflight fails", async () => {
+      const dateNow = vi.spyOn(Date, "now").mockReturnValue(0);
+      const oldProject = makeProject("project-1", { name: "Last known project" });
+      vi.mocked(mockApi.sync).mockResolvedValueOnce(makeSyncResponse({ projects: [oldProject] }));
+      await adapter.initialize(mockApi);
+      dateNow.mockReturnValue(1000);
+      vi.mocked(mockApi.sync).mockRejectedValueOnce(new Error("metadata unavailable"));
+      vi.mocked(mockApi.getTasks).mockResolvedValueOnce([
+        makeApiTask({ id: "fresh-task", projectId: oldProject.id }),
+      ]);
+      const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+      try {
+        const { result } = await subscribeAndRefresh(adapter);
+
+        expect(result).toMatchObject({
+          type: "success",
+          tasks: [{ id: "fresh-task", project: oldProject }],
+        });
+      } finally {
+        dateNow.mockRestore();
+        error.mockRestore();
+      }
     });
 
     it("treats user-info failure as nonfatal when repository metadata succeeds", async () => {
@@ -532,6 +756,7 @@ describe("TodoistAdapter", () => {
       vi.mocked(mockApi.updateTask).mockResolvedValue(updatedTask);
       vi.mocked(mockApi.getTasks).mockResolvedValue([updatedTask]);
       await adapter.initialize(mockApi);
+      vi.mocked(mockApi.sync).mockClear();
 
       let captured: SubscriptionResult = { type: "not-ready" };
       adapter.subscribe("#test", (result) => {
@@ -550,6 +775,7 @@ describe("TodoistAdapter", () => {
         duration: { amount: 30, unit: "minute" },
       });
       expect(mockApi.getTasks).toHaveBeenCalledWith("#test");
+      expect(mockApi.sync).not.toHaveBeenCalled();
       const result = captured as SubscriptionResult;
       expect(result.type).toBe("success");
       if (result.type === "success") {
@@ -573,9 +799,9 @@ describe("TodoistAdapter", () => {
       });
 
       const openingRefresh = refresh();
+      await vi.waitFor(() => expect(mockApi.getTasks).toHaveBeenCalledOnce());
       const updating = adapter.actions.updateTask("task-1", { content: "Updated remotely" });
       await vi.waitFor(() => expect(mockApi.updateTask).toHaveBeenCalledOnce());
-      expect(mockApi.getTasks).toHaveBeenCalledOnce();
 
       staleRefresh.resolve([makeApiTask({ id: "task-1", content: "Before mutation" })]);
       await vi.waitFor(() => expect(mockApi.getTasks).toHaveBeenCalledTimes(2));
@@ -604,13 +830,13 @@ describe("TodoistAdapter", () => {
 
       const [, refresh] = adapter.subscribe("#test", vi.fn());
       const openingRefresh = refresh();
+      await vi.waitFor(() => expect(mockApi.getTasks).toHaveBeenCalledOnce());
       const updating = adapter.actions.updateTask("task-1", { content: "Updated remotely" });
       const reopening = adapter.actions.reopenTask("task-2");
       await vi.waitFor(() => {
         expect(mockApi.updateTask).toHaveBeenCalledOnce();
         expect(mockApi.reopenTask).toHaveBeenCalledOnce();
       });
-      expect(mockApi.getTasks).toHaveBeenCalledOnce();
 
       staleRefresh.resolve([]);
       await vi.waitFor(() => expect(mockApi.getTasks).toHaveBeenCalledTimes(2));
@@ -1449,6 +1675,7 @@ describe("TodoistAdapter", () => {
       );
 
       const loadingHistory = loadMoreCompleted();
+      await vi.waitFor(() => expect(mockApi.getCompletedTasksPage).toHaveBeenCalledOnce());
       await refresh();
       resolveHistoryLoad({
         tasks: [
@@ -1653,7 +1880,7 @@ describe("TodoistAdapter", () => {
 
       const firstRefresh = refresh();
       const secondRefresh = refresh();
-      expect(mockApi.getTasks).toHaveBeenCalledOnce();
+      await vi.waitFor(() => expect(mockApi.getTasks).toHaveBeenCalledOnce());
 
       response.resolve([makeApiTask({ id: "refreshed-task" })]);
       await Promise.all([firstRefresh, secondRefresh]);
@@ -1691,6 +1918,7 @@ describe("TodoistAdapter", () => {
       );
 
       const openingRefresh = refresh();
+      await vi.waitFor(() => expect(mockApi.getTasks).toHaveBeenCalledOnce());
       await adapter.actions.closeTask("cached-task");
       resolveRefresh([makeApiTask({ id: "cached-task", content: "Cached task" })]);
       await openingRefresh;

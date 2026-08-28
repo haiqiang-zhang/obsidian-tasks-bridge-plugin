@@ -123,6 +123,7 @@ vi.mock("@/data/queryCache", () => ({
     public readonly bindCredential = vi.fn(() => false);
     public readonly completeTaskInAll = vi.fn(() => false);
     public readonly load = vi.fn();
+    public readonly rebindMetadata = vi.fn(() => false);
     public readonly removeTaskFromAll = vi.fn(() => false);
     public readonly serialize = vi.fn(() => ({}));
     public readonly set = vi.fn(() => false);
@@ -1688,6 +1689,23 @@ describe("TodoistPlugin async lifecycle", () => {
     await plugin.removeTaskFromAllQueryCaches("task-1", updatedAt);
 
     expect(runtime.saveLocalStorage).toHaveBeenCalledTimes(3);
+    expect(runtime.saveLocalStorage).toHaveBeenCalledWith("tasks-bridge:query-cache:v2", {});
+    expect(runtime.saveData).not.toHaveBeenCalled();
+  });
+
+  it("persists metadata-rebound query caches only when they changed", async () => {
+    const services = makeServices();
+    const plugin = makePlugin(services);
+    vi.mocked(plugin.queryCache.rebindMetadata)
+      .mockReturnValueOnce(false)
+      .mockReturnValueOnce(true);
+    const data = {} as Parameters<typeof plugin.rebindQueryCacheMetadata>[0];
+
+    await plugin.rebindQueryCacheMetadata(data);
+    expect(runtime.saveLocalStorage).not.toHaveBeenCalled();
+
+    await plugin.rebindQueryCacheMetadata(data);
+    expect(runtime.saveLocalStorage).toHaveBeenCalledOnce();
     expect(runtime.saveLocalStorage).toHaveBeenCalledWith("tasks-bridge:query-cache:v2", {});
     expect(runtime.saveData).not.toHaveBeenCalled();
   });

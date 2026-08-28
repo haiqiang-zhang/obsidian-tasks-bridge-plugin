@@ -11,6 +11,7 @@ import {
   type TaskId,
   taskIdSchema,
 } from "@/api/domain/task";
+import { type DataAccessor, rebindTaskMetadataList } from "@/data/hydrate";
 import type { CompletedTasksProgress } from "@/data/subscriptions";
 import { isTaskCompleted, type Task } from "@/data/task";
 
@@ -178,6 +179,23 @@ export class QueryCache {
     if (changed) {
       this.prune();
     }
+    return changed;
+  }
+
+  /** Rebind every cached query to current Todoist metadata without changing query freshness. */
+  public rebindMetadata(data: DataAccessor): boolean {
+    let changed = false;
+
+    for (const [key, existing] of this.entries) {
+      const tasks = rebindTaskMetadataList(existing.tasks, data);
+      if (tasks === existing.tasks) {
+        continue;
+      }
+
+      this.entries.set(key, { ...existing, tasks });
+      changed = true;
+    }
+
     return changed;
   }
 

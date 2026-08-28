@@ -3,10 +3,15 @@ import { describe, expect, it } from "vitest";
 import type { Label } from "@/api/domain/label";
 import type { Project } from "@/api/domain/project";
 import type { Section } from "@/api/domain/section";
-import { type DataAccessor, hydrate } from "@/data/hydrate";
+import {
+  type DataAccessor,
+  hydrate,
+  rebindTaskMetadata,
+  rebindTaskMetadataList,
+} from "@/data/hydrate";
 import { Repository } from "@/data/repository";
 import { isTaskCompleted } from "@/data/task";
-import { makeApiTask, makeLabel, makeProject, makeSection } from "@/factories/data";
+import { makeApiTask, makeLabel, makeProject, makeSection, makeTask } from "@/factories/data";
 
 const makeDataAccessor = (opts?: {
   projects?: Project[];
@@ -143,11 +148,16 @@ describe("hydrate", () => {
     expect(task.labels).toEqual([label]);
   });
 
-  it("should fall back to Unknown Label when label not found", () => {
+  it("preserves the API label name when current metadata is unavailable", () => {
     const task = hydrate(makeApiTask({ labels: ["nonexistent"] }), makeDataAccessor());
 
     expect(task.labels).toEqual([
-      { id: "unknown-label", name: "Unknown Label", color: "grey", isDeleted: false },
+      {
+        id: "tasks-bridge:unresolved-label:nonexistent",
+        name: "nonexistent",
+        color: "grey",
+        isDeleted: false,
+      },
     ]);
   });
 
@@ -159,8 +169,45 @@ describe("hydrate", () => {
 
     expect(task.labels).toEqual([
       label,
-      { id: "unknown-label", name: "Unknown Label", color: "grey", isDeleted: false },
+      {
+        id: "tasks-bridge:unresolved-label:nonexistent",
+        name: "nonexistent",
+        color: "grey",
+        isDeleted: false,
+      },
     ]);
+  });
+
+  it("encodes an unresolved API label name into a stable cache identity", () => {
+    const task = hydrate(makeApiTask({ labels: ["research & review/中文"] }), makeDataAccessor());
+
+    expect(task.labels).toEqual([
+      {
+        id: "tasks-bridge:unresolved-label:research%20%26%20review%2F%E4%B8%AD%E6%96%87",
+        name: "research & review/中文",
+        color: "grey",
+        isDeleted: false,
+      },
+    ]);
+  });
+
+  it("rebinds an unresolved label by the API name after metadata recovers", () => {
+    const offlineTask = hydrate(makeApiTask({ labels: ["urgent"] }), makeDataAccessor());
+    const currentLabel = makeLabel("label-1", { name: "urgent", color: "red" });
+
+    const rebound = rebindTaskMetadata(offlineTask, makeDataAccessor({ labels: [currentLabel] }));
+
+    expect(rebound.labels).toEqual([currentLabel]);
+  });
+
+  it("does not replace a resolved label with a different same-name label", () => {
+    const cachedLabel = makeLabel("original-label", { name: "urgent" });
+    const differentLabel = makeLabel("replacement-label", { name: "urgent" });
+    const cached = makeTask("cached", { labels: [cachedLabel] });
+
+    expect(
+      rebindTaskMetadata(cached, makeDataAccessor({ labels: [differentLabel] })).labels,
+    ).toEqual([cachedLabel]);
   });
 
   it("should map parentId correctly", () => {
@@ -173,5 +220,47 @@ describe("hydrate", () => {
     const task = hydrate(makeApiTask({ parentId: null }), makeDataAccessor());
 
     expect(task.parentId).toBeUndefined();
+  });
+
+  it("rebinds cached project, section, and label metadata by stable ID", () => {
+    const oldProject = makeProject("project-1", { name: "Old project" });
+    const oldSection = makeSection("section-1", { name: "Old section" });
+    const oldLabel = makeLabel("label-1", { name: "Old label" });
+    const currentProject = makeProject("project-1", { name: "Renamed project" });
+    const currentSection = makeSection("section-1", { name: "Renamed section" });
+    const currentLabel = makeLabel("label-1", { name: "Renamed label" });
+    const cached = makeTask("cached", {
+      project: oldProject,
+      section: oldSection,
+      labels: [oldLabel],
+    });
+
+    const rebound = rebindTaskMetadata(
+      cached,
+      makeDataAccessor({
+        projects: [currentProject],
+        sections: [currentSection],
+        labels: [currentLabel],
+      }),
+    );
+
+    expect(rebound).toEqual({
+      ...cached,
+      project: currentProject,
+      section: currentSection,
+      labels: [currentLabel],
+    });
+  });
+
+  it("keeps cached fallbacks when current metadata is unavailable", () => {
+    const cached = makeTask("cached", {
+      project: makeProject("missing-project", { name: "Cached project" }),
+      section: makeSection("missing-section", { name: "Cached section" }),
+      labels: [makeLabel("missing-label", { name: "Cached label" })],
+    });
+    const tasks = [cached];
+
+    expect(rebindTaskMetadataList(tasks, makeDataAccessor())).toBe(tasks);
+    expect(rebindTaskMetadata(cached, makeDataAccessor())).toBe(cached);
   });
 });

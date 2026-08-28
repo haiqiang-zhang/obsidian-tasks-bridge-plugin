@@ -14,6 +14,19 @@ const ruleBody = (css: string, selector: string): string => {
 };
 
 describe("Todoist query special-state styles", () => {
+  it("reserves the native action rail only beside the first task content", () => {
+    const css = compileStyles("src/ui/query/styles.scss");
+    const firstTaskContent = ruleBody(
+      css,
+      ".todoist-query.is-untitled .todoist-query-content > .todoist-tasks-list:first-child > .todoist-task-container:first-child > .todoist-task > .todoist-task-content",
+    );
+
+    expect(firstTaskContent).toContain("padding-inline-end: var(--todoist-query-actions-width)");
+    expect(css).not.toMatch(
+      /\.todoist-query\.is-untitled[^{}]*> \.todoist-task-container:first-child\s*\{[^}]*padding-inline-end:/,
+    );
+  });
+
   it("keeps an untitled callout full width while reserving the native action rail", () => {
     const css = compileStyles("src/ui/query/styles.scss");
     const callout = ruleBody(

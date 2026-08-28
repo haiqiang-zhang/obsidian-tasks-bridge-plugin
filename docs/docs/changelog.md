@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### 🐛 Bug Fixes
+
+- Kept Query Blocks current after Todoist project, section, or label renames by refreshing shared metadata before task queries and rebinding cache-first results by stable Todoist IDs.
+- Kept first-row project and section metadata aligned in untitled Query Blocks while preserving space for Obsidian's native block actions.
+
 ## v2.10.9 (2026-08-26)
 
 ### 🐛 Bug Fixes

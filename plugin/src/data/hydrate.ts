@@ -17,7 +17,11 @@ export function hydrate(apiTask: ApiTask, data: DataAccessor): Task {
     ? (data.sections.byId(apiTask.sectionId) ?? makeUnknownSection(apiTask.sectionId))
     : undefined;
 
-  const labels = apiTask.labels.map((id) => data.labels.byName(id) ?? makeUnknownLabel());
+  // Todoist task payloads carry label names, not label IDs. Preserve that source identity when
+  // metadata is temporarily unavailable so a later metadata sync can resolve the real Label.
+  const labels = apiTask.labels.map(
+    (name) => data.labels.byName(name) ?? makeUnresolvedLabel(name),
+  );
 
   return {
     id: apiTask.id,
@@ -43,6 +47,64 @@ export function hydrate(apiTask: ApiTask, data: DataAccessor): Task {
   };
 }
 
+/**
+ * Rebind denormalized task metadata to the latest Todoist repositories by stable ID.
+ *
+ * Query caches intentionally retain complete metadata objects so they can render before the
+ * network is ready. Once current metadata is available, those snapshots must not keep renamed
+ * projects, sections, or labels alive. Missing current metadata keeps the cached fallback so an
+ * offline or partial sync never degrades a previously useful display.
+ */
+export function rebindTaskMetadata(task: Task, data: DataAccessor): Task {
+  const project = preferCurrentMetadata(task.project, data.projects.byId(task.project.id));
+  const section =
+    task.section === undefined
+      ? undefined
+      : preferCurrentMetadata(task.section, data.sections.byId(task.section.id));
+  const labels = task.labels.map((label) => {
+    const current =
+      data.labels.byId(label.id) ??
+      (isUnresolvedLabel(label) ? data.labels.byName(label.name) : undefined);
+    return preferCurrentMetadata(label, current);
+  });
+  const labelsChanged = labels.some((label, index) => label !== task.labels[index]);
+
+  if (project === task.project && section === task.section && !labelsChanged) {
+    return task;
+  }
+
+  return {
+    ...task,
+    project,
+    section,
+    labels: labelsChanged ? labels : task.labels,
+  };
+}
+
+export function rebindTaskMetadataList(tasks: Task[], data: DataAccessor): Task[] {
+  const rebound = tasks.map((task) => rebindTaskMetadata(task, data));
+  return rebound.some((task, index) => task !== tasks[index]) ? rebound : tasks;
+}
+
+const preferCurrentMetadata = <T extends object>(cached: T, current: T | undefined): T => {
+  if (current === undefined || shallowMetadataEquals(cached, current)) {
+    return cached;
+  }
+  return current;
+};
+
+const shallowMetadataEquals = (left: object, right: object): boolean => {
+  const leftRecord = left as Record<string, unknown>;
+  const rightRecord = right as Record<string, unknown>;
+  const leftKeys = Object.keys(leftRecord);
+  const rightKeys = Object.keys(rightRecord);
+
+  return (
+    leftKeys.length === rightKeys.length &&
+    leftKeys.every((key) => Object.is(leftRecord[key], rightRecord[key]))
+  );
+};
+
 const makeUnknownProject = (id: string): Project => {
   return {
     id,
@@ -67,11 +129,15 @@ const makeUnknownSection = (id: string): Section => {
   };
 };
 
-const makeUnknownLabel = (): Label => {
+const unresolvedLabelIdPrefix = "tasks-bridge:unresolved-label:";
+
+const makeUnresolvedLabel = (name: string): Label => {
   return {
-    id: "unknown-label",
-    name: "Unknown Label",
+    id: `${unresolvedLabelIdPrefix}${encodeURIComponent(name)}`,
+    name,
     color: "grey",
     isDeleted: false,
   };
 };
+
+const isUnresolvedLabel = (label: Label): boolean => label.id.startsWith(unresolvedLabelIdPrefix);

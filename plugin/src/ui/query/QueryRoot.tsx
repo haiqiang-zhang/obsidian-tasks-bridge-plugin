@@ -9,6 +9,7 @@ import type {
   LoadMoreCompleted,
   OnSubscriptionChange,
   Refresh,
+  RefreshOptions,
   SubscriptionResult,
 } from "@/data";
 import type { Task } from "@/data/task";
@@ -34,7 +35,7 @@ const useSubscription = (
   callback: OnSubscriptionChange,
   initialTasks: Task[],
   initialCompletedTasksProgress: CompletedTasksProgress | undefined,
-  runRefresh: (refresh: Refresh) => Promise<void>,
+  runRefresh: (refresh: Refresh, options?: RefreshOptions) => Promise<void>,
 ): [Refresh, boolean, LoadMoreCompleted, boolean, boolean] => {
   const [refresher, setRefresher] = useState<{ query: TaskQuery; refresh: Refresh } | undefined>(
     undefined,
@@ -78,25 +79,28 @@ const useSubscription = (
     };
   }, [query, plugin, callback, initialTasks, initialCompletedTasksProgress]);
 
-  const forceRefresh = useCallback(async () => {
-    if (refresher === undefined || refresher.query !== query) {
-      return;
-    }
-
-    const generation = ++refreshGeneration.current;
-    if (isMounted.current) {
-      setIsFetching(true);
-    }
-    try {
-      await runRefresh(refresher.refresh);
-    } catch (error: unknown) {
-      console.error("Failed to refresh Todoist query:", error);
-    } finally {
-      if (isMounted.current && generation === refreshGeneration.current) {
-        setIsFetching(false);
+  const forceRefresh = useCallback(
+    async (options?: RefreshOptions) => {
+      if (refresher === undefined || refresher.query !== query) {
+        return;
       }
-    }
-  }, [refresher, query, runRefresh]);
+
+      const generation = ++refreshGeneration.current;
+      if (isMounted.current) {
+        setIsFetching(true);
+      }
+      try {
+        await runRefresh(refresher.refresh, options);
+      } catch (error: unknown) {
+        console.error("Failed to refresh Todoist query:", error);
+      } finally {
+        if (isMounted.current && generation === refreshGeneration.current) {
+          setIsFetching(false);
+        }
+      }
+    },
+    [refresher, query, runRefresh],
+  );
 
   useEffect(() => {
     void forceRefresh();
@@ -147,7 +151,10 @@ type WritableRef<T> = {
 const useRefreshCadence = (
   interval: number | undefined,
   configurationKey: string,
-): [(refresh: Refresh) => Promise<void>, WritableRef<Refresh | undefined>] => {
+): [
+  (refresh: Refresh, options?: RefreshOptions) => Promise<void>,
+  WritableRef<Refresh | undefined>,
+] => {
   const state = useRef<RefreshCadenceState>({
     configurationKey: "",
     configurationGeneration: 0,
@@ -196,7 +203,7 @@ const useRefreshCadence = (
   }, [clearTimer]);
 
   const runRefresh = useCallback(
-    async (refresh: Refresh) => {
+    async (refresh: Refresh, options?: RefreshOptions) => {
       const current = state.current;
       if (!current.isMounted) {
         return;
@@ -208,7 +215,7 @@ const useRefreshCadence = (
       current.hasStarted = true;
 
       try {
-        await refresh();
+        await refresh(options);
       } finally {
         const latest = state.current;
         if (latest.isMounted && latest.activeRefreshGeneration === refreshGeneration) {
@@ -271,7 +278,16 @@ export const QueryRoot: React.FC<Props> = ({ query, warnings }) => {
     query.view,
   ]);
   const [runRefresh, scheduledRefresh] = useRefreshCadence(interval, queryConfigurationKey);
-  const [cachedQuery] = useState(() => plugin.queryCache.get(query.filter, query.completedTasks));
+  const [cachedQuery] = useState(() => {
+    const cached = plugin.queryCache.get(query.filter, query.completedTasks);
+    if (cached === undefined) {
+      return undefined;
+    }
+    return {
+      ...cached,
+      tasks: plugin.services.todoist.rebindTaskMetadata(cached.tasks),
+    };
+  });
   const [initialTasks] = useState(() => cachedQuery?.tasks ?? []);
   const [initialCompletedTasksProgress] = useState(() => cachedQuery?.completedTasksProgress);
   const [result, setResult] = useState<SubscriptionResult | undefined>(() => {
@@ -366,7 +382,7 @@ export const QueryRoot: React.FC<Props> = ({ query, warnings }) => {
         <QueryHeader
           title={title}
           isFetching={isFetching}
-          refresh={refresh}
+          refresh={async () => await refresh({ forceMetadata: true })}
           refreshedTimestamp={refreshedTimestamp}
         />
         <div className="todoist-query-content">

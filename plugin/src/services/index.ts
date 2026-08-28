@@ -28,6 +28,9 @@ export type Services = {
 
 export const makeServices = (plugin: TodoistPlugin): Services => {
   const todoist = new TodoistAdapter({
+    onMetadataUpdated: async (data) => {
+      await plugin.rebindQueryCacheMetadata(data);
+    },
     onTaskClosed: async (taskId, completedAt) => {
       await plugin.completeTaskInAllQueryCaches(taskId, completedAt);
     },

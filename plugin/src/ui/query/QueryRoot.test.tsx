@@ -61,6 +61,7 @@ const makePlugin = (
   const loadMoreCompleted = vi.fn().mockResolvedValue(undefined);
   const unsubscribe = vi.fn();
   const unsubscribeCache = vi.fn();
+  const rebindTaskMetadata = vi.fn((tasks: ReturnType<typeof makeTask>[]) => tasks);
   const subscribe = vi.fn((_filter: string, callback: SubscriptionCallback) => {
     subscriptionCallback = callback;
     return [unsubscribe, refresh, loadMoreCompleted] as const;
@@ -94,6 +95,7 @@ const makePlugin = (
     writeQueryCache,
     services: {
       todoist: {
+        rebindTaskMetadata,
         subscribe,
         actions: {
           closeTask: vi.fn(),
@@ -109,6 +111,7 @@ const makePlugin = (
     loadMoreCompleted,
     unsubscribe,
     unsubscribeCache,
+    rebindTaskMetadata,
     writeQueryCache,
     callback: () => {
       if (subscriptionCallback === undefined) {
@@ -172,6 +175,7 @@ describe("QueryRoot auto-refresh cadence", () => {
     renderQuery(mock.plugin);
     await act(async () => Promise.resolve());
     expect(mock.refresh).toHaveBeenCalledOnce();
+    expect(mock.refresh).toHaveBeenNthCalledWith(1, undefined);
 
     await act(async () => vi.advanceTimersByTimeAsync(60_000));
     expect(mock.refresh).toHaveBeenCalledOnce();
@@ -222,11 +226,13 @@ describe("QueryRoot auto-refresh cadence", () => {
     renderQuery(mock.plugin);
     await act(async () => Promise.resolve());
     expect(mock.refresh).toHaveBeenCalledOnce();
+    expect(mock.refresh).toHaveBeenNthCalledWith(1, undefined);
 
     await act(async () => vi.advanceTimersByTimeAsync(20_000));
     fireEvent.click(screen.getByRole("button", { name: "Refresh tasks" }));
     await act(async () => Promise.resolve());
     expect(mock.refresh).toHaveBeenCalledTimes(2);
+    expect(mock.refresh).toHaveBeenNthCalledWith(2, { forceMetadata: true });
 
     await act(async () => vi.advanceTimersByTimeAsync(30_000));
     expect(mock.refresh).toHaveBeenCalledTimes(2);
@@ -237,6 +243,7 @@ describe("QueryRoot auto-refresh cadence", () => {
 
     await act(async () => vi.advanceTimersByTimeAsync(1));
     expect(mock.refresh).toHaveBeenCalledTimes(3);
+    expect(mock.refresh).toHaveBeenNthCalledWith(3, undefined);
   });
 
   it("applies an interval change only after the active refresh settles", async () => {
@@ -354,6 +361,28 @@ describe("QueryRoot cache-first rendering", () => {
       "today",
       [freshTask],
       expect.any(Date),
+      false,
+      undefined,
+    );
+  });
+
+  it("rebinds cache-first task metadata before seeding the subscription", async () => {
+    const cachedTask = makeTask("cached", { content: "Cached task" });
+    const reboundTask = {
+      ...cachedTask,
+      project: { ...cachedTask.project, name: "Renamed project" },
+    };
+    const mock = makePlugin([cachedTask]);
+    mock.rebindTaskMetadata.mockReturnValueOnce([reboundTask]);
+
+    renderQuery(mock.plugin);
+
+    expect(await screen.findByText("Cached task")).toBeInTheDocument();
+    expect(mock.rebindTaskMetadata).toHaveBeenCalledWith([cachedTask]);
+    expect(mock.subscribe).toHaveBeenCalledWith(
+      "today",
+      expect.any(Function),
+      [reboundTask],
       false,
       undefined,
     );
