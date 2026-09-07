@@ -524,7 +524,7 @@
 }
 
 // Keep Markdown and Bases progress defaults from overriding the view's sizing and shape.
-.todoist-bases-list .todoist-bases-project-progress {
+.todoist-bases-list .todoist-bases-project-statistics > .todoist-bases-project-progress {
   display: block;
   width: 100%;
   height: var(--size-4-2);
@@ -1060,7 +1060,7 @@
     transition: none;
   }
 
-  .todoist-bases-list .todoist-bases-project-progress::-webkit-progress-value {
+  .todoist-bases-list .todoist-bases-project-statistics > .todoist-bases-project-progress::-webkit-progress-value {
     transition: none;
   }
 }

@@ -292,7 +292,10 @@ describe("Tasks List styles", () => {
     const css = compileStyles();
     const row = ruleBody(css, ".todoist-bases-project-row");
     const statistics = ruleBody(css, ".todoist-bases-project-statistics");
-    const progress = ruleBody(css, ".todoist-bases-list .todoist-bases-project-progress");
+    const progress = ruleBody(
+      css,
+      ".todoist-bases-list .todoist-bases-project-statistics > .todoist-bases-project-progress",
+    );
 
     expect(row).toContain("grid-template-columns: minmax(0, 1fr) minmax(18rem, 20rem)");
     expect(statistics).toContain("max-width: 20rem");
