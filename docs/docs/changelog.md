@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v2.10.12 (2026-09-07)
+
 ### 🐛 Bug Fixes
 
 - Kept project progress bars at 8px and vertically centered in Live Preview as well as Reading view by overriding Obsidian's editor-specific progress styling.
