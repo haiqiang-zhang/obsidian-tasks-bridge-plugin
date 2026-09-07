@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v2.10.11 (2026-09-07)
+
 ### ✨ Improvements
 
 - Simplified the Tasks List toolbar to task counts and added a Sync button that runs the same manual synchronization as the Sync command, with a loading indicator and repeat-click protection.
