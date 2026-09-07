@@ -213,6 +213,10 @@ export default class TodoistPlugin extends Plugin {
 
   private makeTodoistListActions(): TodoistListActions {
     return {
+      // Share the manual sync entry point with the Tasks bridge: Sync command.
+      sync: async () => {
+        await this.syncProjectFolderNow();
+      },
       isReady: () => this.services.projectTasks.isReady(),
       completeTask: async (task) => {
         try {

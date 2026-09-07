@@ -70,10 +70,14 @@ export const TodoistList: React.FC<TodoistListProps> = ({
 }) => {
   const listRef = useRef<HTMLDivElement>(null);
   const [collapsedBranches, setCollapsedBranches] = useState<Set<string>>(() => new Set());
-  const [expandedProjectTasks, setExpandedProjectTasks] = useState<Set<string>>(() => new Set());
+  const [projectExpansionOverrides, setProjectExpansionOverrides] = useState<Map<string, boolean>>(
+    () => new Map(),
+  );
   const [overviewCollapsed, setOverviewCollapsed] = useState(projectOverviewCollapsed);
   const [heatmapRange, setHeatmapRange] = useState(completionHeatmapRange);
   const [ready, setReady] = useState(() => readReady(actions));
+  const [syncing, setSyncing] = useState(false);
+  const syncInFlight = useRef(false);
   const wideLayout = useWideLayout(listRef, layoutContainerEl);
 
   useEffect(() => setOverviewCollapsed(projectOverviewCollapsed), [projectOverviewCollapsed]);
@@ -140,26 +144,51 @@ export const TodoistList: React.FC<TodoistListProps> = ({
     });
   };
 
-  const toggleProjectTasks = (key: string) => {
-    setExpandedProjectTasks((current) => {
-      const next = new Set(current);
-      if (next.has(key)) {
-        next.delete(key);
-      } else {
-        next.add(key);
-      }
+  const setProjectExpanded = (key: string, expanded: boolean) => {
+    setProjectExpansionOverrides((current) => {
+      const next = new Map(current);
+      next.set(key, expanded);
       return next;
     });
   };
 
-  const collapseAll = () => setExpandedProjectTasks(new Set());
+  const collapseAll = () => {
+    setProjectExpansionOverrides(
+      new Map(
+        [...collectProjectBranchKeys(scopedGroups, options.showSections)].map((key) => [
+          key,
+          false,
+        ]),
+      ),
+    );
+  };
   const expandAll = () => {
-    setExpandedProjectTasks(collectProjectContentKeys(scopedGroups, options.showSections));
+    setProjectExpansionOverrides(
+      new Map(
+        [...collectProjectBranchKeys(scopedGroups, options.showSections)].map((key) => [key, true]),
+      ),
+    );
     setCollapsedBranches(new Set());
   };
   const scopedTaskCount = countTotal(scopedCounts);
   const hasScopedProjects = scopedGroups.some((group) => group.projects.length > 0);
   const diagnosticsMessage = makeDiagnosticsMessage(model);
+
+  const sync = async () => {
+    if (syncInFlight.current) {
+      return;
+    }
+    syncInFlight.current = true;
+    setSyncing(true);
+    try {
+      await actions.sync();
+    } catch (error: unknown) {
+      console.error("Failed to synchronize Tasks List", error);
+    } finally {
+      syncInFlight.current = false;
+      setSyncing(false);
+    }
+  };
 
   return (
     <div
@@ -171,10 +200,8 @@ export const TodoistList: React.FC<TodoistListProps> = ({
       <div className="todoist-bases-list-toolbar">
         <output
           className="todoist-bases-list-toolbar-summary"
-          aria-label={`Visible in Base: ${countsLabel(scopedCounts)}`}
+          aria-label={countsLabel(scopedCounts)}
         >
-          <span className="todoist-bases-list-toolbar-summary-label">Visible in Base</span>
-          <span aria-hidden="true">·</span>
           <span>{scopedCounts.active} active</span>
           <span aria-hidden="true">·</span>
           <span>{scopedCounts.completed} completed</span>
@@ -187,7 +214,22 @@ export const TodoistList: React.FC<TodoistListProps> = ({
         </output>
         <div className="todoist-bases-list-toolbar-actions">
           <button
-            aria-label="Expand all project tasks"
+            aria-busy={syncing}
+            className="clickable-icon todoist-bases-list-sync"
+            disabled={syncing}
+            onClick={() => void sync()}
+            title={syncing ? "Syncing…" : "Sync"}
+            type="button"
+          >
+            {syncing ? (
+              <ObsidianLoadingIcon aria-hidden="true" size="s" />
+            ) : (
+              <ObsidianIcon aria-hidden="true" id="lucide-refresh-cw" size="s" />
+            )}
+            <span>Sync</span>
+          </button>
+          <button
+            aria-label="Expand all projects"
             className="clickable-icon"
             onClick={expandAll}
             title="Expand all"
@@ -196,7 +238,7 @@ export const TodoistList: React.FC<TodoistListProps> = ({
             <ObsidianIcon id="lucide-chevrons-down" size="s" />
           </button>
           <button
-            aria-label="Collapse all project tasks"
+            aria-label="Collapse all projects"
             className="clickable-icon"
             onClick={collapseAll}
             title="Collapse all"
@@ -252,7 +294,7 @@ export const TodoistList: React.FC<TodoistListProps> = ({
                 <GroupBranch
                   actions={actions}
                   collapsed={collapsedBranches}
-                  expandedProjectTasks={expandedProjectTasks}
+                  projectExpansionOverrides={projectExpansionOverrides}
                   group={group}
                   key={group.key}
                   navigation={navigation}
@@ -260,7 +302,7 @@ export const TodoistList: React.FC<TodoistListProps> = ({
                   ready={ready}
                   rootIsSelected={rootProjectId !== null}
                   toggleCollapsed={toggleCollapsed}
-                  toggleProjectTasks={toggleProjectTasks}
+                  setProjectExpanded={setProjectExpanded}
                 />
               ))}
             </div>
@@ -325,8 +367,8 @@ type BranchProps = {
 };
 
 type ProjectContentProps = {
-  expandedProjectTasks: ReadonlySet<string>;
-  toggleProjectTasks: (key: string) => void;
+  projectExpansionOverrides: ReadonlyMap<string, boolean>;
+  setProjectExpanded: (key: string, expanded: boolean) => void;
 };
 
 const GroupBranch: React.FC<
@@ -347,7 +389,7 @@ const GroupBranch: React.FC<
           <span>{countTotal(group.counts)}</span>
         </header>
       )}
-      <div className="todoist-bases-list-tree">
+      <ul className="todoist-bases-list-tree">
         {group.projects.map((project) => (
           <ProjectBranch
             {...props}
@@ -358,7 +400,7 @@ const GroupBranch: React.FC<
             rootIsSelected={rootIsSelected}
           />
         ))}
-      </div>
+      </ul>
     </section>
   );
 };
@@ -375,7 +417,7 @@ const ProjectBranch: React.FC<
   actions,
   collapsed,
   depth,
-  expandedProjectTasks,
+  projectExpansionOverrides,
   groupKey,
   navigation,
   options,
@@ -383,40 +425,48 @@ const ProjectBranch: React.FC<
   ready,
   rootIsSelected,
   toggleCollapsed,
-  toggleProjectTasks,
+  setProjectExpanded,
 }) => {
-  const key = projectContentKey(groupKey, project.scopeKey);
-  const taskContentId = `${useId()}-project-task-content`;
-  const tasksExpanded = expandedProjectTasks.has(key);
+  const key = projectBranchKey(groupKey, project.scopeKey);
+  const branchContentId = `${useId()}-project-branch-content`;
   const childItems = options.showSections ? project.items : project.flatItems;
-  const hasOwnContent = childItems.some((item) => item.kind !== "project");
-  const visibleItems = childItems.filter((item) => item.kind === "project" || tasksExpanded);
+  const hasBranchContent = childItems.length > 0;
+  const hasChildProjects = childItems.some((item) => item.kind === "project");
+  const branchExpanded =
+    hasBranchContent && (projectExpansionOverrides.get(key) ?? hasChildProjects);
   const taskDepth = depth + 1;
   const childProjectDepth = depth + 1;
   const statistics = projectRowStatistics(project);
 
   return (
-    <div
+    <li
       className="todoist-bases-project"
+      data-expanded={branchExpanded || undefined}
       data-project-id={project.id}
-      data-tasks-expanded={tasksExpanded || undefined}
     >
       <div
         className="todoist-bases-project-row"
-        data-has-task-content={hasOwnContent || undefined}
+        data-expandable={hasBranchContent || undefined}
+        data-has-child-projects={hasChildProjects || undefined}
         data-project-depth={depth}
         style={indentationStyle(depth)}
       >
         <span className="todoist-bases-project-leading">
-          {hasOwnContent && (
+          {hasBranchContent ? (
             <DisclosureButton
-              collapsed={!tasksExpanded}
-              controlsId={taskContentId}
-              label={`${tasksExpanded ? "Hide" : "Show"} tasks in project ${project.name}`}
-              onClick={() => toggleProjectTasks(key)}
+              collapsed={!branchExpanded}
+              controlsId={branchContentId}
+              label={`${branchExpanded ? "Collapse" : "Expand"} project ${project.name}`}
+              onClick={() => setProjectExpanded(key, !branchExpanded)}
             />
+          ) : (
+            <span aria-hidden="true" className="todoist-bases-disclosure-spacer" />
           )}
-          <ObsidianIcon className="todoist-bases-project-icon" id="lucide-folder" size="s" />
+          <ObsidianIcon
+            className="todoist-bases-project-icon"
+            id={branchExpanded ? "lucide-folder-open" : "lucide-folder"}
+            size="s"
+          />
           <span className="todoist-bases-project-main">
             <span className="todoist-bases-project-name" title={project.pathNames.join(" / ")}>
               {project.name}
@@ -428,30 +478,36 @@ const ProjectBranch: React.FC<
         </span>
         <ProjectRowStatistics name={project.name} statistics={statistics} />
       </div>
-      {(hasOwnContent || visibleItems.length > 0) && (
-        <div className="todoist-bases-project-children" id={taskContentId}>
-          {visibleItems.map((item) => (
-            <ProjectItemBranch
-              actions={actions}
-              collapsed={collapsed}
-              expandedProjectTasks={expandedProjectTasks}
-              groupKey={groupKey}
-              item={item}
-              key={projectItemKey(item)}
-              navigation={navigation}
-              options={options}
-              projectDepth={childProjectDepth}
-              projectScopeKey={project.scopeKey}
-              ready={ready}
-              rootIsSelected={rootIsSelected}
-              taskDepth={taskDepth}
-              toggleCollapsed={toggleCollapsed}
-              toggleProjectTasks={toggleProjectTasks}
-            />
-          ))}
-        </div>
+      {hasBranchContent && (
+        <ul
+          className="todoist-bases-project-children"
+          hidden={!branchExpanded}
+          id={branchContentId}
+          style={indentationStyle(depth)}
+        >
+          {branchExpanded &&
+            childItems.map((item) => (
+              <ProjectItemBranch
+                actions={actions}
+                collapsed={collapsed}
+                groupKey={groupKey}
+                item={item}
+                key={projectItemKey(item)}
+                navigation={navigation}
+                options={options}
+                projectExpansionOverrides={projectExpansionOverrides}
+                projectDepth={childProjectDepth}
+                projectScopeKey={project.scopeKey}
+                ready={ready}
+                rootIsSelected={rootIsSelected}
+                setProjectExpanded={setProjectExpanded}
+                taskDepth={taskDepth}
+                toggleCollapsed={toggleCollapsed}
+              />
+            ))}
+        </ul>
       )}
-    </div>
+    </li>
   );
 };
 
@@ -468,18 +524,18 @@ const ProjectItemBranch: React.FC<
 > = ({
   actions,
   collapsed,
-  expandedProjectTasks,
   groupKey,
   item,
   navigation,
   options,
+  projectExpansionOverrides,
   projectDepth,
   projectScopeKey,
   ready,
   rootIsSelected,
+  setProjectExpanded,
   taskDepth,
   toggleCollapsed,
-  toggleProjectTasks,
 }) => {
   if (item.kind === "project") {
     return (
@@ -487,15 +543,15 @@ const ProjectItemBranch: React.FC<
         actions={actions}
         collapsed={collapsed}
         depth={projectDepth}
-        expandedProjectTasks={expandedProjectTasks}
         groupKey={groupKey}
         navigation={navigation}
         options={options}
+        projectExpansionOverrides={projectExpansionOverrides}
         project={item.project}
         ready={ready}
         rootIsSelected={rootIsSelected}
+        setProjectExpanded={setProjectExpanded}
         toggleCollapsed={toggleCollapsed}
-        toggleProjectTasks={toggleProjectTasks}
       />
     );
   }
@@ -587,9 +643,9 @@ const ProjectRowStatistics: React.FC<{
         max={statistics.total}
         value={statistics.completed}
       />
-      <strong aria-hidden="true" className="todoist-bases-project-statistics-percentage">
+      <span aria-hidden="true" className="todoist-bases-project-statistics-percentage">
         {percentage}%
-      </strong>
+      </span>
     </span>
   );
 };
@@ -626,7 +682,7 @@ const SectionBranch: React.FC<
   const key = `${groupKey}:section:${projectScopeKey}:${section.key}`;
   const isCollapsed = collapsed.has(key);
   return (
-    <div className="todoist-bases-section">
+    <li className="todoist-bases-section">
       <div className="todoist-bases-section-row" style={indentationStyle(depth)}>
         <DisclosureButton
           collapsed={isCollapsed}
@@ -638,7 +694,7 @@ const SectionBranch: React.FC<
         <span className="todoist-bases-section-count">{countTotal(section.counts)}</span>
       </div>
       {!isCollapsed && (
-        <div>
+        <ul className="todoist-bases-section-children">
           {section.tasks.map((task) => (
             <TaskBranch
               actions={actions}
@@ -653,9 +709,9 @@ const SectionBranch: React.FC<
               toggleCollapsed={toggleCollapsed}
             />
           ))}
-        </div>
+        </ul>
       )}
-    </div>
+    </li>
   );
 };
 
@@ -800,7 +856,7 @@ const TaskBranch: React.FC<
     : `Complete task: ${task.content}`;
 
   return (
-    <div
+    <li
       className="todoist-bases-task"
       data-priority={task.priority?.toLocaleLowerCase("en-US")}
       data-status={task.status}
@@ -907,7 +963,7 @@ const TaskBranch: React.FC<
         </div>
       </div>
       {!isCollapsed && hasChildren && (
-        <div>
+        <ul className="todoist-bases-task-children">
           {task.children.map((child) => (
             <TaskBranch
               actions={actions}
@@ -922,9 +978,9 @@ const TaskBranch: React.FC<
               toggleCollapsed={toggleCollapsed}
             />
           ))}
-        </div>
+        </ul>
       )}
-    </div>
+    </li>
   );
 };
 
@@ -1101,10 +1157,10 @@ const projectRowStatistics = (project: TodoistListProject): ProjectRowStatistics
 const indentationStyle = (depth: number): CSSProperties =>
   ({ "--todoist-bases-depth": Math.max(0, depth) }) as CSSProperties;
 
-const projectContentKey = (groupKey: string, projectScopeKey: string): string =>
-  `${groupKey}:project-content:${projectScopeKey}`;
+const projectBranchKey = (groupKey: string, projectScopeKey: string): string =>
+  `${groupKey}:project-branch:${projectScopeKey}`;
 
-const collectProjectContentKeys = (
+const collectProjectBranchKeys = (
   groups: readonly TodoistListGroup[],
   showSections: boolean,
 ): Set<string> => {
@@ -1112,8 +1168,8 @@ const collectProjectContentKeys = (
   const collectProjects = (groupKey: string, projects: readonly TodoistListProject[]) => {
     for (const project of projects) {
       const items = showSections ? project.items : project.flatItems;
-      if (items.some((item) => item.kind !== "project")) {
-        keys.add(projectContentKey(groupKey, project.scopeKey));
+      if (items.length > 0) {
+        keys.add(projectBranchKey(groupKey, project.scopeKey));
       }
       collectProjects(groupKey, project.projects);
     }

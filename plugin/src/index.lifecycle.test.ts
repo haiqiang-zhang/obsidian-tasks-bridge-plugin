@@ -537,6 +537,19 @@ describe("TodoistPlugin async lifecycle", () => {
     ).toEqual(["tasks-bridge-query", "tasks-bridge-project-task", "todoist", "tasks-bridge-task"]);
   });
 
+  it("wires Tasks List sync to the same manual entry point as the Sync command", async () => {
+    const plugin = makePlugin(makeServices());
+    await plugin.onload();
+    const sync = vi.spyOn(plugin, "syncProjectFolderNow").mockResolvedValue(null);
+    const registration = runtime.registerBasesView.mock.calls[0]?.[1] as {
+      actions: TodoistListActions;
+    };
+
+    await registration.actions.sync();
+
+    expect(sync).toHaveBeenCalledExactlyOnceWith();
+  });
+
   it("wires Tasks List actions through the managed-note command service and editor", async () => {
     const services = makeServices();
     const currentTask = { id: "task-42", content: "Current task" };

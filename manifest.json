@@ -4,7 +4,7 @@
   "version": "2.10.10",
   "minAppVersion": "1.13.1",
   "description": "Sync and interact with tasks stored in external task-management services.",
-  "author": "Haiqiang Zhang and Jamie Brynes",
+  "author": "Haiqiang Zhang",
   "authorUrl": "https://github.com/haiqiang-zhang",
   "isDesktopOnly": false,
   "fundingUrl": "https://www.buymeacoffee.com/jamiebrynes"

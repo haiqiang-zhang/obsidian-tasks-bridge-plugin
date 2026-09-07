@@ -37,15 +37,19 @@ describe("Tasks List styles", () => {
     expect(css).not.toContain(".todoist-bases-project-overview-breakdown");
   });
 
-  it("gives project disclosures a 44px coarse-pointer target without custom button styling", () => {
+  it("keeps project disclosure slots aligned with a 44px coarse-pointer target", () => {
     const css = compileStyles();
     const list = ruleBody(css, ".todoist-bases-list");
     const disclosure = ruleBody(css, ".todoist-bases-disclosure");
+    const disclosureSlot = ruleBody(
+      css,
+      ".todoist-bases-disclosure,\n.todoist-bases-disclosure-spacer",
+    );
     const overviewDisclosure = ruleBody(css, "\n.todoist-bases-project-overview-disclosure");
 
     expect(list).toContain("--todoist-bases-disclosure-size: var(--size-4-6)");
-    expect(disclosure).toContain("width: var(--todoist-bases-disclosure-size)");
-    expect(disclosure).toContain("min-height: var(--todoist-bases-disclosure-size)");
+    expect(disclosureSlot).toContain("width: var(--todoist-bases-disclosure-size)");
+    expect(disclosureSlot).toContain("min-height: var(--todoist-bases-disclosure-size)");
     expect(overviewDisclosure).toContain("width: var(--todoist-bases-disclosure-size)");
     expect(overviewDisclosure).toContain("height: var(--todoist-bases-disclosure-size)");
     expect(overviewDisclosure).toContain("flex: 0 0 var(--todoist-bases-disclosure-size)");
@@ -96,10 +100,6 @@ describe("Tasks List styles", () => {
     const content = ruleBody(css, ".todoist-bases-list-content");
     const tree = ruleBody(css, ".todoist-bases-list-tree");
     const leading = ruleBody(css, ".todoist-bases-project-leading");
-    const projectIconWithoutDisclosure = ruleBody(
-      css,
-      ".todoist-bases-project-row:not([data-has-task-content]) .todoist-bases-project-icon",
-    );
     const projectIcon = ruleBody(css, "\n.todoist-bases-project-icon");
     const rows = ruleBody(
       css,
@@ -128,13 +128,23 @@ describe("Tasks List styles", () => {
     expect(content).not.toContain("margin-inline-end");
     expect(content).not.toContain("box-shadow");
     expect(tree).not.toContain("margin-inline");
+    expect(css).toMatch(
+      /\.todoist-bases-list :is\(\.todoist-bases-list-tree,\s*\.todoist-bases-project-children,\s*\.todoist-bases-section-children,\s*\.todoist-bases-task-children\) \{[^}]*margin: 0;[^}]*padding: 0;[^}]*list-style: none;/,
+    );
+    expect(css).toMatch(
+      /\.todoist-bases-list :is\(\.todoist-bases-project, \.todoist-bases-section, \.todoist-bases-task\) \{[^}]*margin: 0;[^}]*padding: 0;[^}]*list-style: none;/,
+    );
     expect(leading).toContain("min-height: var(--todoist-bases-disclosure-size)");
+    expect(leading).toContain("display: grid");
     expect(leading).toContain(
       "padding-inline-start: calc(var(--todoist-bases-depth) * var(--todoist-bases-indent))",
     );
-    expect(projectIconWithoutDisclosure).toContain("width: var(--todoist-bases-disclosure-size)");
-    expect(projectIconWithoutDisclosure).toContain("height: var(--todoist-bases-disclosure-size)");
+    expect(leading).toContain(
+      "grid-template-columns: var(--todoist-bases-disclosure-size) var(--size-4-5) minmax(0, 1fr)",
+    );
+    expect(projectIcon).toContain("width: var(--size-4-5)");
     expect(projectIcon).toContain("justify-content: center");
+    expect(css).not.toContain(".todoist-bases-project-children::before");
     expect(rows).toContain("position: relative");
     expect(rows).not.toContain("border-block-end");
     expect(rowDividers).toContain('content: ""');
@@ -160,6 +170,7 @@ describe("Tasks List styles", () => {
       /@container todoist-bases-list \(min-width: 1200px\)[\s\S]*?\.todoist-bases-list-content \{[\s\S]*?grid-template-columns: minmax\(20rem, 24rem\) minmax\(0, 1fr\)/,
     );
     expect(css).not.toContain("@media (max-width");
+    expect(css).not.toContain("data-has-task-content");
   });
 
   it("uses the shared content gutter around a shadowless Overview card", () => {
@@ -281,7 +292,7 @@ describe("Tasks List styles", () => {
     const css = compileStyles();
     const row = ruleBody(css, ".todoist-bases-project-row");
     const statistics = ruleBody(css, ".todoist-bases-project-statistics");
-    const progress = ruleBody(css, ".todoist-bases-project-progress");
+    const progress = ruleBody(css, ".todoist-bases-list .todoist-bases-project-progress");
 
     expect(row).toContain("grid-template-columns: minmax(0, 1fr) minmax(18rem, 20rem)");
     expect(statistics).toContain("max-width: 20rem");

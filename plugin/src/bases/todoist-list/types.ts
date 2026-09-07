@@ -129,6 +129,7 @@ export type TodoistListMutationResult = {
 };
 
 export interface TodoistListActions {
+  sync(): Promise<void>;
   isReady(): boolean;
   completeTask(task: TodoistListTaskRecord): Promise<TodoistListMutationResult>;
   reopenTask(task: TodoistListTaskRecord): Promise<TodoistListMutationResult>;

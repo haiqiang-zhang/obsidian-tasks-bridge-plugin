@@ -125,6 +125,7 @@ const makeModel = (root: TodoistListProject): TodoistListModel => ({
 });
 
 const makeActions = (ready = true): TodoistListActions => ({
+  sync: vi.fn().mockResolvedValue(undefined),
   isReady: vi.fn(() => ready),
   completeTask: vi.fn().mockResolvedValue({ projection: Promise.resolve() }),
   reopenTask: vi.fn().mockResolvedValue({ projection: Promise.resolve() }),
@@ -197,7 +198,7 @@ const renderList = (
   document.body.append(layoutContainerEl);
   const rendered = render(makeElement(model), { container: layoutContainerEl });
   if (expandProjectTasks && model.taskCount > 0) {
-    fireEvent.click(screen.getByRole("button", { name: "Expand all project tasks" }));
+    fireEvent.click(screen.getByRole("button", { name: "Expand all projects" }));
   }
   return {
     ...rendered,
@@ -224,7 +225,7 @@ const renderList = (
 };
 
 describe("TodoistList", () => {
-  it("keeps the content toolbar focused on counts and tree controls", () => {
+  it("keeps the content toolbar focused on counts, sync, and tree controls", () => {
     renderList(makeModel(makeProject("root", "Root", [makeTask("root-task")])), makeActions());
 
     const content = document.querySelector<HTMLElement>(".todoist-bases-list-content");
@@ -243,11 +244,48 @@ describe("TodoistList", () => {
         selector: ".todoist-bases-project-overview-scope",
       }),
     ).toBeInTheDocument();
-    expect(
-      screen.getByLabelText("Visible in Base: 1 active, 0 completed, 0 unavailable"),
-    ).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Expand all project tasks" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Collapse all project tasks" })).toBeInTheDocument();
+    expect(screen.getByLabelText("1 active, 0 completed, 0 unavailable")).toBeInTheDocument();
+    expect(screen.queryByText("Visible in Base")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Sync" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Expand all projects" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Collapse all projects" })).toBeInTheDocument();
+  });
+
+  it.each([
+    "success",
+    "failure",
+  ] as const)("allows manual sync from an empty, unready view and restores the button after %s", async (outcome) => {
+    const pending = deferred<void>();
+    const actions = makeActions(false);
+    vi.mocked(actions.sync).mockReturnValueOnce(pending.promise);
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    renderList(makeModel(makeProject("root", "Root", [])), actions);
+    const button = screen.getByRole("button", { name: "Sync" });
+
+    expect(button).toBeEnabled();
+    fireEvent.click(button);
+    expect(button).toBeDisabled();
+    expect(button).toHaveAttribute("aria-busy", "true");
+    fireEvent.click(button);
+    expect(actions.sync).toHaveBeenCalledOnce();
+
+    const error = new Error("Sync failed");
+    await act(async () => {
+      if (outcome === "success") {
+        pending.resolve();
+      } else {
+        pending.reject(error);
+      }
+    });
+    expect(button).toBeEnabled();
+    expect(button).toHaveAttribute("aria-busy", "false");
+    if (outcome === "failure") {
+      expect(log).toHaveBeenCalledWith("Failed to synchronize Tasks List", error);
+    }
+
+    fireEvent.click(button);
+    await waitFor(() => expect(button).toBeEnabled());
+    expect(actions.sync).toHaveBeenCalledTimes(2);
   });
 
   it("uses only Base-result tasks for overview and project-row statistics", () => {
@@ -267,9 +305,7 @@ describe("TodoistList", () => {
 
     const overview = screen.getByRole("region", { name: "Project overview" });
     expect(overview).toHaveTextContent("1 project · 1 task · 0% complete");
-    expect(
-      screen.getByLabelText("Visible in Base: 1 active, 0 completed, 0 unavailable"),
-    ).toBeInTheDocument();
+    expect(screen.getByLabelText("1 active, 0 completed, 0 unavailable")).toBeInTheDocument();
     expect(
       screen.getByRole("img", { name: "0% complete, 0 completed of 1 tasks" }),
     ).toBeInTheDocument();
@@ -544,7 +580,7 @@ describe("TodoistList", () => {
     expect(screen.getByText("Root", { selector: ".todoist-bases-root-badge" })).toBeInTheDocument();
   });
 
-  it("keeps project hierarchy visible while each project's tasks default to collapsed", () => {
+  it("uses one project disclosure for child projects and direct tasks", () => {
     const parent = makeTask("parent", "active", {
       children: [makeTask("subtask", "active", { content: "Nested task" })],
     });
@@ -562,38 +598,37 @@ describe("TodoistList", () => {
 
     expect(screen.getByText("Root", { selector: ".todoist-bases-project-name" })).toBeVisible();
     expect(screen.getByText("Child", { selector: ".todoist-bases-project-name" })).toBeVisible();
-    expect(screen.queryByText("Task parent")).not.toBeInTheDocument();
+    expect(screen.getByText("Task parent")).toBeVisible();
+    expect(screen.getByText("Nested task")).toBeVisible();
     expect(screen.queryByText("Task child-task")).not.toBeInTheDocument();
 
-    const rootDisclosure = screen.getByRole("button", { name: "Show tasks in project Root" });
-    const rootTaskContentId = rootDisclosure.getAttribute("aria-controls");
-    expect(rootTaskContentId).not.toBeNull();
-    const rootTaskContent = document.getElementById(rootTaskContentId ?? "");
-    expect(rootTaskContent).toHaveClass("todoist-bases-project-children");
-    expect(rootTaskContent).not.toHaveTextContent("Task parent");
-    expect(rootTaskContent).toHaveTextContent("Child");
-
-    fireEvent.click(rootDisclosure);
-    expect(rootDisclosure).toHaveAttribute("aria-expanded", "true");
-    expect(rootDisclosure).toHaveAttribute("aria-controls", rootTaskContentId);
-    expect(screen.getByText("Task parent")).toBeInTheDocument();
-    expect(rootTaskContent).toHaveTextContent("Task parent");
-    fireEvent.click(screen.getByRole("button", { name: "Collapse subtasks for Task parent" }));
-    expect(screen.queryByText("Nested task")).not.toBeInTheDocument();
+    const rootDisclosure = screen.getByRole("button", { name: "Collapse project Root" });
+    const rootBranchId = rootDisclosure.getAttribute("aria-controls");
+    expect(rootBranchId).not.toBeNull();
+    const rootBranch = document.getElementById(rootBranchId ?? "");
+    expect(rootBranch).toHaveClass("todoist-bases-project-children");
+    expect(rootBranch).toHaveTextContent("Task parent");
+    expect(rootBranch).toHaveTextContent("Child");
 
     fireEvent.click(rootDisclosure);
     expect(rootDisclosure).toHaveAttribute("aria-expanded", "false");
-    expect(rootDisclosure).toHaveAttribute("aria-controls", rootTaskContentId);
-    expect(rootTaskContent).not.toHaveTextContent("Task parent");
-    expect(rootTaskContent).toHaveTextContent("Child");
+    expect(rootDisclosure).toHaveAttribute("aria-controls", rootBranchId);
+    expect(rootBranch).toHaveAttribute("hidden");
     expect(screen.queryByText("Task parent")).not.toBeInTheDocument();
+    expect(screen.queryByText("Child")).not.toBeInTheDocument();
+
+    fireEvent.click(rootDisclosure);
+    expect(rootDisclosure).toHaveAttribute("aria-expanded", "true");
+    expect(rootDisclosure).toHaveAttribute("aria-controls", rootBranchId);
+    expect(rootBranch).not.toHaveAttribute("hidden");
+    expect(screen.getByText("Task parent")).toBeVisible();
     expect(screen.getByText("Child", { selector: ".todoist-bases-project-name" })).toBeVisible();
 
-    fireEvent.click(screen.getByRole("button", { name: "Show tasks in project Child" }));
+    fireEvent.click(screen.getByRole("button", { name: "Expand project Child" }));
     expect(screen.getByText("Task child-task")).toBeVisible();
   });
 
-  it("expands and collapses every project's tasks without hiding project rows", () => {
+  it("expands and collapses complete project branches", () => {
     const child = makeProject("child", "Child", [makeTask("child-task")]);
     renderList(
       makeModel(makeProject("root", "Root", [makeTask("root-task")], [child])),
@@ -606,27 +641,26 @@ describe("TodoistList", () => {
       false,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Expand all project tasks" }));
+    fireEvent.click(screen.getByRole("button", { name: "Collapse all projects" }));
+    expect(screen.queryByText("Task root-task")).not.toBeInTheDocument();
+    expect(screen.queryByText("Child", { selector: ".todoist-bases-project-name" })).toBeNull();
+    expect(screen.getByText("Root", { selector: ".todoist-bases-project-name" })).toBeVisible();
+
+    fireEvent.click(screen.getByRole("button", { name: "Expand all projects" }));
     expect(screen.getByText("Task root-task")).toBeVisible();
     expect(screen.getByText("Task child-task")).toBeVisible();
-
-    fireEvent.click(screen.getByRole("button", { name: "Collapse all project tasks" }));
-    expect(screen.queryByText("Task root-task")).not.toBeInTheDocument();
-    expect(screen.queryByText("Task child-task")).not.toBeInTheDocument();
-    expect(screen.getByText("Root", { selector: ".todoist-bases-project-name" })).toBeVisible();
     expect(screen.getByText("Child", { selector: ".todoist-bases-project-name" })).toBeVisible();
   });
 
-  it("does not offer a task disclosure for a project that only contains child projects", () => {
+  it("offers a branch disclosure for a project that only contains child projects", () => {
     const child = makeProject("child", "Child", [makeTask("child-task")]);
     const root = makeProject("root", "Root", [], [child]);
     renderList(makeModel(root), makeActions(), makeNavigation(), null, null, false, vi.fn(), false);
 
     expect(screen.getByText("Child", { selector: ".todoist-bases-project-name" })).toBeVisible();
-    expect(
-      screen.queryByRole("button", { name: "Show tasks in project Root" }),
-    ).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Show tasks in project Child" })).toBeEnabled();
+    const rootDisclosure = screen.getByRole("button", { name: "Collapse project Root" });
+    expect(rootDisclosure).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("button", { name: "Expand project Child" })).toBeEnabled();
 
     const rootRow = screen
       .getByText("Root", { selector: ".todoist-bases-project-name" })
@@ -634,16 +668,19 @@ describe("TodoistList", () => {
     const childRow = screen
       .getByText("Child", { selector: ".todoist-bases-project-name" })
       .closest(".todoist-bases-project-row");
-    expect(rootRow).not.toHaveAttribute("data-has-task-content");
-    expect(childRow).toHaveAttribute("data-has-task-content", "true");
+    expect(rootRow).toHaveAttribute("data-expandable", "true");
+    expect(rootRow).toHaveAttribute("data-has-child-projects", "true");
+    expect(childRow).toHaveAttribute("data-expandable", "true");
+    expect(childRow).not.toHaveAttribute("data-has-child-projects");
     expect(rootRow).toHaveAttribute("data-project-depth", "0");
     expect(childRow).toHaveAttribute("data-project-depth", "1");
-    expect(rootRow?.querySelector(".todoist-bases-project-leading")).toContainElement(
-      rootRow?.querySelector(".todoist-bases-project-icon") ?? null,
-    );
-    expect(childRow?.querySelector(".todoist-bases-project-leading")).toContainElement(
-      screen.getByRole("button", { name: "Show tasks in project Child" }),
-    );
+    expect(rootRow?.closest("li")).toHaveClass("todoist-bases-project");
+    expect(childRow?.closest("li")?.parentElement).toHaveClass("todoist-bases-project-children");
+
+    fireEvent.click(rootDisclosure);
+    expect(screen.queryByText("Child", { selector: ".todoist-bases-project-name" })).toBeNull();
+    fireEvent.click(rootDisclosure);
+    expect(screen.getByText("Child", { selector: ".todoist-bases-project-name" })).toBeVisible();
   });
 
   it("shows an empty project statistic without exposing a misleading progress value", () => {
@@ -654,13 +691,25 @@ describe("TodoistList", () => {
       .getByText("Empty", { selector: ".todoist-bases-project-name" })
       .closest(".todoist-bases-project-row");
     expect(row).toHaveTextContent("No tasks");
+    expect(row).not.toHaveAttribute("data-expandable");
+    expect(row?.querySelector(".todoist-bases-disclosure-spacer")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /project Empty/ })).not.toBeInTheDocument();
     expect(row?.querySelector(".todoist-bases-project-progress")).not.toBeInTheDocument();
     expect(screen.queryByRole("progressbar", { name: "Empty completion" })).not.toBeInTheDocument();
   });
 
   it("shows unavailable-only project rows as unavailable instead of empty", () => {
     const unavailable = makeTask("unavailable", "stale");
-    renderList(makeModel(makeProject("root", "Root", [unavailable])));
+    renderList(
+      makeModel(makeProject("root", "Root", [unavailable])),
+      makeActions(),
+      makeNavigation(),
+      null,
+      null,
+      false,
+      vi.fn(),
+      false,
+    );
 
     const row = screen
       .getByText("Root", { selector: ".todoist-bases-project-name" })
@@ -668,6 +717,13 @@ describe("TodoistList", () => {
     expect(row).toHaveTextContent("1 unavailable");
     expect(row).not.toHaveTextContent("No tasks");
     expect(screen.queryByRole("progressbar", { name: /Root completion/ })).not.toBeInTheDocument();
+    expect(screen.queryByText("Task unavailable")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Expand project Root" }));
+    expect(screen.getByText("Task unavailable")).toBeVisible();
+    expect(
+      screen.getByRole("checkbox", { name: "Complete task: Task unavailable" }),
+    ).toBeDisabled();
   });
 
   it("shows unavailable tasks beside project progress without changing its denominator", () => {

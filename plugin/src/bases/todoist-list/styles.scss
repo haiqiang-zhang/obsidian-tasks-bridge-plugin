@@ -6,7 +6,7 @@
 .todoist-bases-list {
   --todoist-bases-content-gutter: var(--size-4-4);
   --todoist-bases-disclosure-size: var(--size-4-6);
-  --todoist-bases-indent: var(--size-4-4);
+  --todoist-bases-indent: var(--size-4-5);
   --todoist-bases-row-padding: var(--size-4-2);
 
   min-width: 0;
@@ -45,13 +45,31 @@
   color: var(--text-muted);
   font-size: var(--font-ui-smaller);
   white-space: nowrap;
+
+  > span {
+    white-space: nowrap;
+  }
 }
 
 .todoist-bases-list-toolbar-actions {
   display: flex;
+  flex-shrink: 0;
   align-items: center;
   gap: var(--size-2-1);
   margin-inline-start: auto;
+}
+
+.todoist-bases-list-toolbar-actions .todoist-bases-list-sync {
+  gap: var(--size-4-1);
+  margin-inline-end: var(--size-4-2);
+  padding-inline: var(--size-4-2);
+  font-size: var(--font-ui-smaller);
+  white-space: nowrap;
+
+  &:disabled {
+    cursor: wait;
+    opacity: var(--icon-opacity);
+  }
 }
 
 .todoist-bases-list-content {
@@ -344,10 +362,24 @@
   min-width: 0;
 }
 
-.todoist-bases-project,
-.todoist-bases-section,
-.todoist-bases-task {
+.todoist-bases-list
+  :is(
+    .todoist-bases-list-tree,
+    .todoist-bases-project-children,
+    .todoist-bases-section-children,
+    .todoist-bases-task-children
+  ) {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.todoist-bases-list
+  :is(.todoist-bases-project, .todoist-bases-section, .todoist-bases-task) {
   min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
 }
 
 @supports (content-visibility: auto) {
@@ -400,21 +432,16 @@
 }
 
 .todoist-bases-project-leading {
-  display: flex;
+  display: grid;
   min-width: 0;
   min-height: var(--todoist-bases-disclosure-size);
   align-items: center;
   padding-inline-start: calc(
     var(--todoist-bases-depth) * var(--todoist-bases-indent)
   );
-  gap: var(--size-4-2);
-}
-
-.todoist-bases-project-row:not([data-has-task-content])
-  .todoist-bases-project-icon {
-  width: var(--todoist-bases-disclosure-size);
-  height: var(--todoist-bases-disclosure-size);
-  flex-basis: var(--todoist-bases-disclosure-size);
+  grid-template-columns:
+    var(--todoist-bases-disclosure-size) var(--size-4-5) minmax(0, 1fr);
+  column-gap: var(--size-4-2);
 }
 
 .todoist-bases-project-icon {
@@ -496,19 +523,25 @@
   color: var(--text-faint);
 }
 
-.todoist-bases-project-progress {
+// Keep Markdown and Bases progress defaults from overriding the view's sizing and shape.
+.todoist-bases-list .todoist-bases-project-progress {
   display: block;
   width: 100%;
-  height: var(--size-2-2);
+  height: var(--size-4-2);
+  align-self: center;
+  margin: 0;
   overflow: hidden;
   appearance: none;
   border: 0;
-  border-radius: var(--radius-s);
+  border-radius: var(--radius-l);
   background: var(--background-modifier-border);
+  vertical-align: middle;
 
   &::-webkit-progress-bar {
+    border: 0;
     border-radius: inherit;
     background: var(--background-modifier-border);
+    box-shadow: none;
   }
 
   &::-webkit-progress-value {
@@ -584,17 +617,28 @@
   }
 }
 
-.todoist-bases-disclosure {
+.todoist-bases-disclosure,
+.todoist-bases-disclosure-spacer {
   width: var(--todoist-bases-disclosure-size);
   height: var(--todoist-bases-disclosure-size);
   min-width: var(--todoist-bases-disclosure-size);
   min-height: var(--todoist-bases-disclosure-size);
+}
+
+.todoist-bases-disclosure {
   padding: 0;
-  color: var(--text-faint);
+  color: var(--nav-collapse-icon-color, var(--text-faint));
 
   &:disabled {
     visibility: hidden;
   }
+}
+
+.todoist-bases-disclosure[aria-expanded="false"] {
+  color: var(
+    --nav-collapse-icon-color-collapsed,
+    var(--nav-collapse-icon-color, var(--text-faint))
+  );
 }
 
 .todoist-bases-task-action-wrap {
@@ -898,18 +942,12 @@
 
   .todoist-bases-project-row {
     --todoist-bases-project-label-offset: calc(
-      var(--todoist-bases-disclosure-size) + var(--size-4-2)
+      var(--todoist-bases-disclosure-size) + var(--size-4-2) + var(--size-4-5) +
+        var(--size-4-2)
     );
 
     grid-template-columns: minmax(0, 1fr);
     row-gap: var(--size-2-1);
-  }
-
-  .todoist-bases-project-row[data-has-task-content] {
-    --todoist-bases-project-label-offset: calc(
-      var(--todoist-bases-disclosure-size) + var(--size-4-2) + var(--size-4-5) +
-        var(--size-4-2)
-    );
   }
 
   .todoist-bases-project-statistics {
@@ -999,7 +1037,7 @@
 @media (pointer: coarse) {
   .todoist-bases-list {
     --todoist-bases-disclosure-size: 44px;
-    --todoist-bases-indent: var(--size-4-3);
+    --todoist-bases-indent: var(--size-4-4);
   }
 
   .todoist-bases-list-toolbar-actions .clickable-icon,
@@ -1022,7 +1060,7 @@
     transition: none;
   }
 
-  .todoist-bases-project-progress::-webkit-progress-value {
+  .todoist-bases-list .todoist-bases-project-progress::-webkit-progress-value {
     transition: none;
   }
 }
