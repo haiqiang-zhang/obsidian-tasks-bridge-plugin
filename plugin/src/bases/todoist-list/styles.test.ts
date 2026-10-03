@@ -110,16 +110,15 @@ describe("Tasks List styles", () => {
       ".todoist-bases-project-row::after,\n.todoist-bases-section-row::after,\n.todoist-bases-task-row::after",
     );
 
-    expect(css).not.toContain("scrollbar-gutter");
     expect(container).toContain("container: todoist-bases-list/inline-size");
     expect(list).toContain("--todoist-bases-content-gutter: var(--size-4-4)");
-    expect(list).toContain("padding: 0 0 var(--size-4-4)");
+    expect(content).toContain("padding-block: var(--size-4-3) var(--size-4-4)");
     expect(content).toContain("box-sizing: border-box");
     expect(content).toContain("inline-size: 100%");
     expect(content).toContain("padding-inline: var(--todoist-bases-content-gutter)");
     expect(content).not.toContain("padding-left");
     expect(content).not.toContain("padding-right");
-    expect(content).toContain("overflow: visible");
+    expect(content).toContain("overflow: auto");
     expect(content).toContain("border: 0");
     expect(content).toContain("border-radius: 0");
     expect(content).toContain("background: transparent");
@@ -222,7 +221,7 @@ describe("Tasks List styles", () => {
     );
 
     expect(content).toContain("background: transparent");
-    expect(content).toContain("overflow: visible");
+    expect(content).toContain("overflow: auto");
     expect(content).toContain("border: 0");
     expect(content).toContain("border-radius: 0");
     expect(main).toContain("background: var(--background-primary)");
@@ -254,7 +253,7 @@ describe("Tasks List styles", () => {
       ".todoist-bases-project-overview-header .todoist-bases-project-overview-header-summary",
     );
     expect(wideContent).toContain("align-items: start");
-    expect(wideContent).toContain("overflow: visible");
+    expect(wideContent).not.toContain("overflow:");
     expect(wideContent).toContain("border: 0");
     expect(wideContent).toContain("border-radius: 0");
     expect(wideContent).toContain("background: transparent");

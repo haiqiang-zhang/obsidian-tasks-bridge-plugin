@@ -370,4 +370,62 @@ describe("CompletionHeatmap", () => {
     act(() => resizeCallbacks[0]?.());
     expect(viewport.scrollLeft).toBe(377);
   });
+
+  it.each([
+    "viewport shrinks",
+    "grid grows",
+  ] as const)("keeps the latest dates visible when a queued scroll arrives before ResizeObserver and the %s", (change) => {
+    let viewportWidth = 600;
+    let contentWidth = 777;
+    let resize: () => void = () => undefined;
+    class MockResizeObserver {
+      constructor(callback: ResizeObserverCallback) {
+        resize = () => callback([], this as unknown as ResizeObserver);
+      }
+      observe(): void {}
+      disconnect(): void {}
+      unobserve(): void {}
+    }
+    vi.stubGlobal("ResizeObserver", MockResizeObserver);
+    vi.spyOn(HTMLElement.prototype, "scrollWidth", "get").mockImplementation(function (
+      this: HTMLElement,
+    ) {
+      return this.classList.contains("tasks-bridge-completion-heatmap-viewport") ? contentWidth : 0;
+    });
+    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(function (
+      this: HTMLElement,
+    ) {
+      return this.classList.contains("tasks-bridge-completion-heatmap-viewport")
+        ? viewportWidth
+        : 0;
+    });
+    render(
+      <CompletionHeatmap
+        events={[]}
+        now={NOW}
+        onRangeChange={vi.fn()}
+        range="last-year"
+        timeZone="UTC"
+      />,
+    );
+    const viewport = screen.getByRole("region", { name: /Completion calendar/ });
+    expect(viewport.scrollLeft).toBe(177);
+
+    if (change === "viewport shrinks") {
+      viewportWidth = 350;
+    } else {
+      contentWidth = 1027;
+    }
+    // The browser delivers the initial programmatic scroll after layout changes,
+    // but before ResizeObserver can correct the scroll offset for the new width.
+    fireEvent.scroll(viewport);
+    act(() => resize());
+    expect(viewport.scrollLeft).toBe(427);
+
+    viewport.scrollLeft = 100;
+    fireEvent.scroll(viewport);
+    contentWidth += 100;
+    act(() => resize());
+    expect(viewport.scrollLeft).toBe(100);
+  });
 });

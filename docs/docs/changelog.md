@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### 🐛 Bug Fixes
+
+- Kept Completion activity scrolled to the latest dates on initial display and after layout changes, while preserving manual scrolling through history.
+- Kept the Tasks List counts and Sync toolbar fixed below the Base header, with a full-width divider and the content scrollbar starting below the toolbar.
+
 ## v2.10.12 (2026-09-07)
 
 ### 🐛 Bug Fixes

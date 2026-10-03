@@ -103,7 +103,8 @@
   overflow-y: hidden;
   padding-block: var(--size-2-1) var(--size-4-2);
   overscroll-behavior-inline: contain;
-  scrollbar-gutter: stable;
+  // A vertical gutter makes clientWidth undercount this horizontal-only viewport.
+  scrollbar-gutter: auto;
   touch-action: pan-x pan-y;
 }
 

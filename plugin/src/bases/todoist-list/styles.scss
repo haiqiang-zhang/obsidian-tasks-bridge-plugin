@@ -1,6 +1,21 @@
+.bases-view[data-view-type="tasks-list"] {
+  --bases-view-padding: 0;
+  --bases-embed-padding: 0;
+
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+  scrollbar-gutter: auto;
+}
+
 .todoist-bases-list-container {
   container: todoist-bases-list / inline-size;
+  display: flex;
   min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
 }
 
 .todoist-bases-list {
@@ -9,8 +24,11 @@
   --todoist-bases-indent: var(--size-4-5);
   --todoist-bases-row-padding: var(--size-4-2);
 
+  display: flex;
   min-width: 0;
-  padding: 0 0 var(--size-4-4);
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
   color: var(--text-normal);
   font-family: var(--font-interface);
   font-size: var(--bases-table-text-size, var(--font-ui-small));
@@ -30,10 +48,12 @@
   z-index: 2;
   display: flex;
   min-height: var(--bases-header-height, var(--size-4-10));
+  flex-shrink: 0;
   align-items: center;
   gap: var(--size-4-2);
   padding: var(--size-4-2);
   border-bottom: 1px solid var(--background-modifier-border);
+  background: var(--background-primary);
 }
 
 .todoist-bases-list-toolbar-summary {
@@ -75,9 +95,12 @@
 .todoist-bases-list-content {
   box-sizing: border-box;
   inline-size: 100%;
-  margin-block-start: var(--size-4-3);
+  min-height: 0;
+  flex: 1 1 auto;
+  padding-block: var(--size-4-3) var(--size-4-4);
   padding-inline: var(--todoist-bases-content-gutter);
-  overflow: visible;
+  overflow: auto;
+  scrollbar-gutter: stable;
   border: 0;
   border-radius: 0;
   background: transparent;
@@ -821,7 +844,6 @@
   .todoist-bases-list-content {
     display: grid;
     align-items: start;
-    overflow: visible;
     border: 0;
     border-radius: 0;
     background: transparent;

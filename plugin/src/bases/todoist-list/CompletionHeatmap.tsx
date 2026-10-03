@@ -204,24 +204,34 @@ export const CompletionHeatmap: React.FC<CompletionHeatmapProps> = ({
       return;
     }
 
-    const scrollToEnd = () => {
-      viewport.scrollLeft = Math.max(FIRST_INDEX, viewport.scrollWidth - viewport.clientWidth);
+    let measuredViewportWidth = viewport.clientWidth;
+    let measuredContentWidth = viewport.scrollWidth;
+    const handleViewportResize = () => {
+      measuredViewportWidth = viewport.clientWidth;
+      measuredContentWidth = viewport.scrollWidth;
+      const contentFits = measuredContentWidth <= measuredViewportWidth;
+      if (viewportPinnedToEndRef.current || contentFits) {
+        viewportPinnedToEndRef.current = true;
+        viewport.scrollLeft = Math.max(FIRST_INDEX, measuredContentWidth - measuredViewportWidth);
+      }
     };
     const updatePinnedState = () => {
-      const maximumScroll = Math.max(FIRST_INDEX, viewport.scrollWidth - viewport.clientWidth);
+      // A queued scroll can arrive after layout changes but before ResizeObserver.
+      // Reconcile that layout first so our initial scroll is not mistaken for history browsing.
+      if (
+        viewport.clientWidth !== measuredViewportWidth ||
+        viewport.scrollWidth !== measuredContentWidth
+      ) {
+        handleViewportResize();
+        return;
+      }
+      const maximumScroll = Math.max(FIRST_INDEX, measuredContentWidth - measuredViewportWidth);
       viewportPinnedToEndRef.current =
         maximumScroll - viewport.scrollLeft <= END_SCROLL_TOLERANCE_PX;
     };
-    const handleViewportResize = () => {
-      const contentFits = viewport.scrollWidth <= viewport.clientWidth;
-      if (viewportPinnedToEndRef.current || contentFits) {
-        viewportPinnedToEndRef.current = true;
-        scrollToEnd();
-      }
-    };
 
     viewportPinnedToEndRef.current = true;
-    scrollToEnd();
+    handleViewportResize();
     viewport.addEventListener("scroll", updatePinnedState, { passive: true });
     const viewWindow = viewport.ownerDocument.defaultView;
     viewWindow?.addEventListener("resize", handleViewportResize);
