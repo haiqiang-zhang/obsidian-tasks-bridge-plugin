@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v2.10.13 (2026-10-03)
+
 ### 🐛 Bug Fixes
 
 - Kept Completion activity scrolled to the latest dates on initial display and after layout changes, while preserving manual scrolling through history.
