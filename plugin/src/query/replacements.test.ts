@@ -47,6 +47,12 @@ describe("applyReplacements", () => {
         filePath: "some/path/to/foobar.md",
         expectedFilter: "#foobar",
       },
+      {
+        description: "should omit the task document suffix from the task name",
+        filter: "#{{filename}}",
+        filePath: "Tasks/Project.task.md",
+        expectedFilter: "#Project",
+      },
     ];
 
     for (const tc of testcases) {

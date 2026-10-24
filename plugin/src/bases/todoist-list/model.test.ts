@@ -1,6 +1,8 @@
 import type { BasesEntry, BasesEntryGroup, BasesPropertyId, Value } from "obsidian";
 import { describe, expect, it } from "vitest";
 
+import { TASK_PROPERTY_NAMES } from "@/project-sync/properties";
+
 import { buildTodoistListModel, scopeTodoistListGroups } from "./model";
 import type { TodoistListProjectContext } from "./types";
 
@@ -154,6 +156,52 @@ const buildWithContext = (groups: BasesEntryGroup[], context: TodoistListProject
   });
 
 describe("buildTodoistListModel", () => {
+  it("reads canonical task fields and metadata while retaining legacy entries during migration", () => {
+    const legacy = makeEntry("legacy", { dueDate: "2026-10-24", labels: ["old"] });
+    const canonical = makeEntry("canonical", { dueDate: "2026-10-25", labels: ["new"] });
+    canonical.file.path = "Tasks/canonical.task.md";
+    const previousGetValue = canonical.getValue;
+    const canonicalToLegacy = new Map<string, BasesPropertyId>(
+      Object.entries(TASK_PROPERTY_NAMES).map(([oldName, newName]) => [
+        `note.${newName}`,
+        `note.${oldName}`,
+      ]),
+    );
+    canonical.getValue = (propertyId) => {
+      const oldName = canonicalToLegacy.get(propertyId);
+      if (oldName !== undefined) {
+        return previousGetValue(oldName);
+      }
+      return Object.keys(TASK_PROPERTY_NAMES).some((name) => propertyId === `note.${name}`)
+        ? nullValue()
+        : previousGetValue(propertyId);
+    };
+
+    const model = build(
+      [makeGroup([legacy, canonical])],
+      ["note.task id", "note.labels", "note.due date"],
+    );
+    expect(model.taskCount).toBe(2);
+    expect(model.diagnostics.ignoredInvalid).toBe(0);
+    const tasks = model.groups[0]?.projects[0]?.tasks;
+    expect(tasks?.map((task) => task.id)).toEqual(["legacy", "canonical"]);
+    expect(tasks?.[1]?.metadata).toMatchObject([
+      { propertyId: "note.labels", kind: "labels", values: ["new"] },
+      { propertyId: "note.due date", kind: "date", values: ["2026-10-25"] },
+    ]);
+  });
+
+  it("fails closed when readable property names conflict with a legacy task", () => {
+    const entry = makeEntry("conflicting");
+    const previousGetValue = entry.getValue;
+    entry.getValue = (propertyId) =>
+      propertyId === "note.status" ? primitive("personal status") : previousGetValue(propertyId);
+
+    const model = build([makeGroup([entry])]);
+    expect(model.taskCount).toBe(0);
+    expect(model.diagnostics.ignoredInvalid).toBe(1);
+  });
+
   it("does not inject context-only projects into a Base group", () => {
     const model = buildWithContext(
       [makeGroup([makeEntry("root-task", { mappingId: "mapping" })], "Active")],

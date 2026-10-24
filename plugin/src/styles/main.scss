@@ -1,5 +1,29 @@
 @use "colors";
 
+// Preserve the real text of Obsidian's editable breadcrumb; only shorten its resting display.
+.view-header-title.tasks-bridge-task-breadcrumb:not(:focus-within) {
+  font-size: 0;
+
+  &::after {
+    content: attr(data-tasks-bridge-title) / "";
+    display: block;
+    overflow: hidden;
+    font-size: var(--file-header-font-size);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+// Task documents use the native Markdown index and editor. Only the visual Properties panel is
+// hidden; the YAML remains editable in Source mode and available to native property/link features.
+.tasks-bridge-task-document:has(.tasks-bridge-task-header-host) .metadata-container {
+  display: none !important;
+}
+
+.tasks-bridge-task-document:has(.tasks-bridge-task-header-host) .inline-title {
+  display: none;
+}
+
 body {
   @each $name, $color in colors.$todoist-colors {
     --todoist-#{$name}: #{$color};
@@ -81,4 +105,27 @@ body {
   .cm-embed-block:has(.tasks-bridge-note-card)
   + .cm-line:has(> .cm-comment:first-child:last-child) {
   display: none;
+}
+
+// Share Obsidian's existing file scroll containers and readable width. The task header occupies
+// the native title/Properties area, outside the editable Markdown DOM, and scrolls with the body.
+.view-content.tasks-bridge-task-content {
+  .tasks-bridge-task-header-host {
+    position: relative;
+    width: 100%;
+    min-width: 0;
+    padding-block-end: var(--size-4-4);
+  }
+
+  .tasks-bridge-task-header {
+    padding-block: 0;
+  }
+
+  .tasks-bridge-managed-header-block:not(.markdown-embed *) {
+    display: none;
+  }
+}
+
+.view-content.tasks-bridge-task-content:has(> .markdown-source-view:not(.is-readable-line-width)) .tasks-bridge-task-header {
+  max-width: none;
 }

@@ -344,7 +344,7 @@ describe("ObsidianProjectSyncStatisticsRepository", () => {
       "2026-08-12T01:00:00.000Z",
       mapping.id,
     );
-    frontmatter.todoist_status = "stale";
+    frontmatter.status = "stale";
     await vault.create(
       "Todoist/Root/Stale.md",
       renderNewTaskDocument(frontmatter, makeManagedBody(stale)),

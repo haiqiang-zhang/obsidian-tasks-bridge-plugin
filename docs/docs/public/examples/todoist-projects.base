@@ -1,16 +1,17 @@
 filters:
   and:
-    - 'todoist_task_id != null'
-    - 'todoist_status != "out_of_scope"'
+    - 'note["task id"] != null'
+    - 'file.path.endsWith(".task.md")'
+    - 'note["status"] != "out_of_scope"'
 
 properties:
-  todoist_priority:
+  note.priority:
     displayName: "Priority"
-  todoist_due_date:
+  note.due date:
     displayName: "Due"
-  todoist_deadline:
+  note.deadline:
     displayName: "Deadline"
-  todoist_labels:
+  note.labels:
     displayName: "Labels"
 
 views:
@@ -26,7 +27,7 @@ views:
     todoistShowDescriptions: true
     todoistShowSections: true
     order:
-      - todoist_priority
-      - todoist_due_date
-      - todoist_deadline
-      - todoist_labels
+      - note.priority
+      - note.due date
+      - note.deadline
+      - note.labels

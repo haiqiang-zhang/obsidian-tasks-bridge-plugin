@@ -1,5 +1,3 @@
-import { MarkdownView } from "obsidian";
-
 import { TodoistAdapter } from "@/data";
 import type TodoistPlugin from "@/index";
 import {
@@ -45,20 +43,22 @@ export const makeServices = (plugin: TodoistPlugin): Services => {
     affectedPaths: readonly string[],
     operation: () => Promise<T>,
   ): Promise<T> => await plugin.runProjectSyncVaultMutation(affectedPaths, operation);
+  const openFilePaths = (): Set<string> => {
+    const paths = new Set<string>();
+    plugin.app.workspace.iterateAllLeaves((leaf) => {
+      const path: unknown = leaf.getViewState().state?.file;
+      if (typeof path === "string") {
+        paths.add(path);
+      }
+    });
+    return paths;
+  };
   const projectSync = new ProjectFolderSyncService(
     new TodoistProjectSyncSource(todoist),
     new ObsidianProjectSyncVault(
       plugin.app.vault,
       plugin.app.fileManager,
-      () => {
-        const paths = new Set<string>();
-        plugin.app.workspace.iterateAllLeaves((leaf) => {
-          if (leaf.view instanceof MarkdownView && leaf.view.file !== null) {
-            paths.add(leaf.view.file.path);
-          }
-        });
-        return paths;
-      },
+      openFilePaths,
       runInternalMutation,
       plugin.projectCatalogStorage,
       plugin.projectSyncFolderOwnershipStorage,

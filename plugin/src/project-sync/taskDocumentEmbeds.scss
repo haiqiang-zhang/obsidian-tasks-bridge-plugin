@@ -1,0 +1,9 @@
+// Hide only this full-file task embed's own native metadata/title. Nested notes and partial
+// heading/block embeds retain their native presentation.
+.tasks-bridge-task-embed {
+  > .markdown-embed-title,
+  > .markdown-embed-content > .markdown-preview-view > .markdown-preview-sizer > .mod-header > .inline-title,
+  > .markdown-embed-content > .markdown-preview-view > .markdown-preview-sizer > .mod-header > .metadata-container {
+    display: none !important;
+  }
+}

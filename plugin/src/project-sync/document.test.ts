@@ -9,13 +9,19 @@ import {
   MANAGED_BODY_START,
   ManagedBodyConflictError,
   makeManagedBody,
+  makeManagedTaskIdentityMarker,
+  makeProjectTaskBlock,
   makeTaskFrontmatter,
   readManagedNoteIdentity,
+  readManagedTaskIdentityMarker,
   readProjectTaskBlockIdentity,
   readRecoverableManagedNoteIdentity,
+  readUserOwnedTaskDocument,
   replaceManagedBody,
   replaceManagedTaskDocument,
+  requireManagedTaskBody,
 } from "./document";
+import { TaskPropertyConflictError } from "./properties";
 
 const completionEvent = (id: string, completedAt: string) => ({
   id,
@@ -58,20 +64,20 @@ describe("project task documents", () => {
       ],
     );
     expect(frontmatter).toMatchObject({
-      todoist_task_id: "task-1",
-      todoist_content: "Read RFC",
-      todoist_description: "Read the transport requirements",
-      todoist_status: "completed",
-      todoist_completed: true,
-      todoist_project: "Networking",
-      todoist_project_path: ["Networking"],
-      todoist_labels: ["study"],
-      todoist_priority: "P1",
-      todoist_updated_at: "2026-08-10T01:30:00.000Z",
-      todoist_due_date: "2026-08-12",
-      todoist_due_datetime: "2026-08-12T09:30:00.000Z",
-      todoist_due_timezone: "Asia/Shanghai",
-      todoist_due_is_recurring: false,
+      "task id": "task-1",
+      content: "Read RFC",
+      description: "Read the transport requirements",
+      status: "completed",
+      completed: true,
+      project: "Networking",
+      "project path": ["Networking"],
+      labels: ["study"],
+      priority: "P1",
+      "updated at": "2026-08-10T01:30:00.000Z",
+      "due date": "2026-08-12",
+      "due datetime": "2026-08-12T09:30:00.000Z",
+      "due timezone": "Asia/Shanghai",
+      recurring: false,
     });
     expect(frontmatter).not.toHaveProperty("todoist_sync_managed");
     expect(frontmatter).not.toHaveProperty("todoist_sync_mapping_id");
@@ -83,6 +89,9 @@ describe("project task documents", () => {
     expect(frontmatter).not.toHaveProperty("todoist_completion_events");
     expect(frontmatter).not.toHaveProperty("todoist_order");
     expect(frontmatter).not.toHaveProperty("todoist_synced_at");
+    expect(
+      Object.keys(frontmatter).every((key) => key === key.toLowerCase() && !key.includes("_")),
+    ).toBe(true);
   });
 
   it("emits identical managed frontmatter on devices with different local clocks", () => {
@@ -117,7 +126,7 @@ describe("project task documents", () => {
         path,
         "2026-08-17T08:00:00.000Z",
       ),
-    ).toMatchObject({ todoist_created_at: "2026-08-17T06:32:05.000Z" });
+    ).toMatchObject({ "created at": "2026-08-17T06:32:05.000Z" });
     expect(
       makeTaskFrontmatter(
         { task: fallbackOnly, completed: false },
@@ -125,7 +134,7 @@ describe("project task documents", () => {
         path,
         "2026-08-17T08:00:00.000Z",
       ),
-    ).not.toHaveProperty("todoist_created_at");
+    ).not.toHaveProperty("created at");
   });
 
   it("retains legacy timed due dates encoded in the date field", () => {
@@ -146,33 +155,33 @@ describe("project task documents", () => {
         "2026-08-10T02:00:00.000Z",
       ),
     ).toMatchObject({
-      todoist_due_date: "2026-08-12",
-      todoist_due_datetime: "2026-08-12T09:30:00.000Z",
+      "due date": "2026-08-12",
+      "due datetime": "2026-08-12T09:30:00.000Z",
     });
   });
 
   it("updates only the explicit managed key allowlist", () => {
     const frontmatter = {
       user_property: "keep me",
-      todoist_task_id: "old",
-      todoist_description: "old description",
+      "task id": "task-1",
+      description: "old description",
       todoist_project_id_path: ["old-project"],
-      todoist_completed_at: "old date",
+      "completed at": "old date",
       todoist_custom_user_property: "also keep me",
     };
 
-    expect(applyManagedFrontmatter(frontmatter, { todoist_task_id: "new" })).toBe(true);
+    expect(applyManagedFrontmatter(frontmatter, { "task id": "task-1" })).toBe(true);
     expect(frontmatter).toEqual({
       user_property: "keep me",
-      todoist_task_id: "new",
+      "task id": "task-1",
       todoist_custom_user_property: "also keep me",
     });
   });
 
   it("projects parent and ordered subtask links without touching user properties", () => {
     const frontmatter = {
-      todoist_parent_task: "[[Old parent]]",
-      todoist_subtasks: ["[[Old child]]"],
+      "parent task": "[[Old parent]]",
+      subtasks: ["[[Old child]]"],
       user_property: "keep me",
     };
 
@@ -183,8 +192,8 @@ describe("project task documents", () => {
       }),
     ).toBe(true);
     expect(frontmatter).toEqual({
-      todoist_parent_task: "[[Tasks/Parent|Parent]]",
-      todoist_subtasks: ["[[Tasks/First|First]]", "[[Tasks/Second|Second]]"],
+      "parent task": "[[Tasks/Parent|Parent]]",
+      subtasks: ["[[Tasks/First|First]]", "[[Tasks/Second|Second]]"],
       user_property: "keep me",
     });
 
@@ -192,6 +201,70 @@ describe("project task documents", () => {
       applyManagedTaskRelationships(frontmatter, { parentTask: undefined, subtasks: [] }),
     ).toBe(true);
     expect(frontmatter).toEqual({ user_property: "keep me" });
+  });
+
+  it("migrates legacy fields and relationship links while retaining user properties", () => {
+    const frontmatter = {
+      todoist_task_id: "task-1",
+      todoist_status: "active",
+      todoist_due_date: "2026-10-24",
+      todoist_parent_task: "[[Parent]]",
+      todoist_subtasks: ["[[First child]]", "[[Second child]]"],
+      todoist_synced_at: "old local clock",
+      tags: ["study"],
+      aliases: ["Task alias"],
+      cssclasses: ["task-style"],
+      user_property: "keep me",
+    };
+
+    expect(applyManagedFrontmatter(frontmatter, { "task id": "task-1", status: "active" })).toBe(
+      true,
+    );
+    expect(frontmatter).toEqual({
+      "task id": "task-1",
+      status: "active",
+      "parent task": "[[Parent]]",
+      subtasks: ["[[First child]]", "[[Second child]]"],
+      tags: ["study"],
+      aliases: ["Task alias"],
+      cssclasses: ["task-style"],
+      user_property: "keep me",
+    });
+    expect(applyManagedFrontmatter(frontmatter, { "task id": "task-1", status: "active" })).toBe(
+      false,
+    );
+  });
+
+  it("rejects user property collisions before changing a legacy document", () => {
+    const frontmatter = {
+      todoist_task_id: "task-1",
+      todoist_status: "active",
+      status: "my workflow",
+      todoist_parent_task: "[[Parent]]",
+    };
+    const before = { ...frontmatter };
+
+    expect(() =>
+      applyManagedFrontmatter(frontmatter, { "task id": "task-1", status: "completed" }),
+    ).toThrow(TaskPropertyConflictError);
+    expect(() => applyManagedTaskRelationships(frontmatter, { subtasks: [] })).toThrow(
+      TaskPropertyConflictError,
+    );
+    const content = `---\n---\n${MANAGED_BODY_START}\ncard\n${MANAGED_BODY_END}\nUser notes`;
+    expect(() => readUserOwnedTaskDocument(content, frontmatter, 8)).toThrow(
+      TaskPropertyConflictError,
+    );
+    expect(frontmatter).toEqual(before);
+    expect(readManagedNoteIdentity(frontmatter)).toBeNull();
+  });
+
+  it("rejects a changed task identity before altering any managed properties", () => {
+    const frontmatter = { todoist_task_id: "task-1", todoist_content: "Original" };
+
+    expect(() =>
+      applyManagedFrontmatter(frontmatter, { "task id": "task-2", content: "Replacement" }),
+    ).toThrow(TaskPropertyConflictError);
+    expect(frontmatter).toEqual({ todoist_task_id: "task-1", todoist_content: "Original" });
   });
 
   it("replaces only the generated body region", () => {
@@ -204,15 +277,15 @@ describe("project task documents", () => {
   });
 
   it("updates frontmatter and the managed body as one document value", () => {
-    const content = `---\ntodoist_task_id: task-1\ntodoist_content: Old\nuser_property: keep me\n---\n${MANAGED_BODY_START}\nold\n${MANAGED_BODY_END}\n\nUser notes`;
+    const content = `---\ntodoist_task_id: task-1\ntodoist_content: Old\nuser_property: keep me\n---\n${MANAGED_BODY_START}\n${makeProjectTaskBlock("task-1")}\n${MANAGED_BODY_END}\n\nUser notes`;
     const contentStart = content.indexOf("\n---\n", 4) + 5;
-    const replacement = `${MANAGED_BODY_START}\nnew\n${MANAGED_BODY_END}`;
+    const replacement = makeManagedBody(makeTask("task-1"));
 
     const result = replaceManagedTaskDocument(
       content,
       {
-        todoist_task_id: "task-1",
-        todoist_content: "Old",
+        "task id": "task-1",
+        content: "Old",
         user_property: "keep me",
       },
       { todoist_task_id: "task-1", todoist_content: "New" },
@@ -221,11 +294,13 @@ describe("project task documents", () => {
     );
 
     expect(result.changed).toBe(true);
-    expect(result.content).toContain("todoist_content: New");
+    expect(result.content).toContain("content: New");
     expect(result.content).toContain("user_property: keep me");
     expect(result.content).toContain(`\n---\n${replacement}`);
     expect(result.content).toContain(replacement);
     expect(result.content).toContain("User notes");
+    expect(result.content).not.toContain("todoist_task_id:");
+    expect(result.content).not.toContain("todoist_content:");
   });
 
   it("inserts missing markers without discarding existing body content", () => {
@@ -237,21 +312,21 @@ describe("project task documents", () => {
     expect(result.content).toContain("Existing user notes");
   });
 
-  it("renders managed tasks as a compact Tasks Bridge card code block", () => {
+  it("renders managed tasks with a source-only identity comment", () => {
     const body = makeManagedBody(
       makeTask("task-1", { content: "A title with todoist-sync-plus:managed:start" }),
     );
 
     expect(body).toBe(
-      `${MANAGED_BODY_START}\n\`\`\`tasks-bridge-project-task\ntask_id: "task-1"\n\`\`\`\n${MANAGED_BODY_END}`,
+      `${MANAGED_BODY_START}\n<!-- tasks-bridge:task-id "task-1" -->\n${MANAGED_BODY_END}`,
     );
     expect(body).not.toContain("A title with");
   });
 
-  it("quotes numeric-looking task IDs in the managed block", () => {
+  it("quotes numeric-looking task IDs in the identity comment", () => {
     const body = makeManagedBody(makeTask("9007199254740993"));
 
-    expect(body).toContain('task_id: "9007199254740993"');
+    expect(body).toContain('<!-- tasks-bridge:task-id "9007199254740993" -->');
     expect(readProjectTaskBlockIdentity('task_id: "9007199254740993"')).toEqual({
       taskId: "9007199254740993",
     });
@@ -276,10 +351,76 @@ describe("project task documents", () => {
     expect(readProjectTaskBlockIdentity(source)).toEqual(expected);
   });
 
+  it.each([
+    ['<!-- tasks-bridge:task-id "task-1" -->', { taskId: "task-1" }],
+    ['<!-- tasks-bridge:task-id "9007199254740993" -->', { taskId: "9007199254740993" }],
+    ["<!-- tasks-bridge:task-id task-1 -->", null],
+    ["<!-- tasks-bridge:task-id 'task-1' -->", null],
+    ['<!-- tasks-bridge:task-id "" -->', null],
+    ['<!-- tasks-bridge:task-id "task.1" -->', null],
+    ['<!-- tasks-bridge:task-id " task-1" -->', null],
+    ['<!-- tasks-bridge:task-id "task-1" --> extra', null],
+    ['<!-- tasks-bridge:task-id "task-1" -->\n<!-- tasks-bridge:task-id "task-1" -->', null],
+  ])("strictly parses a source-only task identity from %j", (source, expected) => {
+    expect(readManagedTaskIdentityMarker(source)).toEqual(expected);
+  });
+
+  it.each([
+    makeManagedTaskIdentityMarker("task-1"),
+    makeProjectTaskBlock("task-1"),
+    "```tasks-bridge-task\n```",
+  ])("accepts supported managed identity regions without changing embedded user cards: %j", (region) => {
+    const content = `${MANAGED_BODY_START}\n${region}\n${MANAGED_BODY_END}\n\n${makeProjectTaskBlock("other-task")}`;
+    expect(() => requireManagedTaskBody(content, 0, "task-1")).not.toThrow();
+  });
+
+  it.each([
+    makeManagedTaskIdentityMarker("different-task"),
+    `${makeManagedTaskIdentityMarker("task-1")}\n${makeManagedTaskIdentityMarker("task-1")}`,
+    `${makeManagedTaskIdentityMarker("task-1")}\n${makeProjectTaskBlock("task-1")}`,
+    makeProjectTaskBlock("different-task"),
+    '<!-- tasks-bridge:task-id "task-1" --> trailing data',
+  ])("rejects ambiguous or mismatching managed identity regions: %j", (region) => {
+    const content = `${MANAGED_BODY_START}\n${region}\n${MANAGED_BODY_END}`;
+    expect(() => requireManagedTaskBody(content, 0, "task-1")).toThrow(ManagedBodyConflictError);
+    expect(
+      readRecoverableManagedNoteIdentity(
+        `---\ntask id: task-1\n---\n${content}`,
+        "task id: task-1",
+      ),
+    ).toBeNull();
+  });
+
+  it("rejects repeated boundaries and identity markers outside the managed region", () => {
+    const body = makeManagedBody(makeTask("task-1"));
+    expect(() => requireManagedTaskBody(`${body}\n${MANAGED_BODY_START}`, 0, "task-1")).toThrow(
+      ManagedBodyConflictError,
+    );
+    expect(() =>
+      requireManagedTaskBody(`${body}\n${makeManagedTaskIdentityMarker("task-1")}`, 0, "task-1"),
+    ).toThrow(ManagedBodyConflictError);
+    expect(() => requireManagedTaskBody(body, body.length, "task-1")).toThrow(
+      ManagedBodyConflictError,
+    );
+  });
+
   it("rejects malformed or duplicate marker regions", () => {
     expect(() => replaceManagedBody(`${MANAGED_BODY_START}\nmissing end`, "new")).toThrow(
       ManagedBodyConflictError,
     );
+  });
+
+  it.each([
+    "description",
+    "status",
+    "content",
+  ])("preserves user prose beginning with %s and a horizontal rule", (key) => {
+    const body = makeManagedBody(makeTask("task-1"));
+    const prefix = `${key}: My personal summary\n---\n`;
+    const content = `---\ntask id: task-1\n---\n${prefix}${body}\n`;
+    const start = content.indexOf(prefix);
+    const user = readUserOwnedTaskDocument(content, { "task id": "task-1" }, start);
+    expect(user.body).toBe(prefix.trim());
   });
 
   it("recovers only one strict task ID from a malformed managed document", () => {
@@ -297,6 +438,32 @@ describe("project task documents", () => {
     ).toBeNull();
     expect(
       readRecoverableManagedNoteIdentity(`---\n${malformedYaml}\n---\nUser notes\n`, malformedYaml),
+    ).toBeNull();
+  });
+
+  it.each([
+    ["task id: task-1", { taskId: "task-1" }],
+    ['"task id": "task-1"', { taskId: "task-1" }],
+    ["'task id': 'task-1'", { taskId: "task-1" }],
+    ["task id: task-1\ntodoist_task_id: task-1", { taskId: "task-1" }],
+    ["task id: task-1\ntodoist_task_id: task-2", null],
+    ['task id: task-1\n"task id": task-1', null],
+  ])("recovers compatible schema identities from %j", (raw, expected) => {
+    const body = makeManagedBody(makeTask("task-1"));
+    expect(readRecoverableManagedNoteIdentity(`---\n${raw}\n---\n${body}`, raw)).toEqual(expected);
+  });
+
+  it("accepts canonical identity and declines conflicting schemas", () => {
+    expect(readManagedNoteIdentity({ "task id": "task-1", status: "active" })).toEqual({
+      taskId: "task-1",
+    });
+    expect(readManagedNoteIdentity({ "task id": "task-1", todoist_task_id: "task-2" })).toBeNull();
+    expect(
+      readManagedNoteIdentity({
+        "task id": "task-1",
+        status: "active",
+        todoist_status: "completed",
+      }),
     ).toBeNull();
   });
 

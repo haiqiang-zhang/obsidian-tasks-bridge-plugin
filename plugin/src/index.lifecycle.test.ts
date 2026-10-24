@@ -21,6 +21,8 @@ const runtime = vi.hoisted(() => ({
   registerCommands: vi.fn(),
   registerBasesView: vi.fn(),
   registerEvent: vi.fn(),
+  registerEditorExtension: vi.fn(),
+  registerMarkdownPostProcessor: vi.fn(),
   registerInterval: vi.fn(),
   registerMarkdownCodeBlockProcessor: vi.fn(),
   saveData: vi.fn(),
@@ -70,6 +72,14 @@ vi.mock("obsidian", () => ({
       runtime.registerInterval(id);
     }
 
+    public registerMarkdownPostProcessor(processor: unknown): void {
+      runtime.registerMarkdownPostProcessor(processor);
+    }
+
+    public registerEditorExtension(extension: unknown): void {
+      runtime.registerEditorExtension(extension);
+    }
+
     public registerEvent(eventRef: unknown): void {
       runtime.registerEvent(eventRef);
     }
@@ -107,6 +117,31 @@ vi.mock("@/api/fetcher", () => ({
 
 vi.mock("@/commands", () => ({
   registerCommands: runtime.registerCommands,
+}));
+
+vi.mock("@/project-sync/taskManagedRegionExtension", () => ({
+  taskManagedRegionExtension: {},
+}));
+
+vi.mock("@/project-sync/taskDocumentEmbeds", () => ({
+  TaskDocumentEmbeds: class {
+    public onPostProcessor(): void {}
+    public dispose(): void {}
+  },
+}));
+
+vi.mock("@/project-sync/taskDocumentHeaders", () => ({
+  TaskDocumentHeaders: class {
+    public start(): void {}
+    public dispose(): void {}
+  },
+}));
+
+vi.mock("@/project-sync/taskDocumentPresentation", () => ({
+  TaskDocumentPresentation: class {
+    public start(): void {}
+    public dispose(): void {}
+  },
 }));
 
 vi.mock("@/bases/todoist-list", () => ({

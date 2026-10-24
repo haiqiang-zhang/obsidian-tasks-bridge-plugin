@@ -5,10 +5,20 @@ import type { Task } from "@/data/task";
 import { todoistTaskWebUrl } from "@/todoist/taskLinks";
 
 import type { ProjectHierarchyPath } from "./hierarchy";
+import {
+  assertTaskPropertyMigrationSafe,
+  deleteTaskProperty,
+  readTaskProperty,
+  setTaskProperty,
+  TASK_PROPERTY_NAMES,
+  TaskPropertyConflictError,
+  type TaskPropertyKey,
+} from "./properties";
 import type { SnapshotTask } from "./types";
 
 export const MANAGED_BODY_START = "<!-- todoist-sync-plus:managed:start -->";
 export const MANAGED_BODY_END = "<!-- todoist-sync-plus:managed:end -->";
+export const MANAGED_TASK_ID_MARKER_PREFIX = "<!-- tasks-bridge:task-id ";
 export const PROJECT_TASK_CODE_BLOCK = "tasks-bridge-project-task";
 export const LEGACY_PROJECT_TASK_CODE_BLOCK = "tasks-bridge-task";
 
@@ -26,10 +36,7 @@ export const LEGACY_IMPLEMENTATION_FRONTMATTER_KEYS = [
   "todoist_stale_since",
 ] as const;
 
-export const MANAGED_FRONTMATTER_KEYS = [
-  // Legacy implementation metadata remains in the allowlist so the next Project sync removes it
-  // from existing notes instead of reclassifying it as user-authored frontmatter.
-  ...LEGACY_IMPLEMENTATION_FRONTMATTER_KEYS,
+const taskPropertyKeys = [
   "todoist_task_id",
   "todoist_content",
   "todoist_description",
@@ -54,12 +61,25 @@ export const MANAGED_FRONTMATTER_KEYS = [
   "todoist_synced_at",
 ] as const;
 
+export const MANAGED_FRONTMATTER_KEYS = [
+  // Keep old spellings in the allowlist so migrations do not treat them as user properties.
+  ...LEGACY_IMPLEMENTATION_FRONTMATTER_KEYS,
+  ...taskPropertyKeys,
+  ...taskPropertyKeys.map((key) => TASK_PROPERTY_NAMES[key]),
+] as const;
+
+const relationshipPropertyKeys = ["todoist_parent_task", "todoist_subtasks"] as const;
+
 export const MANAGED_TASK_RELATIONSHIP_FRONTMATTER_KEYS = [
-  "todoist_parent_task",
-  "todoist_subtasks",
+  ...relationshipPropertyKeys,
+  ...relationshipPropertyKeys.map((key) => TASK_PROPERTY_NAMES[key]),
 ] as const;
 
 export type ManagedFrontmatter = Record<string, unknown>;
+
+const hasOwn = (frontmatter: ManagedFrontmatter, key: string): boolean =>
+  // biome-ignore lint/suspicious/noPrototypeBuiltins: The supported Obsidian target does not include ES2022 Object.hasOwn.
+  Object.prototype.hasOwnProperty.call(frontmatter, key);
 
 /** The parts of a projected task note that belong to the user, not Tasks Bridge. */
 export type UserOwnedTaskDocument = {
@@ -87,25 +107,25 @@ export const makeTaskFrontmatter = (
 ): ManagedFrontmatter => {
   const { task, completed } = snapshotTask;
   const frontmatter: ManagedFrontmatter = {
-    todoist_task_id: task.id,
-    todoist_content: task.content,
-    todoist_description: task.description,
-    todoist_status: completed ? "completed" : "active",
-    todoist_completed: completed,
-    todoist_project: task.project.name,
-    todoist_project_path: projectPath.names,
-    todoist_labels: task.labels.map((label) => label.name),
-    todoist_priority: priorityName(task.priority),
-    todoist_url: todoistTaskWebUrl(task.project.id, task.id),
+    "task id": task.id,
+    content: task.content,
+    description: task.description,
+    status: completed ? "completed" : "active",
+    completed,
+    project: task.project.name,
+    "project path": projectPath.names,
+    labels: task.labels.map((label) => label.name),
+    priority: priorityName(task.priority),
+    url: todoistTaskWebUrl(task.project.id, task.id),
   };
 
   if (task.authoritativeCreatedAt !== undefined) {
-    frontmatter.todoist_created_at = task.authoritativeCreatedAt;
+    frontmatter["created at"] = task.authoritativeCreatedAt;
   }
 
   // Project IDs, mapping IDs, parent IDs, section IDs, Todoist order, missing counters, and raw
   // completion history belong to the plugin's local catalog. The Markdown task binds to Todoist
-  // through one immutable key only: todoist_task_id.
+  // through one immutable key only: task id.
   void rootProjectId;
   void projectPath.ids;
   void mappingId;
@@ -116,33 +136,33 @@ export const makeTaskFrontmatter = (
   void syncedAt;
 
   if (task.updatedAt !== undefined) {
-    frontmatter.todoist_updated_at = task.updatedAt;
+    frontmatter["updated at"] = task.updatedAt;
   }
 
   if (task.section !== undefined) {
-    frontmatter.todoist_section = task.section.name;
+    frontmatter.section = task.section.name;
   }
   if (completed && task.completedAt != null) {
-    frontmatter.todoist_completed_at = task.completedAt;
+    frontmatter["completed at"] = task.completedAt;
   }
   if (task.due !== undefined) {
-    frontmatter.todoist_due_date = task.due.date.slice(0, 10);
+    frontmatter["due date"] = task.due.date.slice(0, 10);
     const dueDatetime =
       task.due.datetime ?? (task.due.date.includes("T") ? task.due.date : undefined);
     if (dueDatetime !== undefined) {
-      frontmatter.todoist_due_datetime = dueDatetime;
+      frontmatter["due datetime"] = dueDatetime;
     }
     if (task.due.timezone != null) {
-      frontmatter.todoist_due_timezone = task.due.timezone;
+      frontmatter["due timezone"] = task.due.timezone;
     }
-    frontmatter.todoist_due_is_recurring = task.due.isRecurring;
+    frontmatter.recurring = task.due.isRecurring;
   }
   if (task.deadline !== undefined) {
-    frontmatter.todoist_deadline = task.deadline.date;
+    frontmatter.deadline = task.deadline.date;
   }
   if (task.duration !== undefined) {
-    frontmatter.todoist_duration = task.duration.amount;
-    frontmatter.todoist_duration_unit = task.duration.unit;
+    frontmatter.duration = task.duration.amount;
+    frontmatter["duration unit"] = task.duration.unit;
   }
 
   return frontmatter;
@@ -152,23 +172,31 @@ export const applyManagedFrontmatter = (
   target: ManagedFrontmatter,
   desired: ManagedFrontmatter,
 ): boolean => {
+  assertTaskPropertyMigrationSafe(target);
+  assertTaskPropertyMigrationSafe(desired);
+  const targetId = readTaskProperty(target, "todoist_task_id");
+  const desiredId = readTaskProperty(desired, "todoist_task_id");
+  if (targetId !== undefined && desiredId !== undefined && targetId !== desiredId) {
+    throw new TaskPropertyConflictError("task id");
+  }
+  const changed = applyTaskProperties(target, desired, taskPropertyKeys);
+  return removeLegacyImplementationFrontmatter(target) || changed;
+};
+
+const applyTaskProperties = (
+  target: ManagedFrontmatter,
+  desired: ManagedFrontmatter,
+  keys: readonly TaskPropertyKey[],
+): boolean => {
   let changed = false;
-
-  for (const key of MANAGED_FRONTMATTER_KEYS) {
-    if (!(key in desired)) {
-      if (key in target) {
-        delete target[key];
-        changed = true;
-      }
-      continue;
-    }
-
-    if (!isSameValue(target[key], desired[key])) {
-      target[key] = desired[key];
-      changed = true;
+  for (const key of keys) {
+    const name = TASK_PROPERTY_NAMES[key];
+    if (hasOwn(desired, name) || hasOwn(desired, key)) {
+      changed = setTaskProperty(target, key, readTaskProperty(desired, key)) || changed;
+    } else {
+      changed = deleteTaskProperty(target, key) || changed;
     }
   }
-
   return changed;
 };
 
@@ -182,31 +210,12 @@ export const applyManagedTaskRelationships = (
   target: ManagedFrontmatter,
   relationships: ManagedTaskRelationships,
 ): boolean => {
+  assertTaskPropertyMigrationSafe(target);
   const desired: ManagedFrontmatter = {
-    ...(relationships.parentTask === undefined
-      ? {}
-      : { todoist_parent_task: relationships.parentTask }),
-    ...(relationships.subtasks.length === 0
-      ? {}
-      : { todoist_subtasks: [...relationships.subtasks] }),
+    ...(relationships.parentTask === undefined ? {} : { "parent task": relationships.parentTask }),
+    ...(relationships.subtasks.length === 0 ? {} : { subtasks: [...relationships.subtasks] }),
   };
-  let changed = false;
-
-  for (const key of MANAGED_TASK_RELATIONSHIP_FRONTMATTER_KEYS) {
-    if (!(key in desired)) {
-      if (key in target) {
-        delete target[key];
-        changed = true;
-      }
-      continue;
-    }
-    if (!isSameValue(target[key], desired[key])) {
-      target[key] = desired[key];
-      changed = true;
-    }
-  }
-
-  return changed;
+  return applyTaskProperties(target, desired, relationshipPropertyKeys);
 };
 
 export const removeLegacyImplementationFrontmatter = (frontmatter: ManagedFrontmatter): boolean => {
@@ -220,18 +229,19 @@ export const removeLegacyImplementationFrontmatter = (frontmatter: ManagedFrontm
   return changed;
 };
 
-const isSameValue = (left: unknown, right: unknown): boolean =>
-  JSON.stringify(left) === JSON.stringify(right);
-
 export const makeProjectTaskBlock = (taskId: string): string =>
   `\`\`\`${PROJECT_TASK_CODE_BLOCK}\ntask_id: ${JSON.stringify(taskId)}\n\`\`\``;
 
-export const makeManagedBody = (task: Task): string => {
-  // The immutable ID belongs in the block because it identifies the card independently from the
-  // note's Bases-facing properties. JSON string syntax is valid YAML and keeps numeric-looking
-  // Todoist IDs quoted so JavaScript never rounds them while parsing.
-  return `${MANAGED_BODY_START}\n${makeProjectTaskBlock(task.id)}\n${MANAGED_BODY_END}`;
+/** A source-only identity marker; the native task header reads the note's frontmatter. */
+export const makeManagedTaskIdentityMarker = (taskId: string): string => {
+  if (readTodoistTaskId(taskId) === null) {
+    throw new ManagedBodyConflictError("Cannot serialize an invalid managed task identity");
+  }
+  return `${MANAGED_TASK_ID_MARKER_PREFIX}${JSON.stringify(taskId)} -->`;
 };
+
+export const makeManagedBody = (task: Task): string =>
+  `${MANAGED_BODY_START}\n${makeManagedTaskIdentityMarker(task.id)}\n${MANAGED_BODY_END}`;
 
 export const replaceManagedBody = (
   content: string,
@@ -288,7 +298,9 @@ const normalizeUserBody = (value: string): string =>
 
 export const isRecoverableManagedFrontmatterResidue = (value: string): boolean => {
   const normalized = value.replace(/\r\n?/gu, "\n").trim();
-  const match = normalized.match(/^'?([a-z0-9_]+):[^\n]*\n---$/u);
+  // Only the namespaced legacy fields match the historical duplicated-YAML corruption.
+  // Ordinary prose such as `description: ...` followed by a rule belongs to the user.
+  const match = normalized.match(/^'?(todoist_[a-z0-9_]+):[^\n]*\n---$/u);
   return match !== null && managedFrontmatterKeys.has(match[1]);
 };
 
@@ -305,6 +317,7 @@ export const readUserOwnedTaskDocument = (
   frontmatter: ManagedFrontmatter,
   contentStart: number,
 ): UserOwnedTaskDocument => {
+  assertTaskPropertyMigrationSafe(frontmatter);
   const starts = findAll(content, MANAGED_BODY_START);
   const ends = findAll(content, MANAGED_BODY_END);
   if (
@@ -361,6 +374,20 @@ export const renderTaskDocumentWithUserContent = (
   managedBody: string,
   userDocument: UserOwnedTaskDocument,
 ): string => {
+  for (const [key, value] of Object.entries(userDocument.frontmatter)) {
+    if (
+      hasOwn(managedFrontmatter, key) &&
+      JSON.stringify(value) !== JSON.stringify(managedFrontmatter[key])
+    ) {
+      const property = Object.values(TASK_PROPERTY_NAMES).find((name) => name === key);
+      if (property !== undefined) {
+        throw new TaskPropertyConflictError(property);
+      }
+      throw new ManagedBodyConflictError(
+        `The managed task property "${key}" conflicts with a user property`,
+      );
+    }
+  }
   const content = renderNewTaskDocument(
     { ...userDocument.frontmatter, ...managedFrontmatter },
     managedBody,
@@ -391,6 +418,15 @@ export const replaceManagedTaskDocument = (
   managedBody: string,
   contentStart: number,
 ): { content: string; changed: boolean } => {
+  const identity = readManagedNoteIdentity(currentFrontmatter);
+  if (
+    identity !== null &&
+    (content.includes(MANAGED_BODY_START) ||
+      content.includes(MANAGED_BODY_END) ||
+      content.includes(MANAGED_TASK_ID_MARKER_PREFIX))
+  ) {
+    requireManagedTaskBody(content, contentStart, identity.taskId);
+  }
   const bodyUpdate = replaceManagedBody(content, managedBody, contentStart);
   const nextFrontmatter = { ...currentFrontmatter };
   const frontmatterChanged = applyManagedFrontmatter(nextFrontmatter, desiredFrontmatter);
@@ -417,6 +453,71 @@ const readTodoistTaskId = (value: unknown): ManagedNoteIdentity | null => {
   return { taskId: value };
 };
 
+/** Read exactly one canonical identity comment, without accepting additional source text. */
+export const readManagedTaskIdentityMarker = (source: string): ManagedNoteIdentity | null => {
+  const match = source.match(/^<!-- tasks-bridge:task-id "([A-Za-z0-9][A-Za-z0-9_-]*)" -->$/u);
+  return match === null ? null : readTodoistTaskId(match[1]);
+};
+
+/** Accept the source-only protocol and the two historical generated card formats. */
+export const requireManagedTaskBody = (
+  content: string,
+  contentStart: number,
+  taskId: string,
+): void => {
+  const starts = findAll(content, MANAGED_BODY_START);
+  const ends = findAll(content, MANAGED_BODY_END);
+  if (
+    starts.length !== 1 ||
+    ends.length !== 1 ||
+    starts[0] < contentStart ||
+    ends[0] <= starts[0]
+  ) {
+    throw new ManagedBodyConflictError("The task's managed body markers are missing or duplicated");
+  }
+  const source = content.slice(starts[0] + MANAGED_BODY_START.length, ends[0]).trim();
+  const identityMarkers = findAll(content, MANAGED_TASK_ID_MARKER_PREFIX);
+  if (identityMarkers.length > 0) {
+    if (identityMarkers.length !== 1 || readManagedTaskIdentityMarker(source)?.taskId !== taskId) {
+      throw new ManagedBodyConflictError(
+        "The task identity marker and frontmatter do not identify the same task, or the marker is duplicated",
+      );
+    }
+    return;
+  }
+  const lines = source.split(/\r?\n/u);
+  const opening = lines.shift()?.trim();
+  const closing = lines.pop()?.trim();
+  if (closing !== "```") {
+    throw new ManagedBodyConflictError("The task's managed identity region is malformed");
+  }
+  const blockSource = lines.join("\n");
+  if (opening === `\`\`\`${LEGACY_PROJECT_TASK_CODE_BLOCK}` && blockSource.trim() === "") {
+    return;
+  }
+  if (
+    opening !== `\`\`\`${PROJECT_TASK_CODE_BLOCK}` ||
+    readProjectTaskBlockIdentity(blockSource)?.taskId !== taskId
+  ) {
+    throw new ManagedBodyConflictError(
+      "The task card and frontmatter do not identify the same task",
+    );
+  }
+};
+
+export const hasManagedTaskBody = (
+  content: string,
+  contentStart: number,
+  taskId: string,
+): boolean => {
+  try {
+    requireManagedTaskBody(content, contentStart, taskId);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 /** Read the immutable identity serialized inside a `tasks-bridge-project-task` block. */
 export const readProjectTaskBlockIdentity = (source: string): ManagedNoteIdentity | null => {
   let value: unknown;
@@ -437,13 +538,23 @@ export const readProjectTaskBlockIdentity = (source: string): ManagedNoteIdentit
 
 export const readManagedNoteIdentity = (
   frontmatter: ManagedFrontmatter,
-): ManagedNoteIdentity | null => readTodoistTaskId(frontmatter.todoist_task_id);
+): ManagedNoteIdentity | null => {
+  try {
+    assertTaskPropertyMigrationSafe(frontmatter);
+    return readTodoistTaskId(readTaskProperty(frontmatter, "todoist_task_id"));
+  } catch (error) {
+    if (error instanceof TaskPropertyConflictError) {
+      return null;
+    }
+    throw error;
+  }
+};
 
 /**
  * Recover only the immutable task identity from otherwise malformed managed frontmatter.
  *
- * This deliberately accepts one narrow shape: exactly one top-level scalar task ID plus one valid
- * Tasks Bridge managed-body region. No other frontmatter value is trusted or recovered.
+ * Accept one top-level scalar per supported ID spelling and require their values to agree, plus
+ * one valid Tasks Bridge managed-body region. No other frontmatter value is trusted or recovered.
  */
 export const readRecoverableManagedNoteIdentity = (
   content: string,
@@ -459,19 +570,33 @@ export const readRecoverableManagedNoteIdentity = (
     .replace(/\r\n?/gu, "\n")
     .split("\n")
     .flatMap((line) => {
-      const match = line.match(/^todoist_task_id:[\t ]*(.*)$/u);
-      return match === null ? [] : [match[1]?.trim() ?? ""];
+      const match = line.match(
+        /^(?:(["'])(task id|todoist_task_id)\1|(task id|todoist_task_id)):[\t ]*(.*)$/u,
+      );
+      return match === null ? [] : [{ key: match[2] ?? match[3], scalar: match[4]?.trim() ?? "" }];
     });
-  if (candidates.length !== 1) {
+  if (
+    candidates.length === 0 ||
+    new Set(candidates.map(({ key }) => key)).size !== candidates.length
+  ) {
     return null;
   }
 
-  const scalar = candidates[0] ?? "";
-  const quoted = scalar.match(/^(['"])([A-Za-z0-9][A-Za-z0-9_-]*)\1$/u);
-  const taskId = quoted?.[2] ?? (todoistTaskIdPattern.test(scalar) ? scalar : null);
-  if (taskId === null) {
+  const taskIds = candidates.map(({ scalar }) => {
+    const quoted = scalar.match(/^(['"])([A-Za-z0-9][A-Za-z0-9_-]*)\1$/u);
+    return quoted?.[2] ?? (todoistTaskIdPattern.test(scalar) ? scalar : null);
+  });
+  const taskId = taskIds[0];
+  if (taskId == null || taskIds.some((candidate) => candidate !== taskId)) {
     return null;
   }
 
+  const frontmatterStart = content.indexOf(rawFrontmatter);
+  if (
+    frontmatterStart < 0 ||
+    !hasManagedTaskBody(content, frontmatterStart + rawFrontmatter.length, taskId)
+  ) {
+    return null;
+  }
   return { taskId };
 };

@@ -3,6 +3,7 @@ import { Notice } from "obsidian";
 
 import { readManagedNoteIdentity } from "@/project-sync";
 import type { ManagedFrontmatter } from "@/project-sync/document";
+import { readTaskProperty } from "@/project-sync/properties";
 
 import {
   type ManagedProjectTaskReference,
@@ -183,12 +184,18 @@ const readCompletionState = (
 ):
   | (Omit<PendingPropertyIntent, "observedStatus"> & { status: ManagedProjectTaskStatus })
   | null => {
-  if (frontmatter === undefined) {
+  if (
+    frontmatter === undefined ||
+    (!file.path.endsWith(".task.md") && !("todoist_task_id" in frontmatter))
+  ) {
     return null;
   }
   const identity = readManagedNoteIdentity(frontmatter);
-  const status = frontmatter.todoist_status;
-  const completed = frontmatter.todoist_completed;
+  if (identity === null) {
+    return null;
+  }
+  const status = readTaskProperty(frontmatter, "todoist_status");
+  const completed = readTaskProperty(frontmatter, "todoist_completed");
   if (
     identity === null ||
     (status !== "active" && status !== "completed") ||

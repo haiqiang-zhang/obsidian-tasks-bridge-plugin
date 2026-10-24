@@ -473,6 +473,43 @@ describe("ProjectTaskCommandService", () => {
     expect(harness.sync).not.toHaveBeenCalled();
   });
 
+  it("does not claim an ordinary note with generic task id and completed fields", async () => {
+    const harness = makeHarness({
+      frontmatter: { "task id": TASK_ID, status: "active", completed: false },
+    });
+    await expect(harness.service.completeTask(reference)).rejects.toThrow(
+      "not the selected managed",
+    );
+    expect(harness.actions.closeProjectTask).not.toHaveBeenCalled();
+    expect(harness.processFrontMatter).not.toHaveBeenCalled();
+  });
+
+  it("completes a task using native lowercase property names without recreating legacy fields", async () => {
+    const harness = makeHarness({
+      filePath: "Todoist/Root/Task.task.md",
+      frontmatter: {
+        "task id": "task-1",
+        status: "active",
+        completed: false,
+        "due date": "2026-10-24",
+        aliases: ["Keep alias"],
+        custom: "Keep me",
+      },
+    });
+    await harness.service.completeTask({ id: TASK_ID, filePath: "Todoist/Root/Task.task.md" });
+    expect(harness.frontmatter).toMatchObject({
+      "task id": "task-1",
+      status: "completed",
+      completed: true,
+      "due date": "2026-10-24",
+      aliases: ["Keep alias"],
+      custom: "Keep me",
+    });
+    expect(Object.keys(harness.frontmatter ?? {}).some((key) => key.startsWith("todoist_"))).toBe(
+      false,
+    );
+  });
+
   it("applies a changed todoist_completed property through the existing complete action", async () => {
     const harness = makeHarness({
       frontmatter: managedFrontmatter({ todoist_completed: true, todoist_status: "active" }),
@@ -707,7 +744,7 @@ describe("ProjectTaskCommandService", () => {
       }),
     });
 
-    const result = await harness.service.completeTask(reference);
+    const result = await harness.service.completeTask({ id: TASK_ID, filePath: FILE_PATH });
     await expect(result.projection).resolves.toBeUndefined();
 
     expect(harness.actions.closeProjectTask).toHaveBeenCalledWith(TASK_ID);
@@ -789,15 +826,19 @@ describe("ProjectTaskCommandService", () => {
     if (harness.frontmatter === undefined) {
       throw new Error("Expected managed frontmatter");
     }
-    harness.frontmatter.todoist_completed = false;
+    // Another sync migrates the file while this remote completion is pending.
+    delete harness.frontmatter.todoist_task_id;
+    delete harness.frontmatter.todoist_status;
+    delete harness.frontmatter.todoist_completed;
+    Object.assign(harness.frontmatter, { "task id": TASK_ID, status: "active", completed: false });
     remoteMutation.resolve(COMPLETED_AT);
     const result = await mutation;
 
     expect(result).not.toBeNull();
     await expect(result?.targetedProjection).resolves.toBeUndefined();
     expect(harness.frontmatter).toMatchObject({
-      todoist_completed: false,
-      todoist_status: "completed",
+      completed: false,
+      status: "completed",
     });
   });
 
@@ -915,6 +956,7 @@ describe("ProjectTaskCommandService", () => {
       todoist_synced_at: expect.any(String),
     });
     expect(harness.frontmatter).not.toHaveProperty("todoist_completed_at");
+    expect(harness.frontmatter).not.toHaveProperty("completed at");
     expect(harness.invalidate).toHaveBeenCalledOnce();
     await vi.waitFor(() => expect(harness.sync).toHaveBeenCalledOnce());
 
@@ -931,14 +973,14 @@ describe("ProjectTaskCommandService", () => {
       throw new Error("Expected managed frontmatter");
     }
 
-    const first = await harness.service.completeTask(reference);
+    const first = await harness.service.completeTask({ id: TASK_ID, filePath: FILE_PATH });
     await first.projection;
     harness.frontmatter.todoist_status = "completed";
     const reopened = await harness.service.reopenTask(reference);
     await reopened.projection;
     harness.frontmatter.todoist_status = "active";
     harness.actions.closeProjectTask.mockResolvedValueOnce(new Date("2026-08-11T05:00:00.000Z"));
-    const second = await harness.service.completeTask(reference);
+    const second = await harness.service.completeTask({ id: TASK_ID, filePath: FILE_PATH });
     await second.projection;
 
     expect(harness.catalog?.completionEvents).toEqual([
@@ -1001,7 +1043,7 @@ describe("ProjectTaskCommandService", () => {
       ],
     });
 
-    const result = await harness.service.completeTask(reference);
+    const result = await harness.service.completeTask({ id: TASK_ID, filePath: FILE_PATH });
     await expect(result.targetedProjection).resolves.toBeUndefined();
     await expect(result.projection).resolves.toBeUndefined();
 
@@ -1022,7 +1064,7 @@ describe("ProjectTaskCommandService", () => {
     });
     harness.sync.mockReturnValueOnce(canonicalSync.promise);
 
-    const result = await harness.service.completeTask(reference);
+    const result = await harness.service.completeTask({ id: TASK_ID, filePath: FILE_PATH });
 
     expect(harness.invalidate).toHaveBeenCalledOnce();
     expect(harness.sync).not.toHaveBeenCalled();
@@ -1063,7 +1105,7 @@ describe("ProjectTaskCommandService", () => {
       }
     });
 
-    const result = await harness.service.completeTask(reference);
+    const result = await harness.service.completeTask({ id: TASK_ID, filePath: FILE_PATH });
     await expect(result.targetedProjection).rejects.toBeInstanceOf(ProjectTaskProjectionError);
     await expect(result.projection).rejects.toBeInstanceOf(ProjectTaskProjectionError);
 
@@ -1072,6 +1114,7 @@ describe("ProjectTaskCommandService", () => {
     expect(harness.frontmatter).toMatchObject({ todoist_status: "active" });
     expect(harness.frontmatter).not.toHaveProperty("todoist_completed");
     expect(harness.frontmatter).not.toHaveProperty("todoist_completed_at");
+    expect(harness.frontmatter).not.toHaveProperty("completed at");
     expect(harness.sync).not.toHaveBeenCalled();
   });
 
@@ -1080,7 +1123,7 @@ describe("ProjectTaskCommandService", () => {
     const projectionCause = new Error("Vault is read-only");
     harness.processFrontMatter.mockRejectedValueOnce(projectionCause);
 
-    const result = await harness.service.completeTask(reference);
+    const result = await harness.service.completeTask({ id: TASK_ID, filePath: FILE_PATH });
 
     await expect(result.targetedProjection).rejects.toMatchObject({
       constructor: ProjectTaskProjectionError,
@@ -1106,7 +1149,7 @@ describe("ProjectTaskCommandService", () => {
       update(harness.frontmatter);
     });
 
-    const result = await harness.service.completeTask(reference);
+    const result = await harness.service.completeTask({ id: TASK_ID, filePath: FILE_PATH });
 
     await expect(result.projection).rejects.toMatchObject({
       constructor: ProjectTaskProjectionError,
@@ -1122,6 +1165,7 @@ describe("ProjectTaskCommandService", () => {
       }),
     });
     expect(harness.frontmatter).not.toHaveProperty("todoist_completed_at");
+    expect(harness.frontmatter).not.toHaveProperty("completed at");
   });
 
   it("logs a queued canonical sync failure without rejecting the targeted projection", async () => {

@@ -18,6 +18,13 @@ export type ProjectTaskCardModel = {
   content: string;
   description: string;
   filePath: string;
+  dueDate?: string;
+  dueDatetime?: string;
+  dueTimezone?: string;
+  recurring?: boolean;
+  deadline?: string;
+  duration?: number;
+  durationUnit?: string;
   labels: string[];
   priority: string;
   projectPath: string[];
@@ -47,7 +54,7 @@ const completionControlTitle = (awaitingProjection: boolean, converged: boolean)
   return converged ? undefined : completionMismatchMessage;
 };
 
-const useTaskCompletionAction = (
+export const useTaskCompletionAction = (
   actions: ProjectTaskCardActions,
   task: ProjectTaskCardModel,
   logTarget: string,

@@ -19,7 +19,7 @@ Changing this setting will automatically migrate your token to the new storage l
 
 ## Project sync
 
-Project sync is an independent, one-way Todoist-to-Vault projection. You can configure multiple Todoist-project-to-Vault-folder mappings. By default, ownership rather than location controls cleanup: task notes are managed through `todoist_task_id`, and folders are eligible for cleanup only when Tasks Bridge created and recorded them. Other Vault content inside a mapping remains untouched. Its controls remain available while the mode is disabled, so you can prepare every destination and scope before enabling it. See the [project sync guide](./project-mode) for the folder layout, task properties, and complete safety behavior.
+Project sync is an independent, one-way Todoist-to-Vault projection. You can configure multiple Todoist-project-to-Vault-folder mappings. By default, ownership rather than location controls cleanup: task notes are managed through `task id`, and folders are eligible for cleanup only when Tasks Bridge created and recorded them. Other Vault content inside a mapping remains untouched. Its controls remain available while the mode is disabled, so you can prepare every destination and scope before enabling it. See the [project sync guide](./project-mode) for the folder layout, task properties, and complete safety behavior.
 
 ### Enable project sync
 

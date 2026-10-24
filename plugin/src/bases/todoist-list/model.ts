@@ -1,5 +1,7 @@
 import type { BasesEntry, BasesEntryGroup, BasesPropertyId, Value } from "obsidian";
 
+import { TASK_PROPERTY_NAMES } from "@/project-sync/properties";
+
 import type {
   TodoistListCounts,
   TodoistListDiagnostics,
@@ -47,6 +49,16 @@ const properties = {
   url: "note.todoist_url",
   completedAt: "note.todoist_completed_at",
 } as const satisfies Record<string, BasesPropertyId>;
+
+const canonicalProperties = new Map<BasesPropertyId, BasesPropertyId>(
+  Object.entries(TASK_PROPERTY_NAMES).map(([legacy, canonical]) => [
+    `note.${legacy}`,
+    `note.${canonical}`,
+  ]),
+);
+const legacyProperties = new Map(
+  [...canonicalProperties].map(([legacy, canonical]) => [canonical, legacy]),
+);
 
 const hiddenMetadataProperties = new Set<BasesPropertyId>([
   "file.name",
@@ -206,6 +218,10 @@ const buildGroup = (
       continue;
     }
     taskIdentities.seenFilePaths.add(entry.file.path);
+    if (hasConflictingTaskProperties(entry)) {
+      diagnostics.ignoredInvalid++;
+      continue;
+    }
     const taskId = readString(entry, properties.taskId);
     if (taskId === undefined) {
       diagnostics.ignoredNonManaged++;
@@ -563,6 +579,12 @@ const readTask = (
   options: BuildOptions,
   context?: CatalogTaskContext,
 ): TodoistListTaskRecord | null => {
+  if (
+    !entry.file.path.endsWith(".task.md") &&
+    nativeValue(entry, "note.todoist_task_id") === null
+  ) {
+    return null;
+  }
   const id = readString(entry, properties.taskId);
   const mappingId = context?.mappingId ?? readString(entry, properties.mappingId);
   const rootProjectId = context?.rootProjectId ?? readString(entry, properties.rootProjectId);
@@ -688,7 +710,7 @@ export const todoistListProjectScopeKey = (
 const readMetadata = (entry: BasesEntry, options: BuildOptions): TodoistListMetadata[] => {
   const result: TodoistListMetadata[] = [];
   for (const propertyId of options.order) {
-    if (hiddenMetadataProperties.has(propertyId)) {
+    if (hiddenMetadataProperties.has(legacyProperties.get(propertyId) ?? propertyId)) {
       continue;
     }
     const values = readStringList(entry, propertyId) ?? readSingleValue(entry, propertyId);
@@ -786,11 +808,51 @@ const readNumber = (entry: BasesEntry, propertyId: BasesPropertyId): number | un
 };
 
 const safeValue = (entry: BasesEntry, propertyId: BasesPropertyId): Value | null => {
+  const legacy = legacyProperties.get(propertyId) ?? propertyId;
+  const canonical = canonicalProperties.get(legacy);
+  if (canonical !== undefined) {
+    return nativeValue(entry, canonical) ?? nativeValue(entry, legacy);
+  }
+  return nativeValue(entry, propertyId);
+};
+
+const nativeValue = (entry: BasesEntry, propertyId: BasesPropertyId): Value | null => {
   try {
-    return entry.getValue(propertyId);
+    const value = entry.getValue(propertyId);
+    return value === null || (!value.isTruthy() && value.toString() === "null") ? null : value;
   } catch {
     return null;
   }
+};
+
+const hasConflictingTaskProperties = (entry: BasesEntry): boolean => {
+  const hasLegacyIdentity = nativeValue(entry, "note.todoist_task_id") !== null;
+  for (const [legacy, canonical] of canonicalProperties) {
+    const current = nativeValue(entry, canonical);
+    if (current === null) {
+      continue;
+    }
+    const previous = nativeValue(entry, legacy);
+    if (previous === null ? hasLegacyIdentity : !sameBasesValue(current, previous)) {
+      return true;
+    }
+  }
+  return false;
+};
+
+const sameBasesValue = (left: Value, right: Value): boolean => {
+  if (isListValue(left) || isListValue(right)) {
+    if (!isListValue(left) || !isListValue(right) || left.length() !== right.length()) {
+      return false;
+    }
+    for (let index = 0; index < left.length(); index++) {
+      if (!sameBasesValue(left.get(index), right.get(index))) {
+        return false;
+      }
+    }
+    return true;
+  }
+  return left.isTruthy() === right.isTruthy() && left.toString() === right.toString();
 };
 
 const isListValue = (
@@ -825,7 +887,7 @@ const getDisplayName = (
 };
 
 const metadataKind = (propertyId: BasesPropertyId): TodoistListMetadataKind => {
-  switch (propertyId) {
+  switch (legacyProperties.get(propertyId) ?? propertyId) {
     case properties.labels:
       return "labels";
     case properties.priority:

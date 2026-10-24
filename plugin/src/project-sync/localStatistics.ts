@@ -7,12 +7,15 @@ import {
   type Vault,
 } from "obsidian";
 
+import { readTaskProperty } from "@/project-sync/properties";
+
 import {
   makeProjectCatalog,
   type ProjectCatalog,
   type ProjectCatalogProject,
   type ProjectCatalogStorage,
 } from "./catalog";
+import { readManagedNoteIdentity } from "./document";
 import { isPathInside, sanitizePathSegment } from "./paths";
 import type {
   ProjectCompletionEvent,
@@ -262,8 +265,12 @@ export class ObsidianProjectSyncStatisticsRepository implements ProjectSyncStati
     if (frontmatter === null) {
       return null;
     }
-    const taskId = readNonEmptyString(frontmatter.todoist_task_id);
-    const status = readTaskStatus(frontmatter.todoist_status);
+    const identity = readManagedNoteIdentity(frontmatter);
+    if (identity === null) {
+      return null;
+    }
+    const taskId = identity.taskId;
+    const status = readTaskStatus(readTaskProperty(frontmatter, "todoist_status"));
     if (taskId === null || status === null) {
       return null;
     }

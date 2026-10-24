@@ -123,7 +123,7 @@ export default defineConfig({
       "react/jsx-runtime": "preact/jsx-runtime",
       react: "preact/compat",
     },
-    dedupe: ["preact"],
+    dedupe: ["preact", "@codemirror/state", "@codemirror/view"],
   },
   build: {
     // The output directory may be symlinked into a live Vault. Preserve Obsidian's data.json.
@@ -137,7 +137,7 @@ export default defineConfig({
       formats: ["cjs"],
     },
     rollupOptions: {
-      external: ["obsidian"],
+      external: ["obsidian", "@codemirror/state", "@codemirror/view"],
       output: {
         assetFileNames: (assetInfo) => {
           if (assetInfo.name === "main.css") {

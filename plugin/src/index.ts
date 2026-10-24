@@ -49,6 +49,10 @@ import {
   withProjectSyncFolderOwnershipRegistry,
 } from "@/project-sync";
 import { ProjectTaskCardInjector } from "@/project-sync/taskCardInjector";
+import { TaskDocumentEmbeds } from "@/project-sync/taskDocumentEmbeds";
+import { TaskDocumentHeaders } from "@/project-sync/taskDocumentHeaders";
+import { TaskDocumentPresentation } from "@/project-sync/taskDocumentPresentation";
+import { taskManagedRegionExtension } from "@/project-sync/taskManagedRegionExtension";
 import { LEGACY_QUERY_CODE_BLOCK, QUERY_CODE_BLOCK, QueryInjector } from "@/query/injector";
 import { makeServices, type Services } from "@/services";
 import {
@@ -94,6 +98,9 @@ export default class TodoistPlugin extends Plugin {
   private manualProjectSyncInFlightCount = 0;
   private readonly projectSyncActivity = new ProjectSyncActivityTracker();
   private readonly obsidianSyncGate: ObsidianSyncActivityGate;
+  private readonly taskDocumentEmbeds: TaskDocumentEmbeds;
+  private readonly taskDocumentHeaders: TaskDocumentHeaders;
+  private readonly taskDocumentPresentation: TaskDocumentPresentation;
   private disposed = false;
   private projectCatalogs: ProjectCatalogCollection = {};
   private projectSyncFolderOwnership: ProjectSyncFolderOwnershipRegistry =
@@ -130,6 +137,9 @@ export default class TodoistPlugin extends Plugin {
     this.obsidianSyncGate = new ObsidianSyncActivityGate(app, {
       onInbound: () => this.services.projectSync.invalidate(),
     });
+    this.taskDocumentPresentation = new TaskDocumentPresentation(app);
+    this.taskDocumentHeaders = new TaskDocumentHeaders(this);
+    this.taskDocumentEmbeds = new TaskDocumentEmbeds(this);
   }
 
   async onload() {
@@ -172,6 +182,12 @@ export default class TodoistPlugin extends Plugin {
     this.addSettingTab(new SettingsTab(this.app, this));
 
     registerCommands(this);
+    this.taskDocumentPresentation.start((eventRef) => this.registerEvent(eventRef));
+    this.taskDocumentHeaders.start((eventRef) => this.registerEvent(eventRef));
+    this.registerEditorExtension(taskManagedRegionExtension);
+    this.registerMarkdownPostProcessor(
+      this.taskDocumentEmbeds.onPostProcessor.bind(this.taskDocumentEmbeds),
+    );
     this.registerProjectSyncVaultActivityListeners();
     this.registerEvent(
       this.app.metadataCache.on("changed", (file, _data, cache) => {
@@ -304,6 +320,9 @@ export default class TodoistPlugin extends Plugin {
     this.clearAutoRefreshSchedule();
     this.clearProjectSyncFolderOwnershipRetry();
     this.obsidianSyncGate.dispose();
+    this.taskDocumentPresentation.dispose();
+    this.taskDocumentHeaders.dispose();
+    this.taskDocumentEmbeds.dispose();
     this.apiTokenGeneration++;
     this.projectSyncConfigGeneration++;
     this.services.todoist.reset();

@@ -83,6 +83,45 @@ describe("ProjectTaskPropertySyncService", () => {
     expect(applyCompletedProperty).not.toHaveBeenCalled();
   });
 
+  it("ignores generic native fields on an ordinary Markdown note", async () => {
+    const applyCompletedProperty = vi.fn(async () => undefined);
+    const service = new ProjectTaskPropertySyncService({
+      applyCompletedProperty,
+    } as unknown as ProjectTaskCommandService);
+    service.handleMetadataChange(file, {
+      frontmatter: { "task id": "task-1", status: "active", completed: true },
+    });
+    await flush();
+    expect(applyCompletedProperty).not.toHaveBeenCalled();
+  });
+
+  it("synchronizes native lowercase completed and ignores conflicting migration keys", async () => {
+    const applyCompletedProperty = vi.fn(async () => undefined);
+    const service = new ProjectTaskPropertySyncService({
+      applyCompletedProperty,
+    } as unknown as ProjectTaskCommandService);
+    service.handleMetadataChange({ ...file, path: "Tasks/Work/Task.task.md" } as TFile, {
+      frontmatter: { "task id": "task-1", status: "active", completed: true },
+    });
+    await flush();
+    expect(applyCompletedProperty).toHaveBeenCalledWith(
+      { id: "task-1", filePath: "Tasks/Work/Task.task.md" },
+      true,
+      "active",
+    );
+    applyCompletedProperty.mockClear();
+    service.handleMetadataChange(file, {
+      frontmatter: {
+        todoist_task_id: "task-2",
+        todoist_status: "active",
+        status: "custom-user-status",
+        todoist_completed: true,
+      },
+    });
+    await flush();
+    expect(applyCompletedProperty).not.toHaveBeenCalled();
+  });
+
   it("synchronizes a changed todoist_completed property", async () => {
     const applyCompletedProperty = vi.fn(async () => ({
       targetedProjection: Promise.resolve(),

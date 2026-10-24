@@ -15,6 +15,13 @@ import {
 } from "@/project-sync";
 import type { ProjectCatalogStorage } from "@/project-sync/catalog";
 import type { ManagedFrontmatter, ManagedNoteIdentity } from "@/project-sync/document";
+import {
+  deleteTaskProperty,
+  readTaskProperty,
+  setTaskProperty,
+  TASK_PROPERTY_NAMES,
+  type TaskPropertyKey,
+} from "@/project-sync/properties";
 
 const LOCAL_COMPLETION_EVENT_PREFIX = "local:";
 
@@ -167,7 +174,7 @@ export class ProjectTaskCommandService {
     const notesByTaskId = new Map<string, TFile[]>();
     for (const file of this.vault.getMarkdownFiles()) {
       const frontmatter = this.metadataCache.getFileCache(file)?.frontmatter;
-      if (frontmatter === undefined) {
+      if (frontmatter === undefined || !isTaskFile(file, frontmatter)) {
         continue;
       }
       const identity = readManagedNoteIdentity(frontmatter);
@@ -213,10 +220,16 @@ export class ProjectTaskCommandService {
       // Re-read after the local ownership checks so display fields and identity come from the
       // latest metadata-cache entry.
       const frontmatter = this.metadataCache.getFileCache(file)?.frontmatter;
-      const identity = frontmatter === undefined ? null : readManagedNoteIdentity(frontmatter);
-      const content = readNonEmptyString(frontmatter?.todoist_content);
-      const url = readNonEmptyString(frontmatter?.todoist_url);
-      const status = frontmatter?.todoist_status;
+      const identity =
+        frontmatter === undefined || !isTaskFile(file, frontmatter)
+          ? null
+          : readManagedNoteIdentity(frontmatter);
+      if (identity?.taskId !== taskId) {
+        continue;
+      }
+      const content = readNonEmptyString(readTaskProperty(frontmatter, "todoist_content"));
+      const url = readNonEmptyString(readTaskProperty(frontmatter, "todoist_url"));
+      const status = readTaskProperty(frontmatter, "todoist_status");
       if (
         identity?.taskId !== taskId ||
         content === undefined ||
@@ -226,13 +239,13 @@ export class ProjectTaskCommandService {
         continue;
       }
 
-      const section = readNonEmptyString(frontmatter?.todoist_section);
-      const createdAt = readNonEmptyString(frontmatter?.todoist_created_at);
+      const section = readNonEmptyString(readTaskProperty(frontmatter, "todoist_section"));
+      const createdAt = readNonEmptyString(readTaskProperty(frontmatter, "todoist_created_at"));
       candidates.push({
         id: taskId,
         filePath: file.path,
         content,
-        projectPath: readStringList(frontmatter?.todoist_project_path),
+        projectPath: readStringList(readTaskProperty(frontmatter, "todoist_project_path")),
         ...(section === undefined ? {} : { section }),
         status,
         ...(createdAt === undefined ? {} : { createdAt }),
@@ -361,7 +374,7 @@ export class ProjectTaskCommandService {
       throw new ProjectTaskCommandError("The managed task note metadata is not ready yet");
     }
 
-    const identity = readManagedNoteIdentity(frontmatter);
+    const identity = isTaskFile(file, frontmatter) ? readManagedNoteIdentity(frontmatter) : null;
     if (identity === null || identity.taskId !== reference.id) {
       throw new ProjectTaskCommandError("This note is not the selected managed Todoist task");
     }
@@ -383,7 +396,7 @@ export class ProjectTaskCommandService {
       );
     }
 
-    const status = frontmatter.todoist_status;
+    const status = readTaskProperty(frontmatter, "todoist_status");
     if (status !== "active" && status !== "completed") {
       throw new ProjectTaskCommandError("This task is unavailable until Project sync restores it");
     }
@@ -410,16 +423,14 @@ export class ProjectTaskCommandService {
         "This task is unavailable until Project sync confirms its Todoist project",
       );
     }
+    const completedProperty = readTaskProperty(frontmatter, "todoist_completed");
     return {
       file,
       identity,
       mappingId: owner.id,
       rootProjectId: owner.project.projectId,
       projectId: catalogTask?.projectId,
-      completedProperty:
-        typeof frontmatter.todoist_completed === "boolean"
-          ? frontmatter.todoist_completed
-          : undefined,
+      completedProperty: typeof completedProperty === "boolean" ? completedProperty : undefined,
       status,
       taskId: identity.taskId,
     };
@@ -585,18 +596,18 @@ export class ProjectTaskCommandService {
       }
       this.requireSameIdentity(target, frontmatter);
 
-      frontmatter.todoist_status = status;
+      setCurrentSchemaProperty(frontmatter, "todoist_status", status);
       // The editable property can change again while the Todoist request is in flight. Preserve
       // that newer intent; the property observer will serialize the inverse remote mutation.
-      if (frontmatter.todoist_completed === target.completedProperty) {
-        frontmatter.todoist_completed = status === "completed";
+      if (readTaskProperty(frontmatter, "todoist_completed") === target.completedProperty) {
+        setCurrentSchemaProperty(frontmatter, "todoist_completed", status === "completed");
       }
-      frontmatter.todoist_synced_at = syncedAt;
+      setCurrentSchemaProperty(frontmatter, "todoist_synced_at", syncedAt);
 
       if (completedAtIso !== undefined) {
-        frontmatter.todoist_completed_at = completedAtIso;
+        setCurrentSchemaProperty(frontmatter, "todoist_completed_at", completedAtIso);
       } else {
-        delete frontmatter.todoist_completed_at;
+        deleteCurrentSchemaProperty(frontmatter, "todoist_completed_at");
       }
     });
     if (completedAtIso !== undefined) {
@@ -660,8 +671,12 @@ export class ProjectTaskCommandService {
           this.requireSameIdentity(target, frontmatter);
           // Only roll back the rejected value. If the user changed the property again while the
           // request was in flight, that newer intent owns the switch.
-          if (frontmatter.todoist_completed === failedDesiredValue) {
-            frontmatter.todoist_completed = target.status === "completed";
+          if (readTaskProperty(frontmatter, "todoist_completed") === failedDesiredValue) {
+            setCurrentSchemaProperty(
+              frontmatter,
+              "todoist_completed",
+              target.status === "completed",
+            );
           }
         });
       },
@@ -726,3 +741,38 @@ const compareText = (left: string, right: string): number => {
 
 const asProjectionError = (error: unknown): ProjectTaskProjectionError =>
   error instanceof ProjectTaskProjectionError ? error : new ProjectTaskProjectionError(error);
+
+// An open legacy note can still be completed before the coordinated task/Base migration.
+// Keep its current schema until all affected files can be migrated together.
+const setCurrentSchemaProperty = (
+  frontmatter: ManagedFrontmatter,
+  key: TaskPropertyKey,
+  value: unknown,
+): void => {
+  if ("todoist_task_id" in frontmatter && !("task id" in frontmatter)) {
+    frontmatter[key] = value;
+    const name = TASK_PROPERTY_NAMES[key];
+    if (name in frontmatter) {
+      frontmatter[name] = value;
+    }
+  } else {
+    setTaskProperty(frontmatter, key, value);
+  }
+};
+
+const deleteCurrentSchemaProperty = (
+  frontmatter: ManagedFrontmatter,
+  key: TaskPropertyKey,
+): void => {
+  if ("todoist_task_id" in frontmatter && !("task id" in frontmatter)) {
+    delete frontmatter[key];
+    delete frontmatter[TASK_PROPERTY_NAMES[key]];
+  } else {
+    deleteTaskProperty(frontmatter, key);
+  }
+};
+
+// Readable keys such as `task id` can also belong to ordinary notes or another plugin.
+// The new suffix is the file-type boundary; old namespaced IDs retain legacy compatibility.
+const isTaskFile = (file: TFile, frontmatter: ManagedFrontmatter): boolean =>
+  file.path.endsWith(".task.md") || "todoist_task_id" in frontmatter;

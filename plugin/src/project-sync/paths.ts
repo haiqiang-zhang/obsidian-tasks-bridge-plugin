@@ -88,7 +88,7 @@ export const makeProjectFolderSegment = (name: string, identityMarker?: string):
   );
 
 export const makeTaskFilename = (content: string, identityMarker?: string): string => {
-  const suffix = ".md";
+  const suffix = ".task.md";
   const availableBytes = Math.max(1, DEFAULT_TASK_FILENAME_BYTES - utf8Length(suffix));
   const stem = makeIdentityMarkedSegment(content, "Untitled task", availableBytes, identityMarker);
   return `${stem}${suffix}`;
