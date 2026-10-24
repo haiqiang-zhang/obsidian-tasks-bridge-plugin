@@ -15,15 +15,14 @@ type ModalOptions = {
 };
 
 class ReactModal<T extends object> extends Modal {
-  private readonly reactRoot: Root;
+  private reactRoot: Root | null = null;
+  private readonly content: React.ReactNode;
 
   constructor(plugin: TodoistPlugin, Component: React.FC<T>, props: T, opts: ModalOptions) {
     super(plugin.app);
     if (opts.title) {
       this.titleEl.textContent = opts.title;
     }
-
-    this.reactRoot = createRoot(this.contentEl);
 
     const modal: ModalInfo = {
       close: () => this.close(),
@@ -42,17 +41,25 @@ class ReactModal<T extends object> extends Modal {
       }
     }
 
-    this.reactRoot.render(
+    this.content = (
       <PluginContext.Provider value={plugin}>
         <ModalContext.Provider value={modal}>
           <Component {...props} />
         </ModalContext.Provider>
-      </PluginContext.Provider>,
+      </PluginContext.Provider>
     );
   }
 
+  onOpen(): void {
+    // Preact renders synchronously. Inputs must measure after the native modal joins the DOM.
+    this.reactRoot = createRoot(this.contentEl);
+    this.reactRoot.render(this.content);
+  }
+
   onClose(): void {
-    this.reactRoot.unmount();
+    this.reactRoot?.unmount();
+    this.reactRoot = null;
+    this.contentEl.empty();
   }
 }
 

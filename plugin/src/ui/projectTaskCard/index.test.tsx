@@ -155,7 +155,7 @@ describe("ProjectTaskCard", () => {
     const checkbox = screen.getByRole("checkbox", { name: "Complete Todoist task" });
     expect(checkbox).not.toBeChecked();
     expect(checkbox).toBeDisabled();
-    expect(checkbox.closest("span")).toHaveAttribute(
+    expect(checkbox.closest("label")).toHaveAttribute(
       "title",
       "Waiting for Todoist status to match this note.",
     );
@@ -182,7 +182,8 @@ describe("ProjectTaskCard", () => {
       expect(screen.getByRole("status", { name: "Updating Todoist task" })).toBeInTheDocument(),
     );
     expect(completionSlot).toHaveAttribute("aria-busy", "true");
-    expect(completionSlot?.querySelector('input[type="checkbox"]')).not.toBeInTheDocument();
+    expect(completionSlot?.querySelector('input[type="checkbox"]')).not.toBeVisible();
+    expect(completionSlot?.querySelector('input[type="checkbox"]')).toBeDisabled();
     expect(completionSlot?.querySelector(".loader-spinner")).toHaveAttribute(
       "data-icon-size",
       "xs",
@@ -256,6 +257,35 @@ describe("ProjectTaskCard", () => {
     }
   });
 
+  it.each([
+    false,
+    true,
+  ])("activates the whole completion label once and respects its disabled state (subtask: %s)", async (subtask) => {
+    const actions = makeActions();
+    const { Wrapper } = makeRenderContext(false);
+    const target = subtask ? { ...task, content: "Child task", taskId: "child" } : task;
+    render(
+      <ProjectTaskCard actions={actions} task={subtask ? { ...task, subtasks: [target] } : task} />,
+      { wrapper: Wrapper },
+    );
+    const name = subtask ? target.content : "Todoist task";
+    const label = screen.getByRole("checkbox", { name: `Complete ${name}` }).closest("label");
+    if (label === null) {
+      throw new Error("The checkbox must have a native label for its full touch target");
+    }
+
+    fireEvent.click(label);
+    await waitFor(() =>
+      expect(screen.getByRole("checkbox", { name: `Reopen ${name}` })).toBeDisabled(),
+    );
+    fireEvent.click(label);
+
+    expect(actions.setCompleted).toHaveBeenCalledExactlyOnceWith(
+      { id: target.taskId, filePath: target.filePath },
+      true,
+    );
+  });
+
   it("renders and collapses a recursive subtask list with aggregate progress", () => {
     const actions = makeActions();
     const child = {
@@ -294,6 +324,38 @@ describe("ProjectTaskCard", () => {
     fireEvent.click(subtasksButton);
     expect(subtasksButton).toHaveAttribute("aria-expanded", "false");
     expect(screen.queryByRole("link", { name: "Chapter one" })).not.toBeInTheDocument();
+  });
+
+  it("keeps completion activation local to independently mounted task cards", async () => {
+    const firstActions = makeActions();
+    const secondActions = makeActions();
+    const first = render(<ProjectTaskCard actions={firstActions} task={task} />, {
+      wrapper: makeRenderContext(false).Wrapper,
+    });
+    const secondTask = { ...task, taskId: "task-2", filePath: "Tasks/Second.task.md" };
+    const second = render(<ProjectTaskCard actions={secondActions} task={secondTask} />, {
+      wrapper: makeRenderContext(false).Wrapper,
+    });
+    const firstCheckbox = within(first.container).getByRole("checkbox");
+    const secondCheckbox = within(second.container).getByRole("checkbox");
+    const label = secondCheckbox.closest("label");
+    if (label === null) {
+      throw new Error("The checkbox must have a native label");
+    }
+    expect(label).not.toHaveAttribute("for");
+    firstCheckbox.id = "root-local-id";
+    secondCheckbox.id = "root-local-id";
+    expect(label.control).toBe(secondCheckbox);
+
+    fireEvent.click(label);
+
+    await waitFor(() =>
+      expect(secondActions.setCompleted).toHaveBeenCalledExactlyOnceWith(
+        { id: secondTask.taskId, filePath: secondTask.filePath },
+        true,
+      ),
+    );
+    expect(firstActions.setCompleted).not.toHaveBeenCalled();
   });
 
   it("opens and completes a projected subtask through the same task actions", async () => {
@@ -347,7 +409,8 @@ describe("ProjectTaskCard", () => {
       expect(screen.getByRole("status", { name: "Updating Chapter one" })).toBeInTheDocument(),
     );
     expect(completionSlot).toHaveAttribute("aria-busy", "true");
-    expect(completionSlot?.querySelector('input[type="checkbox"]')).not.toBeInTheDocument();
+    expect(completionSlot?.querySelector('input[type="checkbox"]')).not.toBeVisible();
+    expect(completionSlot?.querySelector('input[type="checkbox"]')).toBeDisabled();
     expect(completionSlot?.querySelector(".loader-spinner")).toHaveAttribute(
       "data-icon-size",
       "xs",

@@ -5,7 +5,23 @@
 }
 
 .task-creation-modal-root {
+  display: flex;
+  min-width: 0;
+  max-width: 100%;
+  flex-direction: column;
+  gap: var(--size-4-3);
+
+  .task-content-input {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .obsidian-icon {
+    flex-shrink: 0;
+  }
+
   .task-content-input textarea {
+    box-sizing: border-box;
     width: 100%;
     border: 0;
     background-color: unset;
@@ -31,28 +47,37 @@
   }
 
   .task-creation-selectors {
-    margin-top: 0.5em;
     display: flex;
-    align-items: center;
+    min-width: 0;
+    flex-wrap: wrap;
+    align-items: flex-start;
     justify-content: space-between;
+    gap: var(--size-4-2);
 
     .task-creation-selectors-group {
       display: flex;
+      min-width: 0;
+      max-width: 100%;
+      flex-wrap: wrap;
       align-items: center;
-
-      & > * + * {
-        margin-left: 0.5em;
-      }
+      gap: var(--size-4-2);
     }
 
     button {
+      min-width: 0;
+      max-width: 100%;
+      height: auto;
+      min-height: var(--input-height);
+      gap: var(--size-4-2);
       box-shadow: none;
       background-color: unset;
       border: 1px solid var(--color-base-25);
       color: var(--text-muted);
 
-      & > * + * {
-        margin-left: 0.5em;
+      > span {
+        min-width: 0;
+        white-space: normal;
+        overflow-wrap: anywhere;
       }
 
       &:hover,
@@ -73,22 +98,36 @@
 
   .task-creation-controls {
     display: flex;
+    min-width: 0;
+    flex-wrap: wrap;
+    align-items: center;
     justify-content: space-between;
+    gap: var(--size-4-3);
+
+    > * {
+      min-width: 0;
+      max-width: 100%;
+    }
+
+    button {
+      min-width: 0;
+      max-width: 100%;
+      height: auto;
+      min-height: var(--input-height);
+      white-space: normal;
+      overflow-wrap: anywhere;
+    }
 
     .is-mobile & {
       flex-direction: column;
-
-      & > * + * {
-        margin-top: 0.5em;
-      }
+      align-items: stretch;
     }
 
     .task-creation-action {
       display: flex;
-
-      & > * + * {
-        margin-left: 1em;
-      }
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: var(--size-4-2);
 
       .is-mobile & {
         justify-content: end;
@@ -98,6 +137,8 @@
 
   .add-task-button-group {
     display: flex;
+    min-width: 0;
+    max-width: 100%;
     gap: 0;
 
     .add-task-primary {
@@ -107,6 +148,7 @@
     }
 
     .add-task-dropdown {
+      flex-shrink: 0;
       border-top-left-radius: 0;
       border-bottom-left-radius: 0;
       border-left: 1px solid var(--background-modifier-border);
@@ -116,7 +158,8 @@
   }
 
   hr {
-    margin: 1em 0;
+    width: 100%;
+    margin: 0;
     border-color: var(--color-base-25);
   }
 }
@@ -248,8 +291,18 @@
 
 .task-date-editor-controls {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--size-4-2);
+}
+
+.task-date-editor-controls button {
+  min-width: 0;
+  max-width: 100%;
+  height: auto;
+  min-height: var(--input-height);
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .task-date-editor-controls-spacer {
@@ -264,18 +317,43 @@
   .task-time-clear-button {
     justify-self: start;
   }
+
+  .task-date-editor-controls {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .task-date-clear-button {
+    grid-column: 1 / -1;
+    justify-self: start;
+  }
+
+  .task-date-editor-controls-spacer {
+    display: none;
+  }
 }
 
 button.project-selector {
+  min-width: 0;
+  max-width: 100%;
+  height: auto;
+  min-height: var(--input-height);
+  white-space: normal;
   box-shadow: none;
   background-color: unset;
   border: 1px solid var(--color-base-25);
   color: var(--text-muted);
   display: flex;
   align-items: center;
+  gap: var(--size-4-2);
 
-  & > * + * {
-    margin-left: 0.5em;
+  > span {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .obsidian-icon {
+    flex-shrink: 0;
   }
 
   &:hover,
@@ -343,11 +421,20 @@ button.project-selector {
   }
 
   .tasks-bridge-label-selector-option {
+    .setting-item-info {
+      min-width: 0;
+    }
+
     .setting-item-name {
       display: flex;
       min-width: 0;
       align-items: center;
       gap: var(--size-4-2);
+      overflow-wrap: anywhere;
+    }
+
+    .setting-item-control {
+      flex: 0 0 auto;
     }
   }
 
@@ -383,4 +470,16 @@ button.project-selector {
   }
 
   color: var(--todoist-project-color);
+}
+
+.is-mobile .task-creation-modal-root .add-task-dropdown,
+.is-mobile .task-date-editor .date-picker-controls button {
+  min-width: 44px;
+}
+
+@media (pointer: coarse) {
+  .task-creation-modal-root .add-task-dropdown,
+  .task-date-editor .date-picker-controls button {
+    min-width: 44px;
+  }
 }

@@ -147,6 +147,39 @@ describe("ProjectTaskHeader", () => {
     expect(actions.setCompleted).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    false,
+    true,
+  ])("activates the whole completion label once and respects its disabled state (subtask: %s)", async (subtask) => {
+    const actions = makeActions();
+    const target = subtask ? { ...task, content: "Child task", taskId: "child" } : task;
+    render(
+      <ProjectTaskHeader
+        actions={actions}
+        task={subtask ? { ...task, subtasks: [target] } : task}
+      />,
+    );
+    if (subtask) {
+      fireEvent.click(screen.getByRole("button", { name: "Subtasks, 0 of 1 completed" }));
+    }
+    const name = subtask ? target.content : "Todoist task";
+    const label = screen.getByRole("checkbox", { name: `Complete ${name}` }).closest("label");
+    if (label === null) {
+      throw new Error("The checkbox must have a native label for its full touch target");
+    }
+
+    fireEvent.click(label);
+    await waitFor(() =>
+      expect(screen.getByRole("checkbox", { name: `Reopen ${name}` })).toBeDisabled(),
+    );
+    fireEvent.click(label);
+
+    expect(actions.setCompleted).toHaveBeenCalledExactlyOnceWith(
+      { id: target.taskId, filePath: target.filePath },
+      true,
+    );
+  });
+
   it("keeps the remote result locked when projection fails", async () => {
     const actions = makeActions();
     const projection = deferred<void>();
@@ -166,6 +199,36 @@ describe("ProjectTaskHeader", () => {
     ).toBeVisible();
     expect(screen.getByRole("checkbox", { name: "Reopen Todoist task" })).toBeDisabled();
     log.mockRestore();
+  });
+
+  it("keeps completion activation local to independently mounted task headers", async () => {
+    const firstActions = makeActions();
+    const secondActions = makeActions();
+    const first = render(<ProjectTaskHeader actions={firstActions} task={task} />);
+    const secondTask = { ...task, taskId: "task-2", filePath: "Tasks/Second.task.md" };
+    const second = render(<ProjectTaskHeader actions={secondActions} task={secondTask} />);
+    const firstCheckbox = within(first.container).getByRole("checkbox");
+    const secondCheckbox = within(second.container).getByRole("checkbox");
+    const label = secondCheckbox.closest("label");
+    if (label === null) {
+      throw new Error("The checkbox must have a native label");
+    }
+    // Production Preact IDs can repeat between independently mounted roots. A label must
+    // associate with its descendant rather than resolving a document-global ID.
+    expect(label).not.toHaveAttribute("for");
+    firstCheckbox.id = "root-local-id";
+    secondCheckbox.id = "root-local-id";
+    expect(label.control).toBe(secondCheckbox);
+
+    fireEvent.click(label);
+
+    await waitFor(() =>
+      expect(secondActions.setCompleted).toHaveBeenCalledExactlyOnceWith(
+        { id: secondTask.taskId, filePath: secondTask.filePath },
+        true,
+      ),
+    );
+    expect(firstActions.setCompleted).not.toHaveBeenCalled();
   });
 
   it("uses the same safe completion action for a subtask", async () => {

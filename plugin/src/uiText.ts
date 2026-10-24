@@ -168,6 +168,7 @@ export const uiText = {
         buttonAddLabel: "Add label",
         buttonNoAvailableLabels: "No labels available",
         noLabels: "No labels configured",
+        removeLabel: (name: string) => `Remove ${name}`,
         deletedWarning: "This label no longer exists",
         deleted: "deleted",
       },

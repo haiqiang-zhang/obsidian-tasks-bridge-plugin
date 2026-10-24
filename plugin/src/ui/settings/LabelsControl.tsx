@@ -104,6 +104,7 @@ export const LabelsControl: React.FC<Props> = ({ value, onChange }) => {
               </div>
               <button
                 type="button"
+                aria-label={text.removeLabel(labelSetting.labelName)}
                 className="labels-control-remove-button clickable-icon"
                 onClick={() => void removeLabel(labelSetting.labelId)}
               >

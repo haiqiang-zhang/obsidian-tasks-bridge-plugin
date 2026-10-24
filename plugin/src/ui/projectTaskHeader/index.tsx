@@ -132,7 +132,7 @@ const CompletionControl: React.FC<{
   task: ProjectTaskCardModel;
   subtask?: boolean;
 }> = ({ completion, disabled = false, task, subtask = false }) => {
-  const [control, setControl] = useState<HTMLSpanElement | null>(null);
+  const [control, setControl] = useState<HTMLLabelElement | null>(null);
   const converged = task.completed === (task.status === "completed");
   const mutable = task.status === "active" || task.status === "completed";
   let tooltip = completion.completed ? "Reopen task" : "Complete task";
@@ -147,24 +147,24 @@ const CompletionControl: React.FC<{
   const label = subtask ? task.content : "Todoist task";
 
   return (
-    <span
+    <label
       aria-busy={completion.remotePending}
       className="tasks-bridge-task-header-completion"
       data-priority={task.priority}
       ref={setControl}
     >
-      {completion.remotePending ? (
+      <input
+        aria-label={`${completion.completed ? "Reopen" : "Complete"} ${label}`}
+        checked={completion.completed}
+        disabled={disabled || !mutable || !converged || completion.busy}
+        hidden={completion.remotePending}
+        onChange={() => void completion.toggle()}
+        type="checkbox"
+      />
+      {completion.remotePending && (
         <ObsidianLoadingIcon aria-label={`Updating ${label}`} role="status" size="s" />
-      ) : (
-        <input
-          aria-label={`${completion.completed ? "Reopen" : "Complete"} ${label}`}
-          checked={completion.completed}
-          disabled={disabled || !mutable || !converged || completion.busy}
-          onChange={() => void completion.toggle()}
-          type="checkbox"
-        />
       )}
-    </span>
+    </label>
   );
 };
 

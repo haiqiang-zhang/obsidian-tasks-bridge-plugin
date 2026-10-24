@@ -242,24 +242,24 @@ export const ProjectTaskCard: React.FC<{
     <>
       <section className="tasks-bridge-note-card" data-status={task.status}>
         <div className="tasks-bridge-note-card-main">
-          <span
+          <label
             aria-busy={completion.remotePending}
             className="tasks-bridge-note-card-completion"
             data-loading={completion.remotePending || undefined}
             title={completionTitle}
           >
-            {completion.remotePending ? (
+            <input
+              aria-label={completion.completed ? "Reopen Todoist task" : "Complete Todoist task"}
+              checked={completion.completed}
+              disabled={!mutable || !completionConverged || completion.busy || editPending}
+              hidden={completion.remotePending}
+              onChange={() => void completion.toggle()}
+              type="checkbox"
+            />
+            {completion.remotePending && (
               <ObsidianLoadingIcon aria-label="Updating Todoist task" role="status" size="xs" />
-            ) : (
-              <input
-                aria-label={completion.completed ? "Reopen Todoist task" : "Complete Todoist task"}
-                checked={completion.completed}
-                disabled={!mutable || !completionConverged || completion.busy || editPending}
-                onChange={() => void completion.toggle()}
-                type="checkbox"
-              />
             )}
-          </span>
+          </label>
           <div className="tasks-bridge-note-card-content">
             <div className="tasks-bridge-note-card-heading">
               <h1>{task.content}</h1>
@@ -356,26 +356,26 @@ const SubtaskRow: React.FC<{
   return (
     <li className="tasks-bridge-note-card-subtask" data-status={task.status}>
       <div className="tasks-bridge-note-card-subtask-row">
-        <span
+        <label
           aria-busy={completion.remotePending}
           className="tasks-bridge-note-card-subtask-completion"
           data-loading={completion.remotePending || undefined}
           title={completionControlTitle(completion.awaitingProjection, completionConverged)}
         >
-          {completion.remotePending ? (
+          <input
+            aria-label={
+              completion.completed ? `Reopen ${task.content}` : `Complete ${task.content}`
+            }
+            checked={completion.completed}
+            disabled={!mutable || !completionConverged || completion.busy}
+            hidden={completion.remotePending}
+            onChange={() => void completion.toggle()}
+            type="checkbox"
+          />
+          {completion.remotePending && (
             <ObsidianLoadingIcon aria-label={`Updating ${task.content}`} role="status" size="xs" />
-          ) : (
-            <input
-              aria-label={
-                completion.completed ? `Reopen ${task.content}` : `Complete ${task.content}`
-              }
-              checked={completion.completed}
-              disabled={!mutable || !completionConverged || completion.busy}
-              onChange={() => void completion.toggle()}
-              type="checkbox"
-            />
           )}
-        </span>
+        </label>
         <a
           className="tasks-bridge-note-card-subtask-link"
           data-href={task.filePath}

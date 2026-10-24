@@ -94,8 +94,51 @@ function rejectDynamicScriptElements(): PluginOption {
   };
 }
 
+function motionBuiltinPropFilter(): PluginOption {
+  const modulePath = "/framer-motion/dist/es/render/dom/utils/filter-props.mjs";
+  const optionalImport = `    const emotionPkg = "@emotion/is-prop-" + "valid";
+    loadExternalIsValidProp(require(emotionPkg).default);`;
+  let transformed = false;
+
+  return {
+    name: "motion-mobile-prop-filter",
+    apply: "build",
+    enforce: "pre",
+    buildStart() {
+      transformed = false;
+    },
+    shouldTransformCachedModule({ id }) {
+      return id.replaceAll("\\", "/").endsWith(modulePath);
+    },
+    transform(code, id) {
+      if (!id.replaceAll("\\", "/").endsWith(modulePath)) {
+        return;
+      }
+      if (
+        !code.includes(optionalImport) ||
+        code.indexOf(optionalImport) !== code.lastIndexOf(optionalImport)
+      ) {
+        this.error("Motion's optional prop-filter import changed; review mobile compatibility.");
+      }
+      transformed = true;
+      return {
+        // Keep the same built-in fallback used when Emotion is absent on desktop, without
+        // attempting a Node package lookup that Obsidian Mobile reports as a warning.
+        code: code.replace(optionalImport, ""),
+        map: null,
+      };
+    },
+    buildEnd(error) {
+      if (!error && !transformed) {
+        this.error("Motion's prop-filter module was not found; review mobile compatibility.");
+      }
+    },
+  };
+}
+
 export default defineConfig({
   plugins: [
+    motionBuiltinPropFilter(),
     react(),
     tsConfigPaths(),
     viteStaticCopy({

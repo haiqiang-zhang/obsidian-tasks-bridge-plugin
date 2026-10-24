@@ -38,5 +38,12 @@ describe("LabelsControl", () => {
         { labelId: later.id, labelName: later.name },
       ]),
     );
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove Focus" }));
+    await waitFor(() =>
+      expect(onChange).toHaveBeenLastCalledWith([{ labelId: later.id, labelName: later.name }]),
+    );
+    expect(screen.queryByRole("button", { name: "Remove Focus" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Remove Later" })).toBeInTheDocument();
   });
 });

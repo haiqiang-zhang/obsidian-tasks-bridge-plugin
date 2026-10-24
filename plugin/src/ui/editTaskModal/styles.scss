@@ -23,13 +23,29 @@
   }
 
   .task-edit-recurring-hint {
+    align-items: flex-start;
     padding-inline: var(--size-2-1);
+
+    span {
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }
   }
 
   .task-edit-actions {
     display: flex;
+    flex-wrap: wrap;
     justify-content: flex-end;
     gap: var(--size-2-2);
     margin-top: var(--size-4-2);
+
+    button {
+      min-width: 0;
+      max-width: 100%;
+      height: auto;
+      min-height: var(--input-height);
+      white-space: normal;
+      overflow-wrap: anywhere;
+    }
   }
 }

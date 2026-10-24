@@ -11,6 +11,8 @@
 .setting-item-control {
   .react-aria-TextField {
     display: flex;
+    min-width: 0;
+    max-width: 100%;
     flex-direction: column;
 
     & > * + * {
@@ -18,6 +20,8 @@
     }
 
     input {
+      min-width: 0;
+      max-width: 100%;
       &[data-invalid] {
         border: 1px solid var(--background-modifier-error);
       }
@@ -268,8 +272,15 @@
 
 .labels-control-container {
   display: flex;
+  min-width: 0;
+  max-width: 100%;
   flex-direction: column;
   gap: 1em;
+
+  .dropdown {
+    min-width: 0;
+    max-width: 100%;
+  }
 
   .labels-control-list {
     display: flex;
@@ -280,16 +291,25 @@
 
   .labels-control-item {
     display: flex;
+    min-width: 0;
     justify-content: space-between;
     align-items: center;
 
     .labels-control-item-details {
       display: flex;
+      min-width: 0;
+      flex: 1 1 auto;
       align-items: center;
       gap: 0.5em;
 
       .labels-control-item-name {
         flex: 1;
+        min-width: 0;
+        overflow-wrap: anywhere;
+      }
+
+      .obsidian-icon {
+        flex: none;
       }
 
       .label-icon {
@@ -308,6 +328,7 @@
 
     .labels-control-remove-button {
       display: flex;
+      flex: none;
       align-items: center;
       justify-content: center;
       width: 24px;
@@ -316,7 +337,7 @@
       background: none;
       color: var(--text-muted);
       cursor: pointer;
-      margin-left: 1em;
+      margin-inline-start: 1em;
 
       &:hover {
         background-color: var(--background-modifier-hover);
@@ -352,5 +373,22 @@
 
   .setting-item-info {
     padding-top: 0.25em;
+  }
+
+  .setting-item-control {
+    min-width: 0;
+    max-width: 100%;
+  }
+}
+
+.is-mobile .labels-control-remove-button {
+  min-width: var(--input-height);
+  min-height: var(--input-height);
+}
+
+@media (pointer: coarse) {
+  .labels-control-remove-button {
+    min-width: var(--input-height);
+    min-height: var(--input-height);
   }
 }
