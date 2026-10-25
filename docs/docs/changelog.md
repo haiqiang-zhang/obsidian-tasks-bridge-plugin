@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v2.11.5 (2026-10-25)
+
 ### 🐛 Bug Fixes
 
 - Register task date and timestamp properties with Obsidian's native Date and Date & time types, repairing existing and legacy fields without rewriting their values or losing timestamp precision.
