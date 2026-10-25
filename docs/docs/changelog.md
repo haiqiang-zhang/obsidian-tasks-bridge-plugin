@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v2.11.4 (2026-10-25)
+
 ### 🐛 Bug Fixes
 
 - Prevent native Properties from briefly appearing before the task header during startup, in both editing and Reading View. Task presentation now initializes before asynchronous settings loading and updates before the next paint.
