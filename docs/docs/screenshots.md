@@ -9,11 +9,6 @@ outline: false
 Plan projects, keep task details beside your notes, and take the same workflow to your phone.
 Explore the real Tasks Bridge interface in a fictional sample workspace.
 
-<div className="screenshot-downloads">
-  <a href="./downloads/tasks-bridge-screenshots.zip" download>Download UI images</a>
-  <span>Full-resolution PNGs · Desktop and mobile</span>
-</div>
-
 <div className="screenshot-gallery">
 
 ## Your projects at a glance
