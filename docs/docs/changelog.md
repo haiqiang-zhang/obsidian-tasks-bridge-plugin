@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v2.11.1 (2026-10-25)
+
 ### ✨ Improvements
 
 - Added a screenshot gallery with downloadable desktop and mobile examples of Tasks List, task documents, task cards, and query blocks.
