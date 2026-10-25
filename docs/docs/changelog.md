@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v2.11.0 (2026-10-25)
+
 ### ✨ Improvements
 
 - Synced tasks now use native `.task.md` documents with a task header that scrolls with the note, while retaining Obsidian's Markdown editor, properties, and links.
