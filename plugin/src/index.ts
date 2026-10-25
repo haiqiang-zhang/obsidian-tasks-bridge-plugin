@@ -52,6 +52,7 @@ import { ProjectTaskCardInjector } from "@/project-sync/taskCardInjector";
 import { TaskDocumentEmbeds } from "@/project-sync/taskDocumentEmbeds";
 import { TaskDocumentHeaders } from "@/project-sync/taskDocumentHeaders";
 import { TaskDocumentPresentation } from "@/project-sync/taskDocumentPresentation";
+import { createTaskDocumentReadyExtension } from "@/project-sync/taskDocumentReadyExtension";
 import { taskManagedRegionExtension } from "@/project-sync/taskManagedRegionExtension";
 import { LEGACY_QUERY_CODE_BLOCK, QUERY_CODE_BLOCK, QueryInjector } from "@/query/injector";
 import { makeServices, type Services } from "@/services";
@@ -184,10 +185,20 @@ export default class TodoistPlugin extends Plugin {
     registerCommands(this);
     this.taskDocumentPresentation.start((eventRef) => this.registerEvent(eventRef));
     this.taskDocumentHeaders.start((eventRef) => this.registerEvent(eventRef));
-    this.registerEditorExtension(taskManagedRegionExtension);
-    this.registerMarkdownPostProcessor(
-      this.taskDocumentEmbeds.onPostProcessor.bind(this.taskDocumentEmbeds),
-    );
+    const refreshTaskDocument = () => {
+      this.taskDocumentPresentation.requestRefresh();
+      this.taskDocumentHeaders.requestRefresh();
+    };
+    this.registerEditorExtension([
+      taskManagedRegionExtension,
+      createTaskDocumentReadyExtension(refreshTaskDocument),
+    ]);
+    this.registerMarkdownPostProcessor((element, context) => {
+      if (context.sourcePath.endsWith(".task.md")) {
+        refreshTaskDocument();
+      }
+      this.taskDocumentEmbeds.onPostProcessor(element, context);
+    });
     this.registerProjectSyncVaultActivityListeners();
     this.registerEvent(
       this.app.metadataCache.on("changed", (file, _data, cache) => {

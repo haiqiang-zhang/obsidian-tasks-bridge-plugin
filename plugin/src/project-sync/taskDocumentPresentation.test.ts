@@ -131,6 +131,37 @@ describe("native task document presentation", () => {
     vi.useRealTimers();
   });
 
+  it("recognizes a restored task view when its native document becomes ready after layout", async () => {
+    const harness = makeHarness();
+    active.push(harness.presentation);
+    harness.start();
+    await flush();
+
+    const native = harness.addMarkdown("Projects/Restored.task.md");
+    const label = addBreadcrumb(native.containerEl, "Restored.task");
+    harness.presentation.requestRefresh();
+    await flush();
+
+    expect(native.containerEl).toHaveClass(TASK_DOCUMENT_VIEW_CLASS);
+    expect(label).toHaveAttribute("data-tasks-bridge-title", "Restored");
+    expect(label.textContent).toBe("Restored.task");
+  });
+
+  it("ignores late document readiness after disposal", async () => {
+    const harness = makeHarness();
+    active.push(harness.presentation);
+    harness.start();
+    await flush();
+    harness.presentation.dispose();
+
+    const native = harness.addMarkdown("Projects/Restored.task.md");
+    harness.presentation.requestRefresh();
+    await flush();
+
+    expect(native.containerEl).not.toHaveClass(TASK_DOCUMENT_VIEW_CLASS);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("shortens the breadcrumb visually while preserving native rename text and user edits", async () => {
     const harness = makeHarness();
     active.push(harness.presentation);

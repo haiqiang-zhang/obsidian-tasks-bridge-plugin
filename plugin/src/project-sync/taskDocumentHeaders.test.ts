@@ -280,6 +280,50 @@ describe("native task document headers", () => {
     expect(latestProps().task).toMatchObject({ taskId: "task-1", filePath: file.path });
   });
 
+  it.each([
+    "source",
+    "preview",
+  ] as const)("initializes a restored %s document that becomes available after layout readiness", async (mode) => {
+    const harness = setup();
+    const file = harness.addFile("Projects/Restored.task.md", taskProperties("restored"));
+    harness.start();
+    await flush();
+    expect(rendered.props).toHaveLength(0);
+
+    const native = harness.addView(file);
+    native.setMode(mode);
+    const originalBody = native.editor.textContent;
+    // The native editor/Markdown renderer finishes after the initial workspace events.
+    harness.headers.requestRefresh();
+    await flush();
+
+    const host = native.contentEl.querySelector(hostSelector);
+    expect(host).toHaveTextContent("Task title");
+    expect(host?.parentElement).toBe(mode === "source" ? native.sourceSizer : native.previewHeader);
+    expect(native.contentEl).toHaveClass(contentClass);
+    expect(native.editor.textContent).toBe(originalBody);
+    harness.headers.requestRefresh();
+    await flush();
+    expect(native.children.size).toBe(1);
+    expect(native.contentEl.querySelectorAll(hostSelector)).toHaveLength(1);
+  });
+
+  it("waits for metadata after native document readiness without requiring an edit", async () => {
+    const harness = setup();
+    const file = harness.addFile("Projects/Restored.task.md");
+    const native = harness.addView(file);
+    harness.start();
+    harness.headers.requestRefresh();
+    await flush();
+    expect(native.contentEl.querySelector(hostSelector)).toBeNull();
+
+    harness.caches.set(file.path, { frontmatter: taskProperties("restored") } as CachedMetadata);
+    harness.emit("metadata", "resolved");
+    await flush();
+    expect(native.contentEl.querySelector(hostSelector)).toHaveTextContent("Task title");
+    expect(native.contentEl).toHaveClass(contentClass);
+  });
+
   it("moves the same header between native scrolling surfaces when mode styles change", async () => {
     const harness = setup();
     const native = harness.addView(

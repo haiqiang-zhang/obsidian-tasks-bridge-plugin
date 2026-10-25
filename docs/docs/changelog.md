@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### 🐛 Bug Fixes
+
+- Initialize task-document headers when native editors and Reading View finish restoring at startup, so task files no longer need an edit to activate their task interface.
+
 ## v2.11.2 (2026-10-25)
 
 ### ✨ Improvements

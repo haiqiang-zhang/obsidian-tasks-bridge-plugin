@@ -44,6 +44,11 @@ export class TaskDocumentHeaders {
     workspace.onLayoutReady(refresh);
   }
 
+  /** Native document hydration can finish after the restored workspace's initial scan. */
+  public requestRefresh(): void {
+    this.schedule();
+  }
+
   private schedule(): void {
     if (this.disposed || this.timer !== undefined) {
       return;

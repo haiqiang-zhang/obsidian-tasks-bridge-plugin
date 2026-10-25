@@ -58,6 +58,11 @@ export class TaskDocumentPresentation {
     this.app.workspace.onLayoutReady(refresh);
   }
 
+  /** Recheck the native view once its editor or reading surface has finished loading. */
+  public requestRefresh(): void {
+    this.scheduleLayoutRefresh();
+  }
+
   public dispose(): void {
     if (this.disposed) {
       return;
