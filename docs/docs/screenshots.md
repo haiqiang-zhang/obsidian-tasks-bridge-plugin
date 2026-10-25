@@ -1,16 +1,16 @@
 ---
-title: Screenshots
+title: UI Gallery
 description: Explore Tasks Bridge in Obsidian, from project planning to tasks inside your notes.
 outline: false
 ---
 
-# Tasks, in context
+# UI Gallery
 
 Plan projects, keep task details beside your notes, and take the same workflow to your phone.
-These screenshots show the real Tasks Bridge interface in a fictional sample workspace.
+Explore the real Tasks Bridge interface in a fictional sample workspace.
 
 <div className="screenshot-downloads">
-  <a href="./downloads/tasks-bridge-screenshots.zip" download>Download all screenshots</a>
+  <a href="./downloads/tasks-bridge-screenshots.zip" download>Download UI images</a>
   <span>Full-resolution PNGs · Desktop and mobile</span>
 </div>
 
@@ -26,7 +26,6 @@ The **Tasks List** view in Obsidian Bases brings projects, sections, and subtask
 
 <figcaption>
   <span>Tasks List · Project overview</span>
-  <a href="./img/screenshots/tasks-list.png" target="_blank" rel="noopener noreferrer">Open original PNG ↗</a>
 </figcaption>
 </figure>
 
@@ -40,7 +39,6 @@ Task details live at the top of a native Markdown document. Keep meeting notes, 
 
 <figcaption>
   <span>Task document · Native Markdown</span>
-  <a href="./img/screenshots/task-document.png" target="_blank" rel="noopener noreferrer">Open original PNG ↗</a>
 </figcaption>
 </figure>
 
@@ -54,7 +52,6 @@ Embed task cards beside the context that matters. A project brief or weekly revi
 
 <figcaption>
   <span>Task blocks · Notes and actions together</span>
-  <a href="./img/screenshots/task-blocks.png" target="_blank" rel="noopener noreferrer">Open original PNG ↗</a>
 </figcaption>
 </figure>
 
@@ -68,7 +65,6 @@ Query blocks turn Todoist filters into live task lists inside your notes. Group 
 
 <figcaption>
   <span>Query block · Dark theme</span>
-  <a href="./img/screenshots/query-block.png" target="_blank" rel="noopener noreferrer">Open original PNG ↗</a>
 </figcaption>
 </figure>
 
@@ -83,7 +79,6 @@ Read task notes and edit task details in Obsidian's mobile interface. These prev
 
 <figcaption>
   <span>Mobile task page</span>
-  <a href="./img/screenshots/mobile-task.png" target="_blank" rel="noopener noreferrer">Open original PNG ↗</a>
 </figcaption>
 </figure>
 <figure className="screenshot-frame">
@@ -92,7 +87,6 @@ Read task notes and edit task details in Obsidian's mobile interface. These prev
 
 <figcaption>
   <span>Mobile task editor</span>
-  <a href="./img/screenshots/mobile-edit.png" target="_blank" rel="noopener noreferrer">Open original PNG ↗</a>
 </figcaption>
 </figure>
 </div>

@@ -12,7 +12,7 @@ Todoist is the first supported backend. Its current integration works on desktop
 
 [![Tasks List in Obsidian Bases with project progress and a task hierarchy.](/img/screenshots/tasks-list.png)](./screenshots)
 
-[Explore the screenshot gallery →](./screenshots)
+[Explore the UI gallery →](./screenshots)
 
 ## Current Todoist workflows
 

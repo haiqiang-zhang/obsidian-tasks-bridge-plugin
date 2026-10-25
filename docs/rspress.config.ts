@@ -22,13 +22,13 @@ export default defineConfig({
   themeConfig: {
     nav: [
       { text: "Docs", link: "/overview" },
-      { text: "Screenshots", link: "/screenshots" },
+      { text: "UI Gallery", link: "/screenshots" },
       { text: "GitHub", link: repository },
     ],
     sidebar: {
       "/": [
         { text: "Overview", link: "/overview" },
-        { text: "Screenshots", link: "/screenshots" },
+        { text: "UI Gallery", link: "/screenshots" },
         { text: "Setup", link: "/setup" },
         { text: "Query blocks", link: "/query-blocks" },
         { text: "Project sync", link: "/project-mode" },
