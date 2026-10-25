@@ -35,10 +35,10 @@ Task details live at the top of a native Markdown document. Keep meeting notes, 
 
 <figure className="screenshot-frame">
 
-![A native task document with a task header, due date, priority, subtasks, and Markdown notes beneath it.](/img/screenshots/task-document.png)
+![A native task document beside Obsidian's file sidebar, with TASK badges, task details, subtasks, and Markdown notes.](/img/screenshots/task-document.png)
 
 <figcaption>
-  <span>Task document · Native Markdown</span>
+  <span>Task document · Native Markdown and TASK badges</span>
 </figcaption>
 </figure>
 
