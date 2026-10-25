@@ -30,6 +30,26 @@ export const TASK_PROPERTY_NAMES = {
 export type TaskPropertyKey = keyof typeof TASK_PROPERTY_NAMES;
 export type TaskPropertyName = (typeof TASK_PROPERTY_NAMES)[TaskPropertyKey];
 
+/** Native Properties needs an explicit type for ISO timestamps with seconds or time zones. */
+export const TASK_TEMPORAL_PROPERTY_TYPES = {
+  [TASK_PROPERTY_NAMES.todoist_created_at]: "datetime",
+  [TASK_PROPERTY_NAMES.todoist_updated_at]: "datetime",
+  [TASK_PROPERTY_NAMES.todoist_completed_at]: "datetime",
+  [TASK_PROPERTY_NAMES.todoist_due_date]: "date",
+  [TASK_PROPERTY_NAMES.todoist_due_datetime]: "datetime",
+  [TASK_PROPERTY_NAMES.todoist_deadline]: "date",
+  [TASK_PROPERTY_NAMES.todoist_synced_at]: "datetime",
+  todoist_created_at: "datetime",
+  todoist_updated_at: "datetime",
+  todoist_completed_at: "datetime",
+  todoist_due_date: "date",
+  todoist_due_datetime: "datetime",
+  todoist_deadline: "date",
+  todoist_synced_at: "datetime",
+  // Older projections may still contain this implementation field until their next migration.
+  todoist_stale_since: "datetime",
+} as const;
+
 const taskPropertyKeys = Object.keys(TASK_PROPERTY_NAMES) as TaskPropertyKey[];
 type TaskFrontmatter = Record<string, unknown>;
 

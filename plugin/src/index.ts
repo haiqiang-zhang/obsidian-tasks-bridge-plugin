@@ -54,6 +54,7 @@ import { TaskDocumentHeaders } from "@/project-sync/taskDocumentHeaders";
 import { TaskDocumentPresentation } from "@/project-sync/taskDocumentPresentation";
 import { createTaskDocumentReadyExtension } from "@/project-sync/taskDocumentReadyExtension";
 import { taskManagedRegionExtension } from "@/project-sync/taskManagedRegionExtension";
+import { TaskPropertyTypes } from "@/project-sync/taskPropertyTypes";
 import { LEGACY_QUERY_CODE_BLOCK, QUERY_CODE_BLOCK, QueryInjector } from "@/query/injector";
 import { makeServices, type Services } from "@/services";
 import {
@@ -102,6 +103,7 @@ export default class TodoistPlugin extends Plugin {
   private readonly taskDocumentEmbeds: TaskDocumentEmbeds;
   private readonly taskDocumentHeaders: TaskDocumentHeaders;
   private readonly taskDocumentPresentation: TaskDocumentPresentation;
+  private readonly taskPropertyTypes: TaskPropertyTypes;
   private disposed = false;
   private projectCatalogs: ProjectCatalogCollection = {};
   private projectSyncFolderOwnership: ProjectSyncFolderOwnershipRegistry =
@@ -141,9 +143,11 @@ export default class TodoistPlugin extends Plugin {
     this.taskDocumentPresentation = new TaskDocumentPresentation(app);
     this.taskDocumentHeaders = new TaskDocumentHeaders(this);
     this.taskDocumentEmbeds = new TaskDocumentEmbeds(this);
+    this.taskPropertyTypes = new TaskPropertyTypes(app);
   }
 
   async onload() {
+    this.taskPropertyTypes.start((eventRef) => this.registerEvent(eventRef));
     // Restored Markdown views can render while settings and credentials are still loading.
     // Install local document presentation before yielding so their first paint is a task view.
     this.taskDocumentPresentation.start((eventRef) => this.registerEvent(eventRef));
@@ -337,6 +341,7 @@ export default class TodoistPlugin extends Plugin {
     this.taskDocumentPresentation.dispose();
     this.taskDocumentHeaders.dispose();
     this.taskDocumentEmbeds.dispose();
+    this.taskPropertyTypes.dispose();
     this.apiTokenGeneration++;
     this.projectSyncConfigGeneration++;
     this.services.todoist.reset();

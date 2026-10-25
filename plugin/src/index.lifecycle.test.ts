@@ -29,6 +29,8 @@ const runtime = vi.hoisted(() => ({
   saveLocalStorage: vi.fn(),
   startTaskHeaders: vi.fn(),
   startTaskPresentation: vi.fn(),
+  startTaskPropertyTypes: vi.fn(),
+  disposeTaskPropertyTypes: vi.fn(),
   settings: {
     current: {} as Record<string, unknown>,
   },
@@ -143,6 +145,13 @@ vi.mock("@/project-sync/taskDocumentPresentation", () => ({
   TaskDocumentPresentation: class {
     public start = runtime.startTaskPresentation;
     public dispose(): void {}
+  },
+}));
+
+vi.mock("@/project-sync/taskPropertyTypes", () => ({
+  TaskPropertyTypes: class {
+    public start = runtime.startTaskPropertyTypes;
+    public dispose = runtime.disposeTaskPropertyTypes;
   },
 }));
 
@@ -470,6 +479,7 @@ describe("TodoistPlugin async lifecycle", () => {
 
     expect(runtime.startTaskHeaders).toHaveBeenCalledOnce();
     expect(runtime.startTaskPresentation).toHaveBeenCalledOnce();
+    expect(runtime.startTaskPropertyTypes).toHaveBeenCalledOnce();
     expect(runtime.registerEditorExtension).toHaveBeenCalledOnce();
     expect(runtime.registerMarkdownPostProcessor).toHaveBeenCalledOnce();
     expect(runtime.registerCommands).not.toHaveBeenCalled();
@@ -479,6 +489,7 @@ describe("TodoistPlugin async lifecycle", () => {
     expect(runtime.startTaskHeaders).toHaveBeenCalledOnce();
     expect(runtime.registerCommands).toHaveBeenCalledOnce();
     plugin.onunload();
+    expect(runtime.disposeTaskPropertyTypes).toHaveBeenCalledOnce();
   });
 
   it("registers the Tasks List Bases view", async () => {

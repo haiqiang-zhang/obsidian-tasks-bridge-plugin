@@ -137,6 +137,8 @@ Most synchronized values remain a one-way projection. Changes made to plugin-man
 
 Properties that do not apply to a task are omitted rather than written with placeholder values.
 
+Tasks Bridge assigns Obsidian's native **Date** type to `due date` and `deadline`, and **Date & time** to `created at`, `updated at`, `completed at`, `due datetime`, and any existing `synced at`. Existing task properties and legacy names are corrected automatically. Original timestamp values, including time zones and fractional seconds, are preserved. Obsidian applies each property's type to that name throughout the Vault.
+
 ## Manage project tasks with Tasks List
 
 **Tasks List** is a custom Obsidian Bases view included with Tasks Bridge. It presents the Markdown notes created by Project sync as a focused project workspace instead of a flat file table. The layout follows the hierarchy stored by Todoist:
