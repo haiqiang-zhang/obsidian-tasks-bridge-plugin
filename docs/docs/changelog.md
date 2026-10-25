@@ -12,6 +12,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### ✨ Improvements
+
+- Synced tasks now use native `.task.md` documents with a task header that scrolls with the note, while retaining Obsidian's Markdown editor, properties, and links.
+- Added a TASK badge in the file explorer and hid the task suffix in document titles, tabs, and breadcrumbs.
+- Migrated managed task properties to lowercase names with spaces, with compatible link and Bases-reference updates and safeguards for user content and conflicting files.
+
+### 🐛 Bug Fixes
+
+- Fixed mobile create/edit dialogs, date controls, and long labels overflowing narrow screens, and enlarged task controls for touch input.
+- Removed unnecessary input scrollbars and remeasured long task text when the available width changes, preventing clipped descriptions.
+- Fixed task completion touch targets across multiple embedded tasks and removed an optional dependency warning on mobile startup.
+
 ## v2.10.13 (2026-10-03)
 
 ### 🐛 Bug Fixes
