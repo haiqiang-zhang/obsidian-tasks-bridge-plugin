@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### 🐛 Bug Fixes
+
+- Added balanced horizontal padding to task-header disclosure buttons so hover backgrounds no longer crowd the icon and text, while preserving alignment with the subtask tree.
+
 ## v2.11.1 (2026-10-25)
 
 ### ✨ Improvements
