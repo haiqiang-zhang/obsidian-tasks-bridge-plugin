@@ -10,12 +10,13 @@ import { ProjectTaskHeader } from "@/ui/projectTaskHeader";
 
 const contentClass = "tasks-bridge-task-content";
 const hostClass = "tasks-bridge-task-header-host";
-const refreshDelayMs = 50;
+const backgroundRefreshDelayMs = 50;
 
 /** Adds a file-level header without replacing the native Markdown view or editor. */
 export class TaskDocumentHeaders {
   private readonly headers = new Map<MarkdownView, TaskDocumentHeaderRenderer>();
-  private timer: number | undefined;
+  private refreshPending = false;
+  private backgroundTimer: number | undefined;
   private started = false;
   private disposed = false;
 
@@ -39,9 +40,23 @@ export class TaskDocumentHeaders {
     registerEvent(workspace.on("window-close", refresh));
     registerEvent(vault.on("rename", refresh));
     registerEvent(vault.on("delete", refresh));
-    registerEvent(metadataCache.on("changed", refresh));
+    registerEvent(
+      metadataCache.on("changed", (file) => {
+        if (
+          file.path.endsWith(".task.md") &&
+          workspace
+            .getLeavesOfType("markdown")
+            .some((leaf) => leaf.view instanceof MarkdownView && leaf.view.file?.path === file.path)
+        ) {
+          this.schedule();
+        } else {
+          this.scheduleBackground();
+        }
+      }),
+    );
     registerEvent(metadataCache.on("resolved", refresh));
     workspace.onLayoutReady(refresh);
+    this.schedule();
   }
 
   /** Native document hydration can finish after the restored workspace's initial scan. */
@@ -50,13 +65,35 @@ export class TaskDocumentHeaders {
   }
 
   private schedule(): void {
-    if (this.disposed || this.timer !== undefined) {
+    if (this.disposed) {
       return;
     }
-    this.timer = window.setTimeout(() => {
-      this.timer = undefined;
+    if (this.backgroundTimer !== undefined) {
+      window.clearTimeout(this.backgroundTimer);
+      this.backgroundTimer = undefined;
+    }
+    if (this.refreshPending) {
+      return;
+    }
+    this.refreshPending = true;
+    // Native metadata can render in the same turn as file hydration. Coalesce that turn's
+    // events before the next paint without a timer that background windows can throttle.
+    queueMicrotask(() => {
+      this.refreshPending = false;
       this.refresh();
-    }, refreshDelayMs);
+    });
+  }
+
+  private scheduleBackground(): void {
+    if (this.disposed || this.refreshPending || this.backgroundTimer !== undefined) {
+      return;
+    }
+    // Indexing other notes may emit one event per event-loop turn. Preserve bounded batching
+    // for duplicate IDs and linked subtasks without delaying an open task's native metadata.
+    this.backgroundTimer = window.setTimeout(() => {
+      this.backgroundTimer = undefined;
+      this.refresh();
+    }, backgroundRefreshDelayMs);
   }
 
   private refresh(): void {
@@ -121,8 +158,9 @@ export class TaskDocumentHeaders {
       return;
     }
     this.disposed = true;
-    if (this.timer !== undefined) {
-      window.clearTimeout(this.timer);
+    if (this.backgroundTimer !== undefined) {
+      window.clearTimeout(this.backgroundTimer);
+      this.backgroundTimer = undefined;
     }
     for (const view of this.headers.keys()) {
       this.remove(view);

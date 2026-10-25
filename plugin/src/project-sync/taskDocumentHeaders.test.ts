@@ -42,8 +42,8 @@ const taskProperties = (id: string, content = "Task title"): Record<string, unkn
 });
 
 const makeHarness = () => {
-  const listeners = new Map<string, (() => void)[]>();
-  const register = (scope: string) => (event: string, listener: () => void) => {
+  const listeners = new Map<string, ((file?: TFile) => void)[]>();
+  const register = (scope: string) => (event: string, listener: (file?: TFile) => void) => {
     const key = `${scope}:${event}`;
     listeners.set(key, [...(listeners.get(key) ?? []), listener]);
     return {} as EventRef;
@@ -191,9 +191,9 @@ const makeHarness = () => {
     addFile,
     addView,
     caches,
-    emit: (scope: string, event: string) => {
+    emit: (scope: string, event: string, file?: TFile) => {
       for (const listener of listeners.get(`${scope}:${event}`) ?? []) {
-        listener();
+        listener(file);
       }
     },
     files,
@@ -215,6 +215,12 @@ const makeHarness = () => {
 const flush = async () => {
   await act(async () => {
     await vi.advanceTimersByTimeAsync(100);
+  });
+};
+
+const flushMicrotasks = async () => {
+  await act(async () => {
+    await Promise.resolve();
   });
 };
 
@@ -251,6 +257,42 @@ describe("native task document headers", () => {
     active.push(harness.headers);
     return harness;
   };
+
+  it("mounts a cached startup task before any timer or layout-ready callback runs", async () => {
+    const harness = setup();
+    const native = harness.addView(
+      harness.addFile("Projects/Startup.task.md", taskProperties("startup")),
+    );
+    const initialTime = Date.now();
+
+    harness.headers.start(harness.registerEvent);
+    harness.headers.requestRefresh();
+    harness.emit("workspace", "file-open");
+    await flushMicrotasks();
+
+    expect(native.contentEl.querySelector(hostSelector)).toHaveTextContent("Task title");
+    expect(native.contentEl).toHaveClass(contentClass);
+    expect(harness.getMarkdownFiles).toHaveBeenCalledOnce();
+    expect(Date.now()).toBe(initialTime);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("does not mount a startup header if unloaded before the queued microtask", async () => {
+    const harness = setup();
+    const native = harness.addView(
+      harness.addFile("Projects/Startup.task.md", taskProperties("startup")),
+    );
+
+    harness.headers.start(harness.registerEvent);
+    harness.headers.dispose();
+    await flushMicrotasks();
+
+    expect(native.contentEl.querySelector(hostSelector)).toBeNull();
+    expect(native.contentEl).not.toHaveClass(contentClass);
+    expect(native.children.size).toBe(0);
+    expect(harness.getMarkdownFiles).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
 
   it("mounts inside the source scroll surface before native metadata without changing the editor", async () => {
     const harness = setup();
@@ -308,20 +350,21 @@ describe("native task document headers", () => {
     expect(native.contentEl.querySelectorAll(hostSelector)).toHaveLength(1);
   });
 
-  it("waits for metadata after native document readiness without requiring an edit", async () => {
+  it("mounts late metadata before the next timer without requiring an edit", async () => {
     const harness = setup();
     const file = harness.addFile("Projects/Restored.task.md");
     const native = harness.addView(file);
     harness.start();
     harness.headers.requestRefresh();
-    await flush();
+    await flushMicrotasks();
     expect(native.contentEl.querySelector(hostSelector)).toBeNull();
 
     harness.caches.set(file.path, { frontmatter: taskProperties("restored") } as CachedMetadata);
     harness.emit("metadata", "resolved");
-    await flush();
+    await flushMicrotasks();
     expect(native.contentEl.querySelector(hostSelector)).toHaveTextContent("Task title");
     expect(native.contentEl).toHaveClass(contentClass);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("moves the same header between native scrolling surfaces when mode styles change", async () => {
@@ -467,7 +510,7 @@ describe("native task document headers", () => {
         status: "completed",
       },
     } as CachedMetadata);
-    harness.emit("metadata", "changed");
+    harness.emit("metadata", "changed", file);
     harness.emit("workspace", "layout-change");
     harness.emit("workspace", "active-leaf-change");
     await flush();
@@ -481,6 +524,56 @@ describe("native task document headers", () => {
     harness.emit("metadata", "resolved");
     await flush();
     expect(rendered.props).toHaveLength(renders);
+  });
+
+  it("batches unrelated metadata across microtask turns while retaining duplicate detection", async () => {
+    const harness = setup();
+    const native = harness.addView(
+      harness.addFile("Projects/Example.task.md", taskProperties("task-1")),
+    );
+    harness.start();
+    await flushMicrotasks();
+    harness.getMarkdownFiles.mockClear();
+
+    for (const path of ["Notes/First.md", "Notes/Second.md", "Notes/Duplicate.md"]) {
+      const file = harness.addFile(path, taskProperties("task-1"));
+      harness.emit("metadata", "changed", file);
+      await flushMicrotasks();
+    }
+
+    expect(harness.getMarkdownFiles).not.toHaveBeenCalled();
+    expect(native.contentEl.querySelector(hostSelector)).not.toBeNull();
+    expect(vi.getTimerCount()).toBe(1);
+    await act(async () => vi.advanceTimersByTimeAsync(49));
+    expect(harness.getMarkdownFiles).not.toHaveBeenCalled();
+    await act(async () => vi.advanceTimersByTimeAsync(1));
+
+    expect(harness.getMarkdownFiles).toHaveBeenCalledOnce();
+    expect(native.contentEl.querySelector(hostSelector)).toBeNull();
+    expect(native.contentEl).not.toHaveClass(contentClass);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("lets an open task's metadata preempt a pending background refresh before any timer", async () => {
+    const harness = setup();
+    const file = harness.addFile("Projects/Restored.task.md");
+    const native = harness.addView(file);
+    const background = harness.addFile("Notes/Background.md");
+    harness.start();
+    await flushMicrotasks();
+    harness.getMarkdownFiles.mockClear();
+
+    harness.emit("metadata", "changed", background);
+    expect(vi.getTimerCount()).toBe(1);
+    harness.caches.set(file.path, { frontmatter: taskProperties("restored") } as CachedMetadata);
+    harness.emit("metadata", "changed", file);
+    harness.emit("metadata", "changed", background);
+    await flushMicrotasks();
+
+    expect(native.contentEl.querySelector(hostSelector)).toHaveTextContent("Task title");
+    expect(native.contentEl).toHaveClass(contentClass);
+    expect(harness.getMarkdownFiles).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("removes a header for duplicate immutable IDs anywhere in the vault and restores it after deletion", async () => {
@@ -513,7 +606,7 @@ describe("native task document headers", () => {
     await flush();
 
     harness.caches.set(file.path, { frontmatter: { content: "ID removed" } } as CachedMetadata);
-    harness.emit("metadata", "changed");
+    harness.emit("metadata", "changed", file);
     await flush();
     expect(native.contentEl.querySelector(hostSelector)).toBeNull();
 
@@ -525,7 +618,7 @@ describe("native task document headers", () => {
     harness.caches.set(file.path, {
       frontmatter: { ...taskProperties("task-1"), todoist_status: "completed" },
     } as CachedMetadata);
-    harness.emit("metadata", "changed");
+    harness.emit("metadata", "changed", file);
     await flush();
     expect(native.contentEl.querySelector(hostSelector)).toBeNull();
     expect(native.contentEl).not.toHaveClass(contentClass);
@@ -538,12 +631,12 @@ describe("native task document headers", () => {
     const ordinary = harness.addFile("Notes/Ordinary.md");
     const native = harness.addView(first);
     harness.start();
-    await flush();
+    await flushMicrotasks();
     const oldHost = native.contentEl.querySelector(hostSelector);
 
     native.view.file = second;
     harness.emit("workspace", "file-open");
-    await flush();
+    await flushMicrotasks();
     expect(oldHost?.isConnected).toBe(false);
     expect(native.contentEl.querySelector(hostSelector)).toHaveTextContent("Second");
     expect(latestProps().task.taskId).toBe("task-2");
@@ -551,10 +644,11 @@ describe("native task document headers", () => {
 
     native.view.file = ordinary;
     harness.emit("workspace", "file-open");
-    await flush();
+    await flushMicrotasks();
     expect(native.contentEl.querySelector(hostSelector)).toBeNull();
     expect(native.contentEl).not.toHaveClass(contentClass);
     expect(native.contentContainer.firstElementChild).toBe(native.editor);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("tracks renamed task paths and removes the header when the native task suffix is removed", async () => {
@@ -598,7 +692,7 @@ describe("native task document headers", () => {
     expect(first.contentEl.querySelector(hostSelector)).toBeNull();
     expect(first.contentEl).not.toHaveClass(contentClass);
 
-    harness.emit("metadata", "changed");
+    harness.emit("metadata", "changed", harness.addFile("Notes/Background.md"));
     await act(async () => harness.headers.dispose());
     await flush();
     expect(second.contentEl.querySelector(hostSelector)).toBeNull();

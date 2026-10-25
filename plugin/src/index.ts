@@ -144,6 +144,25 @@ export default class TodoistPlugin extends Plugin {
   }
 
   async onload() {
+    // Restored Markdown views can render while settings and credentials are still loading.
+    // Install local document presentation before yielding so their first paint is a task view.
+    this.taskDocumentPresentation.start((eventRef) => this.registerEvent(eventRef));
+    this.taskDocumentHeaders.start((eventRef) => this.registerEvent(eventRef));
+    const refreshTaskDocument = () => {
+      this.taskDocumentPresentation.requestRefresh();
+      this.taskDocumentHeaders.requestRefresh();
+    };
+    this.registerEditorExtension([
+      taskManagedRegionExtension,
+      createTaskDocumentReadyExtension(refreshTaskDocument),
+    ]);
+    this.registerMarkdownPostProcessor((element, context) => {
+      if (context.sourcePath.endsWith(".task.md")) {
+        refreshTaskDocument();
+      }
+      this.taskDocumentEmbeds.onPostProcessor(element, context);
+    });
+
     await this.loadOptions();
     if (this.disposed) {
       return;
@@ -183,22 +202,6 @@ export default class TodoistPlugin extends Plugin {
     this.addSettingTab(new SettingsTab(this.app, this));
 
     registerCommands(this);
-    this.taskDocumentPresentation.start((eventRef) => this.registerEvent(eventRef));
-    this.taskDocumentHeaders.start((eventRef) => this.registerEvent(eventRef));
-    const refreshTaskDocument = () => {
-      this.taskDocumentPresentation.requestRefresh();
-      this.taskDocumentHeaders.requestRefresh();
-    };
-    this.registerEditorExtension([
-      taskManagedRegionExtension,
-      createTaskDocumentReadyExtension(refreshTaskDocument),
-    ]);
-    this.registerMarkdownPostProcessor((element, context) => {
-      if (context.sourcePath.endsWith(".task.md")) {
-        refreshTaskDocument();
-      }
-      this.taskDocumentEmbeds.onPostProcessor(element, context);
-    });
     this.registerProjectSyncVaultActivityListeners();
     this.registerEvent(
       this.app.metadataCache.on("changed", (file, _data, cache) => {

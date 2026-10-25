@@ -27,6 +27,8 @@ const runtime = vi.hoisted(() => ({
   registerMarkdownCodeBlockProcessor: vi.fn(),
   saveData: vi.fn(),
   saveLocalStorage: vi.fn(),
+  startTaskHeaders: vi.fn(),
+  startTaskPresentation: vi.fn(),
   settings: {
     current: {} as Record<string, unknown>,
   },
@@ -132,14 +134,14 @@ vi.mock("@/project-sync/taskDocumentEmbeds", () => ({
 
 vi.mock("@/project-sync/taskDocumentHeaders", () => ({
   TaskDocumentHeaders: class {
-    public start(): void {}
+    public start = runtime.startTaskHeaders;
     public dispose(): void {}
   },
 }));
 
 vi.mock("@/project-sync/taskDocumentPresentation", () => ({
   TaskDocumentPresentation: class {
-    public start(): void {}
+    public start = runtime.startTaskPresentation;
     public dispose(): void {}
   },
 }));
@@ -457,6 +459,26 @@ describe("TodoistPlugin async lifecycle", () => {
     vi.useRealTimers();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+  });
+
+  it("installs native task presentation before asynchronous settings finish loading", async () => {
+    const storedData = deferred<unknown>();
+    runtime.loadData.mockReturnValueOnce(storedData.promise);
+    const plugin = makePlugin(makeServices());
+
+    const loading = plugin.onload();
+
+    expect(runtime.startTaskHeaders).toHaveBeenCalledOnce();
+    expect(runtime.startTaskPresentation).toHaveBeenCalledOnce();
+    expect(runtime.registerEditorExtension).toHaveBeenCalledOnce();
+    expect(runtime.registerMarkdownPostProcessor).toHaveBeenCalledOnce();
+    expect(runtime.registerCommands).not.toHaveBeenCalled();
+
+    storedData.resolve(defaultSettings());
+    await loading;
+    expect(runtime.startTaskHeaders).toHaveBeenCalledOnce();
+    expect(runtime.registerCommands).toHaveBeenCalledOnce();
+    plugin.onunload();
   });
 
   it("registers the Tasks List Bases view", async () => {

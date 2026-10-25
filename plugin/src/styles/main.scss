@@ -16,12 +16,21 @@
 
 // Task documents use the native Markdown index and editor. Only the visual Properties panel is
 // hidden; the YAML remains editable in Source mode and available to native property/link features.
-.tasks-bridge-task-document:has(.tasks-bridge-task-header-host) .metadata-container {
-  display: none !important;
-}
+// Use the validated header state, never the separately debounced filename decoration. Limit this
+// to the file's own native header so embedded notes keep their ordinary Properties and titles.
+.view-content.tasks-bridge-task-content {
+  > .markdown-source-view > .cm-editor > .cm-scroller > .cm-sizer,
+  > .markdown-reading-view > .markdown-preview-view > .markdown-preview-sizer > .mod-header {
+    > .metadata-container {
+      --metadata-display-editing: none;
+      --metadata-display-reading: none;
+      display: none !important;
+    }
 
-.tasks-bridge-task-document:has(.tasks-bridge-task-header-host) .inline-title {
-  display: none;
+    > .inline-title {
+      display: none;
+    }
+  }
 }
 
 body {
