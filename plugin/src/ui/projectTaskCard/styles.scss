@@ -239,7 +239,7 @@
   border-inline-start: 0;
 }
 
-.tasks-bridge-note-card-subtasks > .tasks-bridge-note-card-subtask {
+.tasks-bridge-note-card .tasks-bridge-note-card-subtasks > .tasks-bridge-note-card-subtask {
   margin: 0;
   margin-inline-start: 0;
   padding: 0;
@@ -249,10 +249,11 @@
 
 .tasks-bridge-note-card-subtask-row {
   display: flex;
+  box-sizing: border-box;
   min-height: calc(var(--checkbox-size) + var(--size-4-2));
   align-items: center;
   gap: var(--size-2-3);
-  padding: var(--size-2-3) var(--size-4-2);
+  padding: var(--size-2-1) var(--size-4-2);
   border: 0;
   border-radius: var(--nav-item-radius);
   color: var(--nav-item-color);
@@ -436,6 +437,11 @@
 }
 
 @mixin touch-controls {
+  .tasks-bridge-note-card-subtask-row {
+    min-height: 44px;
+    padding-block: 0;
+  }
+
   .tasks-bridge-note-card-action,
   .tasks-bridge-note-card-subtask-disclosure {
     min-width: 44px;

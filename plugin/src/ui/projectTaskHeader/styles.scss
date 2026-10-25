@@ -239,11 +239,17 @@
   overflow-y: auto;
 }
 
-.tasks-bridge-task-header-subtasks {
+.tasks-bridge-task-header .tasks-bridge-task-header-subtasks {
   min-width: 0;
   margin: 0;
   padding: 0;
   list-style: none;
+
+  &[data-depth="0"] {
+    margin-inline-start: var(--size-2-3);
+    padding-inline-start: var(--size-4-4);
+    border-inline-start: var(--border-width) solid var(--background-modifier-border);
+  }
 
   &:is([data-depth="1"], [data-depth="2"], [data-depth="3"]) {
     margin-inline-start: var(--size-4-3);
@@ -252,7 +258,7 @@
   }
 }
 
-.tasks-bridge-task-header-subtask {
+.tasks-bridge-task-header .tasks-bridge-task-header-subtasks > .tasks-bridge-task-header-subtask {
   margin: 0;
   padding: 0;
   list-style: none;
@@ -260,15 +266,23 @@
 
 .tasks-bridge-task-header-subtask-row {
   display: flex;
+  box-sizing: border-box;
   min-width: 0;
+  min-height: var(--size-4-6);
   align-items: center;
   gap: var(--size-2-3);
-  padding-block: var(--size-2-3);
+  padding-block: var(--size-2-1);
+  border-radius: var(--nav-item-radius);
   font-size: var(--font-ui-small);
-  line-height: var(--line-height-normal);
+  line-height: var(--line-height-tight);
 }
 
-.tasks-bridge-task-header-subtask-link {
+.tasks-bridge-task-header-subtask-row:hover,
+.tasks-bridge-task-header-subtask-row:focus-within {
+  background: var(--nav-item-background-hover);
+}
+
+.tasks-bridge-task-header .tasks-bridge-task-header-subtask-link {
   flex: 1;
   min-width: 0;
   color: var(--text-normal);
@@ -343,6 +357,11 @@
   .tasks-bridge-task-header-subtask-row > .tasks-bridge-task-header-completion {
     width: 44px;
     min-height: 44px;
+  }
+
+  .tasks-bridge-task-header-subtask-row {
+    min-height: 44px;
+    padding-block: 0;
   }
 
   .tasks-bridge-task-header-subtask-link {

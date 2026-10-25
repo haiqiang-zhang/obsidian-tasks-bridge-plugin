@@ -12,6 +12,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### ✨ Improvements
+
+- Added a screenshot gallery with downloadable desktop and mobile examples of Tasks List, task documents, task cards, and query blocks.
+
+### 🐛 Bug Fixes
+
+- Redesigned task-header subtasks as a compact, indented tree with a subtle guide line. Removed excess Markdown list spacing in task headers and embedded cards while preserving mobile touch targets.
+
 ## v2.11.0 (2026-10-25)
 
 ### ✨ Improvements

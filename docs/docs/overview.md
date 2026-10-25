@@ -10,6 +10,10 @@ Tasks Bridge connects Obsidian to external task-management services. Each servic
 
 Todoist is the first supported backend. Its current integration works on desktop and mobile and provides two independent synchronization modes.
 
+[![Tasks List in Obsidian Bases with project progress and a task hierarchy.](/img/screenshots/tasks-list.png)](./screenshots)
+
+[Explore the screenshot gallery →](./screenshots)
+
 ## Current Todoist workflows
 
 ### Query blocks
