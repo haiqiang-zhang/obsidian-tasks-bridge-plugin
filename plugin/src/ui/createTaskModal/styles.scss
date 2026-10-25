@@ -26,6 +26,8 @@
     border: 0;
     background-color: unset;
     box-shadow: none;
+    // Autosize grows with the content; only the native modal should scroll.
+    overflow: hidden;
     resize: none;
     padding: 0px;
 
