@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v2.11.7 (2026-10-27)
+
 ### 🐛 Bug Fixes
 
 - Let Obsidian load task-document styles before asynchronous settings initialization, using the native `styles.css` loader.
