@@ -15,6 +15,7 @@ type YamlNode = {
   value: unknown;
   children: YamlNode[];
 };
+type YamlField = { key: YamlNode; value: YamlNode };
 type Patch = { start: number; end: number; text: string };
 type Token = { start: number; end: number; value: string; kind: "word" | "string" | "other" };
 
@@ -44,9 +45,10 @@ export const migrateBasePropertyReferences = (text: string): BasePropertyMigrati
     const root = parseYamlTree(text);
     const rootFields = mapping(root);
     const formulas = rootFields.get("formulas")?.value;
-    const formulaFields = formulas === undefined ? new Map() : mapping(formulas);
+    const formulaFields = formulas === undefined ? new Map<string, YamlField>() : mapping(formulas);
     const propertyFields = rootFields.get("properties")?.value;
-    const configuredProperties = propertyFields === undefined ? new Map() : mapping(propertyFields);
+    const configuredProperties =
+      propertyFields === undefined ? new Map<string, YamlField>() : mapping(propertyFields);
     const patches: Patch[] = [];
     const aliases = new Map<TaskPropertyKey, string>();
     const addedFormulas = new Map<string, string>();
@@ -312,12 +314,12 @@ const unwrap = (node: YamlNode): YamlNode => {
   return current;
 };
 
-const mapping = (node: YamlNode): Map<string, { key: YamlNode; value: YamlNode }> => {
+const mapping = (node: YamlNode): Map<string, YamlField> => {
   const current = unwrap(node);
   if (current.kind !== "mapping" || current.children.length % 2 !== 0) {
     throw new Error("Unsupported Base YAML mapping or alias.");
   }
-  const fields = new Map<string, { key: YamlNode; value: YamlNode }>();
+  const fields = new Map<string, YamlField>();
   for (let index = 0; index < current.children.length; index += 2) {
     const key = current.children[index];
     const value = current.children[index + 1];

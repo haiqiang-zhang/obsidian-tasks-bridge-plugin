@@ -47,6 +47,17 @@ vi.mock("obsidian", async () => {
       );
     }
   }
+  // biome-ignore lint/complexity/noStaticOnlyClass: constructor-shaped mock for instanceof checks
+  class MockTFolder {
+    static [Symbol.hasInstance](value: unknown): boolean {
+      return (
+        typeof value === "object" &&
+        value !== null &&
+        "_fakeKind" in value &&
+        value._fakeKind === "folder"
+      );
+    }
+  }
   const getFrontmatterInfo = (content: string) => {
     if (!content.startsWith("---\n")) {
       return { exists: false, frontmatter: "", from: 0, to: 0, contentStart: 0 };
@@ -65,6 +76,7 @@ vi.mock("obsidian", async () => {
   };
   return {
     TFile: MockTFile,
+    TFolder: MockTFolder,
     normalizePath: (path: string) =>
       path
         .split("/")
@@ -1868,6 +1880,41 @@ describe("ObsidianProjectSyncVault", () => {
     const settled = await adapter.reconcile(canonical, mapping);
     expect(settled.conflicts).toEqual([]);
     expect(fileManager.renameFile).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { rejection: new Error("Native rename failed"), message: "Native rename failed" },
+    { rejection: "Native rename failed", message: "Native rename failed" },
+    { rejection: null, message: "did not move to 'Sync/Renamed.task.md'" },
+    { rejection: undefined, message: "did not move to 'Sync/Renamed.task.md'" },
+  ])("reports a rejected rename as an Error: $rejection", async ({ rejection, message }) => {
+    const root = makeProject("root", { name: "Root" });
+    const task = makeTask("rename-rejection", { content: "Original", project: root });
+    const initial: ProjectSyncSnapshot = {
+      rootProjectId: root.id,
+      projects: [root],
+      tasks: [{ task, completed: false }],
+      syncedAt: "2026-08-19T00:00:00.000Z",
+    };
+    await adapter.reconcile(initial, mapping);
+    const originalFile = vault.files.get("Sync/Original.task.md")?.file;
+    fileManager.renameFile.mockRejectedValueOnce(rejection);
+
+    const rename = adapter.reconcile(
+      {
+        ...initial,
+        tasks: [{ task: { ...task, content: "Renamed" }, completed: false }],
+        syncedAt: "2026-08-19T01:00:00.000Z",
+      },
+      mapping,
+    );
+
+    await expect(rename).rejects.toThrow(message);
+    if (rejection instanceof Error) {
+      await expect(rename).rejects.toBe(rejection);
+    }
+    expect(vault.files.get("Sync/Original.task.md")?.file).toBe(originalFile);
+    expect(vault.files.has("Sync/Renamed.task.md")).toBe(false);
   });
 
   it("uses a safe temporary Vault path when a direct case-only note rename is unavailable", async () => {

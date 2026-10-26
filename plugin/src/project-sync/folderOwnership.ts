@@ -365,8 +365,8 @@ const opaqueRead = (value: unknown): ProjectSyncFolderOwnershipReadResult => ({
 });
 
 const createFolderOwnershipId = (): string => {
-  if (typeof globalThis.crypto?.randomUUID === "function") {
-    return globalThis.crypto.randomUUID();
+  if (typeof window.crypto?.randomUUID === "function") {
+    return window.crypto.randomUUID();
   }
   fallbackCreationId++;
   return `folder-${Date.now()}-${fallbackCreationId}`;

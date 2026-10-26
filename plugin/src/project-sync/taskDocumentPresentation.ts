@@ -1,7 +1,5 @@
 import { type App, type EventRef, MarkdownView } from "obsidian";
 
-import startupStyles from "@/styles/taskDocumentStartup.scss?inline";
-
 export const TASK_DOCUMENT_VIEW_CLASS = "tasks-bridge-task-document";
 export const TASK_DOCUMENT_BADGE_CLASS = "tasks-bridge-task-file-badge";
 export const TASK_DOCUMENT_BREADCRUMB_CLASS = "tasks-bridge-task-breadcrumb";
@@ -34,8 +32,6 @@ export class TaskDocumentPresentation {
   private readonly decoratedLabels = new Map<HTMLElement, TaskLabelDecoration>();
   private readonly breadcrumbs = new Map<HTMLElement, TaskBreadcrumbDecoration>();
   private readonly pendingElements = new Set<Element>();
-  private readonly styles = new Map<Document, HTMLStyleElement>();
-  private readonly closedDocuments = new WeakSet<Document>();
   private refreshLayout = false;
   private timer: number | undefined;
   private started = false;
@@ -50,33 +46,12 @@ export class TaskDocumentPresentation {
       return;
     }
     this.started = true;
-    // Native loadPlugin waits for asynchronous onload before loading styles.css. Install the
-    // task header's shared styles now, before a restored task can paint native Properties.
-    this.ensureStartupStyles();
     const refresh = () => this.scheduleLayoutRefresh();
     registerEvent(this.app.workspace.on("file-open", refresh));
     registerEvent(this.app.workspace.on("active-leaf-change", refresh));
     registerEvent(this.app.workspace.on("layout-change", refresh));
-    registerEvent(
-      this.app.workspace.on("window-open", (_workspaceWindow, win) => {
-        if (win !== undefined) {
-          this.closedDocuments.delete(win.document);
-          this.installStartupStyles(win.document);
-        }
-        refresh();
-      }),
-    );
-    registerEvent(
-      this.app.workspace.on("window-close", (_workspaceWindow, win) => {
-        if (win !== undefined) {
-          // Native leaves may remain enumerable until the close event has finished.
-          this.closedDocuments.add(win.document);
-          this.styles.get(win.document)?.remove();
-          this.styles.delete(win.document);
-        }
-        refresh();
-      }),
-    );
+    registerEvent(this.app.workspace.on("window-open", refresh));
+    registerEvent(this.app.workspace.on("window-close", refresh));
     registerEvent(this.app.vault.on("create", refresh));
     registerEvent(this.app.vault.on("rename", refresh));
     registerEvent(this.app.vault.on("delete", refresh));
@@ -115,34 +90,12 @@ export class TaskDocumentPresentation {
     this.decoratedViews.clear();
     this.decoratedLabels.clear();
     this.pendingElements.clear();
-    for (const style of this.styles.values()) {
-      style.remove();
-    }
-    this.styles.clear();
-  }
-
-  private installStartupStyles(doc: Document): void {
-    if (this.disposed || this.styles.has(doc) || this.closedDocuments.has(doc)) {
-      return;
-    }
-    const style = doc.head.createEl("style");
-    style.dataset.tasksBridgeStartup = "";
-    style.textContent = startupStyles;
-    this.styles.set(doc, style);
-  }
-
-  private ensureStartupStyles(): void {
-    this.installStartupStyles(this.app.workspace.containerEl?.ownerDocument ?? document);
-    for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
-      this.installStartupStyles(leaf.view.containerEl.ownerDocument);
-    }
   }
 
   private scheduleLayoutRefresh(): void {
     if (this.disposed) {
       return;
     }
-    this.ensureStartupStyles();
     this.refreshLayout = true;
     this.schedule();
   }

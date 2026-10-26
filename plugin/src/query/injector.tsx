@@ -48,7 +48,7 @@ export class QueryInjector {
   }
 }
 
-class ReactRenderer<T extends {}> extends MarkdownRenderChild {
+class ReactRenderer<T extends object> extends MarkdownRenderChild {
   private readonly plugin: TodoistPlugin;
   private readonly props: T;
   private readonly component: React.FC<T>;

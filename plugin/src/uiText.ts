@@ -1,5 +1,6 @@
 export const uiText = {
   notices: {
+    initializationFailed: "Failed to initialize Tasks Bridge. Check the console for details.",
     migrationFailed: "Failed to apply migrations. Check the console for details.",
     querySyncFailed: (message: string) => `Query sync failed: ${message}`,
     projectSyncInterrupted:

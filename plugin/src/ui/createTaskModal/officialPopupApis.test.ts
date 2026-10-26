@@ -65,6 +65,13 @@ describe("official Obsidian popup API guard", () => {
     }
   });
 
+  it("loads CSS through styles.css without creating runtime style elements", () => {
+    for (const source of runtimeSources) {
+      expect(source).not.toMatch(/\b(?:createEl|createElement)\s*\(\s*["'`]style["'`]/);
+      expect(source).not.toMatch(/<style\b/);
+    }
+  });
+
   it("routes both date shortcut menus through the anchored Obsidian Menu helper", () => {
     for (const source of [deadlineSource, dueDateSource]) {
       expect(source).toContain("useObsidianMenu");

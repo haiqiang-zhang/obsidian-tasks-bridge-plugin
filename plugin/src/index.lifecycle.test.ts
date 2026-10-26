@@ -182,6 +182,7 @@ vi.mock("@/uiText", () => ({
       projectionErrorNotice: "Todoist was updated, but its Vault note could not be refreshed.",
     },
     notices: {
+      initializationFailed: "Initialization failed",
       migrationFailed: "Migration failed",
       querySyncFailed: (message: string) => `Query sync failed: ${message}`,
       projectSyncComplete: (
@@ -247,6 +248,7 @@ type Deferred<T> = {
 type TestServices = ReturnType<typeof makeServices>;
 
 type LifecycleInternals = {
+  initialization: Promise<void> | undefined;
   loadApiClient(): Promise<void>;
   runScheduledSync(): Promise<void>;
 };
@@ -440,6 +442,11 @@ const makePlugin = (
 const internals = (plugin: TodoistPlugin): LifecycleInternals =>
   plugin as unknown as LifecycleInternals;
 
+const loadPlugin = async (plugin: TodoistPlugin): Promise<void> => {
+  plugin.onload();
+  await internals(plugin).initialization;
+};
+
 const vaultActivityListener = (eventName: string): VaultActivityListener => {
   const registration = runtime.vaultOn.mock.calls.find(([event]) => event === eventName);
   if (registration === undefined) {
@@ -470,26 +477,166 @@ describe("TodoistPlugin async lifecycle", () => {
     vi.unstubAllGlobals();
   });
 
-  it("installs native task presentation before asynchronous settings finish loading", async () => {
+  it("registers restored views and lets Obsidian load CSS before settings finish loading", async () => {
     const storedData = deferred<unknown>();
     runtime.loadData.mockReturnValueOnce(storedData.promise);
     const plugin = makePlugin(makeServices());
 
-    const loading = plugin.onload();
+    const result = plugin.onload();
 
+    expect(result).toBeUndefined();
     expect(runtime.startTaskHeaders).toHaveBeenCalledOnce();
     expect(runtime.startTaskPresentation).toHaveBeenCalledOnce();
     expect(runtime.startTaskPropertyTypes).toHaveBeenCalledOnce();
     expect(runtime.registerEditorExtension).toHaveBeenCalledOnce();
     expect(runtime.registerMarkdownPostProcessor).toHaveBeenCalledOnce();
+    expect(runtime.registerBasesView).toHaveBeenCalledOnce();
+    expect(runtime.registerMarkdownCodeBlockProcessor).not.toHaveBeenCalled();
+    expect(runtime.registerCommands).not.toHaveBeenCalled();
+
+    // Native loadPlugin awaits onload before loading styles.css. A pending settings read
+    // must not prevent that next loader step from completing.
+    const loadCss = vi.fn();
+    await Promise.resolve(result).then(loadCss);
+    expect(loadCss).toHaveBeenCalledOnce();
     expect(runtime.registerCommands).not.toHaveBeenCalled();
 
     storedData.resolve(defaultSettings());
-    await loading;
+    await internals(plugin).initialization;
     expect(runtime.startTaskHeaders).toHaveBeenCalledOnce();
+    expect(runtime.registerMarkdownCodeBlockProcessor).toHaveBeenCalledTimes(4);
     expect(runtime.registerCommands).toHaveBeenCalledOnce();
     plugin.onunload();
     expect(runtime.disposeTaskPropertyTypes).toHaveBeenCalledOnce();
+  });
+
+  it("does not register or initialize twice while settings are pending", async () => {
+    const storedData = deferred<unknown>();
+    runtime.loadData.mockReturnValueOnce(storedData.promise);
+    const plugin = makePlugin(makeServices());
+
+    plugin.onload();
+    const initialization = internals(plugin).initialization;
+    plugin.onload();
+
+    expect(internals(plugin).initialization).toBe(initialization);
+    expect(runtime.loadData).toHaveBeenCalledOnce();
+    expect(runtime.startTaskPresentation).toHaveBeenCalledOnce();
+    expect(runtime.registerBasesView).toHaveBeenCalledOnce();
+    expect(runtime.registerMarkdownCodeBlockProcessor).not.toHaveBeenCalled();
+
+    storedData.resolve(defaultSettings());
+    await initialization;
+    expect(runtime.registerMarkdownCodeBlockProcessor).toHaveBeenCalledTimes(4);
+    expect(runtime.registerCommands).toHaveBeenCalledOnce();
+    plugin.onunload();
+  });
+
+  it("waits for the credential-bound cache before registering query blocks", async () => {
+    const credential = deferred<string | null>();
+    const services = makeServices();
+    services.token.read.mockReturnValueOnce(credential.promise);
+    const plugin = makePlugin(services);
+
+    plugin.onload();
+    await vi.waitFor(() => expect(services.token.read).toHaveBeenCalledOnce());
+
+    expect(plugin.queryCache.load).toHaveBeenCalledOnce();
+    expect(plugin.queryCache.bindCredential).not.toHaveBeenCalled();
+    expect(runtime.registerMarkdownCodeBlockProcessor).not.toHaveBeenCalled();
+
+    runtime.registerMarkdownCodeBlockProcessor.mockImplementationOnce(() => {
+      expect(plugin.queryCache.bindCredential).toHaveBeenCalledOnce();
+    });
+    credential.resolve(null);
+    await internals(plugin).initialization;
+
+    expect(
+      runtime.registerMarkdownCodeBlockProcessor.mock.calls.map(([language]) => language),
+    ).toEqual(["tasks-bridge-query", "tasks-bridge-project-task", "todoist", "tasks-bridge-task"]);
+    plugin.onunload();
+  });
+
+  it.each([
+    "settings",
+    "credential",
+  ] as const)("catches a background %s initialization failure and reports it once", async (stage) => {
+    const error = new Error(`${stage} is unavailable`);
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const services = makeServices();
+    if (stage === "settings") {
+      runtime.loadData.mockRejectedValueOnce(error);
+    } else {
+      services.token.read.mockRejectedValueOnce(error);
+    }
+    const onLayoutReady = vi.fn();
+    const plugin = makePlugin(services, onLayoutReady);
+
+    await expect(loadPlugin(plugin)).resolves.toBeUndefined();
+
+    expect(consoleError).toHaveBeenCalledExactlyOnceWith(
+      "Failed to initialize Tasks Bridge:",
+      error,
+    );
+    expect(runtime.notices).toEqual(["Initialization failed"]);
+    expect(runtime.registerCommands).not.toHaveBeenCalled();
+    expect(onLayoutReady).not.toHaveBeenCalled();
+    expect(services.todoist.initialize).not.toHaveBeenCalled();
+    plugin.onunload();
+  });
+
+  it.each([
+    "resolve",
+    "reject",
+  ] as const)("ignores a settings read that settles with %s after unload", async (settlement) => {
+    const storedData = deferred<unknown>();
+    runtime.loadData.mockReturnValueOnce(storedData.promise);
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const services = makeServices();
+    const onLayoutReady = vi.fn();
+    const plugin = makePlugin(services, onLayoutReady);
+
+    plugin.onload();
+    plugin.onunload();
+    if (settlement === "resolve") {
+      storedData.resolve(defaultSettings({ autoRefreshToggle: true }));
+    } else {
+      storedData.reject(new Error("Late settings read failure"));
+    }
+    await internals(plugin).initialization;
+
+    expect(runtime.loadLocalStorage).not.toHaveBeenCalled();
+    expect(runtime.saveData).not.toHaveBeenCalled();
+    expect(runtime.addSettingTab).not.toHaveBeenCalled();
+    expect(runtime.registerCommands).not.toHaveBeenCalled();
+    expect(runtime.registerInterval).not.toHaveBeenCalled();
+    expect(services.projectSync.setConfig).not.toHaveBeenCalled();
+    expect(services.token.read).not.toHaveBeenCalled();
+    expect(onLayoutReady).not.toHaveBeenCalled();
+    expect(consoleError).not.toHaveBeenCalled();
+    expect(runtime.notices).toEqual([]);
+  });
+
+  it("does not continue initialization when the credential read finishes after unload", async () => {
+    const credential = deferred<string | null>();
+    const services = makeServices();
+    services.token.read.mockReturnValueOnce(credential.promise);
+    const onLayoutReady = vi.fn();
+    const plugin = makePlugin(services, onLayoutReady);
+
+    plugin.onload();
+    await vi.waitFor(() => expect(services.token.read).toHaveBeenCalledOnce());
+    plugin.onunload();
+    credential.resolve("late-token");
+    await internals(plugin).initialization;
+
+    expect(runtime.addSettingTab).not.toHaveBeenCalled();
+    expect(runtime.registerCommands).not.toHaveBeenCalled();
+    expect(runtime.registerInterval).not.toHaveBeenCalled();
+    expect(services.projectSync.refreshStatisticsFromLocalProjection).not.toHaveBeenCalled();
+    expect(services.todoist.initialize).not.toHaveBeenCalled();
+    expect(onLayoutReady).not.toHaveBeenCalled();
+    expect(runtime.notices).toEqual([]);
   });
 
   it("registers the Tasks List Bases view", async () => {
@@ -498,7 +645,7 @@ describe("TodoistPlugin async lifecycle", () => {
     services.projectSync.subscribe.mockReturnValueOnce(unsubscribe);
     const plugin = makePlugin(services);
 
-    await plugin.onload();
+    await loadPlugin(plugin);
 
     expect(runtime.registerBasesView).toHaveBeenCalledWith(
       "tasks-list",
@@ -567,7 +714,7 @@ describe("TodoistPlugin async lifecycle", () => {
     });
     const plugin = makePlugin(services);
 
-    await plugin.onload();
+    await loadPlugin(plugin);
 
     const registration = runtime.registerBasesView.mock.calls[0]?.[1] as {
       projectContext: { getContext(): unknown };
@@ -598,7 +745,7 @@ describe("TodoistPlugin async lifecycle", () => {
   it("registers canonical block names before their compatibility aliases", async () => {
     const plugin = makePlugin(makeServices());
 
-    await plugin.onload();
+    await loadPlugin(plugin);
 
     expect(
       runtime.registerMarkdownCodeBlockProcessor.mock.calls.map(([language]) => language),
@@ -607,7 +754,7 @@ describe("TodoistPlugin async lifecycle", () => {
 
   it("wires Tasks List sync to the same manual entry point as the Sync command", async () => {
     const plugin = makePlugin(makeServices());
-    await plugin.onload();
+    await loadPlugin(plugin);
     const sync = vi.spyOn(plugin, "syncProjectFolderNow").mockResolvedValue(null);
     const registration = runtime.registerBasesView.mock.calls[0]?.[1] as {
       actions: TodoistListActions;
@@ -623,7 +770,7 @@ describe("TodoistPlugin async lifecycle", () => {
     const currentTask = { id: "task-42", content: "Current task" };
     services.projectTasks.loadEditableTask.mockResolvedValue(currentTask);
     const plugin = makePlugin(services);
-    await plugin.onload();
+    await loadPlugin(plugin);
     const registration = runtime.registerBasesView.mock.calls[0]?.[1] as {
       actions: TodoistListActions;
     };
@@ -672,7 +819,7 @@ describe("TodoistPlugin async lifecycle", () => {
     const projectionError = new ProjectTaskProjectionError(projectionCause);
     services.projectTasks[actionName].mockRejectedValueOnce(projectionError);
     const plugin = makePlugin(services);
-    await plugin.onload();
+    await loadPlugin(plugin);
     const registration = runtime.registerBasesView.mock.calls[0]?.[1] as {
       actions: TodoistListActions;
     };
@@ -1585,7 +1732,7 @@ describe("TodoistPlugin async lifecycle", () => {
       },
     });
     const plugin = makePlugin(services);
-    await plugin.onload();
+    await loadPlugin(plugin);
     runtime.saveData.mockClear();
 
     vaultActivityListener("delete")({ path: "Task Projects/Work/Child" });
@@ -1622,7 +1769,7 @@ describe("TodoistPlugin async lifecycle", () => {
       },
     });
     const plugin = makePlugin(services);
-    await plugin.onload();
+    await loadPlugin(plugin);
     runtime.saveData.mockClear();
 
     vaultActivityListener("rename")(
@@ -1657,7 +1804,7 @@ describe("TodoistPlugin async lifecycle", () => {
       },
     });
     const plugin = makePlugin(services);
-    await plugin.onload();
+    await loadPlugin(plugin);
     runtime.saveData.mockClear();
 
     await plugin.runProjectSyncVaultMutation(
@@ -1697,7 +1844,7 @@ describe("TodoistPlugin async lifecycle", () => {
       },
     });
     const plugin = makePlugin(services);
-    await plugin.onload();
+    await loadPlugin(plugin);
 
     await plugin.runProjectSyncVaultMutation(["Task Projects/Work/Child"], async () => {
       vaultActivityListener("delete")({ path: "Task Projects/Work/Child" });
@@ -1727,7 +1874,7 @@ describe("TodoistPlugin async lifecycle", () => {
       },
     });
     const plugin = makePlugin(services);
-    await plugin.onload();
+    await loadPlugin(plugin);
 
     vaultActivityListener("rename")(
       { path: "Task Projects/Work/User renamed" },
@@ -2282,7 +2429,7 @@ describe("TodoistPlugin async lifecycle", () => {
     const setTimeout = vi.spyOn(window, "setTimeout");
     const plugin = makePlugin(services);
 
-    await plugin.onload();
+    await loadPlugin(plugin);
 
     expect(setTimeout).not.toHaveBeenCalled();
     expect(runtime.registerInterval).not.toHaveBeenCalled();
@@ -2297,7 +2444,7 @@ describe("TodoistPlugin async lifecycle", () => {
     const setTimeout = vi.spyOn(window, "setTimeout").mockReturnValue(timeoutId);
     const plugin = makePlugin(services);
 
-    await plugin.onload();
+    await loadPlugin(plugin);
 
     expect(setTimeout).toHaveBeenCalledWith(expect.any(Function), 45_000);
     expect(runtime.registerInterval).not.toHaveBeenCalled();
@@ -2314,7 +2461,7 @@ describe("TodoistPlugin async lifecycle", () => {
       .mockReturnValueOnce(32 as unknown as ReturnType<typeof window.setTimeout>);
     const clearTimeout = vi.spyOn(window, "clearTimeout");
     const plugin = makePlugin(services);
-    await plugin.onload();
+    await loadPlugin(plugin);
 
     await plugin.writeOptions({ projectSyncEnabled: true });
 
@@ -2343,7 +2490,7 @@ describe("TodoistPlugin async lifecycle", () => {
     const setTimeout = vi.spyOn(window, "setTimeout").mockReturnValue(timeoutId);
     const clearTimeout = vi.spyOn(window, "clearTimeout");
     const plugin = makePlugin(services);
-    await plugin.onload();
+    await loadPlugin(plugin);
 
     await plugin.writeOptions({ autoRefreshToggle: false });
 
@@ -2361,7 +2508,7 @@ describe("TodoistPlugin async lifecycle", () => {
     vi.spyOn(window, "setTimeout").mockReturnValue(timeoutId);
     const clearTimeout = vi.spyOn(window, "clearTimeout");
     const plugin = makePlugin(services);
-    await plugin.onload();
+    await loadPlugin(plugin);
 
     plugin.onunload();
 
@@ -2380,7 +2527,7 @@ describe("TodoistPlugin async lifecycle", () => {
       defaultSettings({ autoRefreshInterval: 30, autoRefreshToggle: true }),
     );
     const plugin = makePlugin(services);
-    await plugin.onload();
+    await loadPlugin(plugin);
 
     vi.advanceTimersByTime(30_000);
     expect(services.todoist.syncMetadata).toHaveBeenCalledOnce();
@@ -2410,7 +2557,7 @@ describe("TodoistPlugin async lifecycle", () => {
     );
     const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
     const plugin = makePlugin(services);
-    await plugin.onload();
+    await loadPlugin(plugin);
 
     vi.advanceTimersByTime(45_000);
     expect(services.todoist.syncMetadata).toHaveBeenCalledOnce();
@@ -2443,7 +2590,7 @@ describe("TodoistPlugin async lifecycle", () => {
       defaultSettings({ autoRefreshInterval: 30, autoRefreshToggle: true }),
     );
     const plugin = makePlugin(services);
-    await plugin.onload();
+    await loadPlugin(plugin);
 
     vi.advanceTimersByTime(30_000);
     expect(services.todoist.syncMetadata).toHaveBeenCalledOnce();
@@ -2479,7 +2626,7 @@ describe("TodoistPlugin async lifecycle", () => {
     );
     const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
     const plugin = makePlugin(services);
-    await plugin.onload();
+    await loadPlugin(plugin);
 
     vi.advanceTimersByTime(25_000);
     const manual = plugin.syncProjectFolderNow();
@@ -2515,7 +2662,7 @@ describe("TodoistPlugin async lifecycle", () => {
       defaultSettings({ autoRefreshInterval: 30, autoRefreshToggle: true }),
     );
     const plugin = makePlugin(services);
-    await plugin.onload();
+    await loadPlugin(plugin);
 
     vi.advanceTimersByTime(20_000);
     const firstManual = plugin.syncProjectFolderNow();
@@ -2547,7 +2694,7 @@ describe("TodoistPlugin async lifecycle", () => {
       defaultSettings({ autoRefreshInterval: 30, autoRefreshToggle: true }),
     );
     const plugin = makePlugin(services);
-    await plugin.onload();
+    await loadPlugin(plugin);
 
     vi.advanceTimersByTime(30_000);
     expect(services.todoist.syncMetadata).toHaveBeenCalledOnce();
@@ -2787,7 +2934,7 @@ describe("TodoistPlugin async lifecycle", () => {
     vi.spyOn(gate, "waitForSafePermit").mockResolvedValue(permit);
     vi.spyOn(gate, "monitor").mockImplementation(async (operation) => await operation());
     vi.spyOn(gate, "isPermitCurrent").mockImplementation(() => permitCurrent);
-    await plugin.onload();
+    await loadPlugin(plugin);
 
     await vi.advanceTimersByTimeAsync(30_000);
     await vi.waitFor(() => {
@@ -2862,7 +3009,7 @@ describe("TodoistPlugin async lifecycle", () => {
     runtime.settings.current = stored;
     const sync = makeSyncHarness({ syncStatus: "Fully synced" });
     const plugin = makePlugin(services, vi.fn(), sync.internalPlugins);
-    await plugin.onload();
+    await loadPlugin(plugin);
     services.projectSync.invalidate.mockClear();
 
     const scheduled = internals(plugin).runScheduledSync();
@@ -2899,7 +3046,7 @@ describe("TodoistPlugin async lifecycle", () => {
     runtime.loadData.mockResolvedValueOnce(stored);
     runtime.settings.current = stored;
     const plugin = makePlugin(services);
-    await plugin.onload();
+    await loadPlugin(plugin);
     services.projectSync.invalidate.mockClear();
 
     vaultActivityListener("rename")({ path: "Archived Tasks" }, "Tasks");
@@ -2924,7 +3071,7 @@ describe("TodoistPlugin async lifecycle", () => {
     runtime.loadData.mockResolvedValueOnce(stored);
     runtime.settings.current = stored;
     const plugin = makePlugin(services);
-    await plugin.onload();
+    await loadPlugin(plugin);
     services.projectSync.invalidate.mockClear();
     const modify = vaultActivityListener("modify");
 
@@ -3160,7 +3307,7 @@ describe("TodoistPlugin async lifecycle", () => {
     runtime.settings.current = { ...defaultSettings(), version: 0 };
     runtime.loadData.mockResolvedValueOnce({ ...defaultSettings(), version: 0 });
 
-    await plugin.onload();
+    await loadPlugin(plugin);
     const [layoutReady] = onLayoutReady.mock.calls[0] as [() => Promise<void>];
     services.token.read.mockClear();
     const ready = layoutReady();
@@ -3181,7 +3328,7 @@ describe("TodoistPlugin async lifecycle", () => {
     runtime.loadData.mockResolvedValueOnce(stored);
     const plugin = makePlugin(services, onLayoutReady);
 
-    await plugin.onload();
+    await loadPlugin(plugin);
     const [layoutReady] = onLayoutReady.mock.calls[0] as [() => Promise<void>];
     await layoutReady();
 

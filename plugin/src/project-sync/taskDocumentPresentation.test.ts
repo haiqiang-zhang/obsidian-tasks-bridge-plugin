@@ -137,94 +137,24 @@ describe("native task document presentation", () => {
     vi.useRealTimers();
   });
 
-  it.each([
-    "source",
-    "preview",
-  ] as const)("styles the validated %s task before asynchronous plugin loading or external CSS finishes", (mode) => {
+  it("leaves native stylesheet ownership to Obsidian across startup and disposal", () => {
     const harness = makeHarness();
     active.push(harness.presentation);
-    const native = harness.addMarkdown("Projects/Startup.task.md");
-    const content = document.createElement("div");
-    content.className = "view-content tasks-bridge-task-content";
-    const classes =
-      mode === "source"
-        ? ["markdown-source-view", "cm-editor", "cm-scroller", "cm-sizer"]
-        : [
-            "markdown-reading-view",
-            "markdown-preview-view",
-            "markdown-preview-sizer",
-            "mod-header",
-          ];
-    let parent = content;
-    for (const className of classes) {
-      const child = document.createElement("div");
-      child.className = className;
-      parent.append(child);
-      parent = child;
-    }
-    const properties = document.createElement("div");
-    properties.className = "metadata-container";
-    const title = document.createElement("div");
-    title.className = "inline-title";
-    const header = document.createElement("div");
-    header.className = "tasks-bridge-task-header";
-    const heading = document.createElement("div");
-    heading.className = "tasks-bridge-task-header-heading";
-    header.append(heading);
-    const embed = document.createElement("div");
-    embed.className = "markdown-embed";
-    const embeddedProperties = properties.cloneNode() as HTMLElement;
-    embed.append(embeddedProperties);
-    parent.append(properties, title, header, embed);
-    native.containerEl.replaceChildren(content);
-    const ordinary = properties.cloneNode() as HTMLElement;
-    document.body.append(ordinary);
-
-    expect(getComputedStyle(properties).display).toBe("block");
-    harness.presentation.start(harness.registerEvent);
-
-    // Do not flush timers/layout callbacks or load the normal stylesheet: this is the frame
-    // in which native loadPlugin is still waiting for the plugin's asynchronous onload.
-    expect(document.head.querySelectorAll("style[data-tasks-bridge-startup]")).toHaveLength(1);
-    expect(getComputedStyle(properties).display).toBe("none");
-    expect(getComputedStyle(title).display).toBe("none");
-    expect(getComputedStyle(heading).display).toBe("flex");
-    expect(getComputedStyle(header).boxSizing).toBe("border-box");
-    expect(getComputedStyle(ordinary).display).toBe("block");
-    expect(getComputedStyle(embeddedProperties).display).toBe("block");
-
-    harness.presentation.requestRefresh();
-    expect(document.head.querySelectorAll("style[data-tasks-bridge-startup]")).toHaveLength(1);
-    harness.presentation.dispose();
-    expect(getComputedStyle(properties).display).toBe("block");
-    expect(document.head.querySelector("style[data-tasks-bridge-startup]")).toBeNull();
-  });
-
-  it("installs startup styles in an opened window immediately and removes only owned styles", () => {
-    const harness = makeHarness();
-    active.push(harness.presentation);
-    const unrelated = document.createElement("style");
-    unrelated.textContent = ".ordinary { color: red; }";
-    document.head.append(unrelated);
-    const iframe = document.createElement("iframe");
-    document.body.append(iframe);
-    const win = iframe.contentWindow;
-    if (win === null) {
-      throw new Error("The popout window was not created");
-    }
-    harness.addMarkdown("Projects/Popout.task.md", win.document);
+    harness.addMarkdown("Projects/Startup.task.md");
+    const nativeStylesheet = document.createElement("style");
+    nativeStylesheet.textContent = ".tasks-bridge-task-content { color: inherit; }";
+    document.head.append(nativeStylesheet);
+    const originalStyles = [...document.head.querySelectorAll("style, link[rel=stylesheet]")];
 
     harness.presentation.start(harness.registerEvent);
-    harness.emit("workspace", "window-open", {}, win);
-    expect(win.document.head.querySelectorAll("style[data-tasks-bridge-startup]")).toHaveLength(1);
-    harness.emit("workspace", "window-close", {}, win);
-    expect(win.document.head.querySelector("style[data-tasks-bridge-startup]")).toBeNull();
-    // The closing window's leaf remains in the native leaf list for this event turn.
     harness.presentation.requestRefresh();
-    expect(win.document.head.querySelector("style[data-tasks-bridge-startup]")).toBeNull();
     harness.presentation.dispose();
-    expect(unrelated.isConnected).toBe(true);
-    unrelated.remove();
+
+    expect([...document.head.querySelectorAll("style, link[rel=stylesheet]")]).toEqual(
+      originalStyles,
+    );
+    expect(nativeStylesheet.isConnected).toBe(true);
+    nativeStylesheet.remove();
   });
 
   it("recognizes a restored task view when its native document becomes ready after layout", async () => {

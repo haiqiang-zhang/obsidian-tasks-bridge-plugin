@@ -104,6 +104,7 @@ export default class TodoistPlugin extends Plugin {
   private readonly taskDocumentHeaders: TaskDocumentHeaders;
   private readonly taskDocumentPresentation: TaskDocumentPresentation;
   private readonly taskPropertyTypes: TaskPropertyTypes;
+  private initialization: Promise<void> | undefined;
   private disposed = false;
   private projectCatalogs: ProjectCatalogCollection = {};
   private projectSyncFolderOwnership: ProjectSyncFolderOwnershipRegistry =
@@ -146,7 +147,10 @@ export default class TodoistPlugin extends Plugin {
     this.taskPropertyTypes = new TaskPropertyTypes(app);
   }
 
-  async onload() {
+  onload(): void {
+    if (this.disposed || this.initialization !== undefined) {
+      return;
+    }
     this.taskPropertyTypes.start((eventRef) => this.registerEvent(eventRef));
     // Restored Markdown views can render while settings and credentials are still loading.
     // Install local document presentation before yielding so their first paint is a task view.
@@ -167,6 +171,24 @@ export default class TodoistPlugin extends Plugin {
       this.taskDocumentEmbeds.onPostProcessor(element, context);
     });
 
+    this.registerBasesView(
+      TASKS_LIST_VIEW_ID,
+      createTasksListViewRegistration(
+        this.makeTodoistListActions(),
+        this.makeTodoistListProjectContextSource(),
+      ),
+    );
+    // Obsidian loads styles.css only after onload returns. Register restored views now, then
+    // initialize local settings and services independently so CSS never waits for data reads.
+    this.initialization = this.initialize().catch((error: unknown) => {
+      if (!this.disposed) {
+        console.error("Failed to initialize Tasks Bridge:", error);
+        new Notice(uiText.notices.initializationFailed);
+      }
+    });
+  }
+
+  private async initialize(): Promise<void> {
     await this.loadOptions();
     if (this.disposed) {
       return;
@@ -175,16 +197,9 @@ export default class TodoistPlugin extends Plugin {
     if (this.disposed) {
       return;
     }
-
+    // Query blocks take their initial snapshot from the credential-bound cache.
     const queryInjector = new QueryInjector(this);
     const projectTaskCardInjector = new ProjectTaskCardInjector(this);
-    this.registerBasesView(
-      TASKS_LIST_VIEW_ID,
-      createTasksListViewRegistration(
-        this.makeTodoistListActions(),
-        this.makeTodoistListProjectContextSource(),
-      ),
-    );
     this.registerMarkdownCodeBlockProcessor(
       QUERY_CODE_BLOCK,
       queryInjector.onNewBlock.bind(queryInjector),

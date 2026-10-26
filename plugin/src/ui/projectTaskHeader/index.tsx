@@ -252,7 +252,7 @@ const TaskDescription: React.FC<{ description: string }> = ({ description }) => 
     }
     const measure = () => setOverflows(element.scrollHeight > element.clientHeight);
     measure();
-    const viewWindow = element.ownerDocument.defaultView as (Window & typeof globalThis) | null;
+    const viewWindow = element.ownerDocument.defaultView;
     const ResizeObserverConstructor = viewWindow?.ResizeObserver;
     if (ResizeObserverConstructor === undefined) {
       return;

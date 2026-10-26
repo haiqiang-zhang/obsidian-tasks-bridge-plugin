@@ -21,13 +21,15 @@ export const LabelsControl: React.FC<Props> = ({ value, onChange }) => {
   const todoist = plugin.services.todoist;
   const text = uiText.settings.taskCreation.defaultLabels;
 
-  const labelsById: Map<string, Label> = useMemo(() => {
+  const labelsById = useMemo(() => {
+    const labels = new Map<string, Label>();
     if (!todoist.isReady()) {
-      return new Map();
+      return labels;
     }
-    return new Map(
-      Array.from(todoist.data().labels.iterActive()).map((label) => [label.id, label]),
-    );
+    for (const label of todoist.data().labels.iterActive()) {
+      labels.set(label.id, label);
+    }
+    return labels;
   }, [todoist]);
 
   const availableLabels = useMemo(() => {

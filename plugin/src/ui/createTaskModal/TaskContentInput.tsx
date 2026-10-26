@@ -26,9 +26,12 @@ export const TaskContentInput: React.FC<Props> = ({
 
   useLayoutEffect(() => {
     const input = inputRef.current;
-    const viewWindow = input?.ownerDocument.defaultView as (Window & typeof globalThis) | null;
+    if (input === null) {
+      return;
+    }
+    const viewWindow = input.ownerDocument.defaultView;
     const Observer = viewWindow?.ResizeObserver;
-    if (input === null || viewWindow === null || Observer === undefined) {
+    if (viewWindow === null || Observer === undefined) {
       return;
     }
     // Modal scrollbars can change the available width without a window resize.

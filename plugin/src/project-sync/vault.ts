@@ -5,7 +5,7 @@ import {
   parseYaml,
   type TAbstractFile,
   TFile,
-  type TFolder,
+  TFolder,
   type Vault,
 } from "obsidian";
 
@@ -227,6 +227,13 @@ const emptyProtectedProjectionPreflight = (): ProtectedProjectionPreflight => ({
 const alwaysValidRun: ProjectSyncRunContext = { assertValid: () => undefined };
 const runMutationDirectly: ProjectSyncInternalMutationRunner = async (_affectedPaths, operation) =>
   await operation();
+
+const normalizeRenameError = (error: unknown): Error | undefined => {
+  if (error === null || error === undefined) {
+    return undefined;
+  }
+  return error instanceof Error ? error : new Error(String(error));
+};
 
 class ActiveManagedNoteError extends Error {}
 class ManagedNoteIdentityConflictError extends Error {}
@@ -805,8 +812,8 @@ export class ObsidianProjectSyncVault {
         continue;
       }
       const occupant = occupants[0];
-      if (occupant !== undefined && this.vault.getFolderByPath(occupant.path) === occupant) {
-        observedFolders.set(ownership.creationId, occupant as TFolder);
+      if (occupant instanceof TFolder && this.vault.getFolderByPath(occupant.path) === occupant) {
+        observedFolders.set(ownership.creationId, occupant);
       }
     }
 
@@ -848,7 +855,7 @@ export class ObsidianProjectSyncVault {
         if (folders.size !== 1) {
           continue;
         }
-        const folder = folders.values().next().value as TFolder | undefined;
+        const folder = folders.values().next().value;
         if (
           folder === undefined ||
           portablePathKey(folder.path) !== portablePathKey(target.path) ||
@@ -920,12 +927,12 @@ export class ObsidianProjectSyncVault {
       );
     };
 
-    let directError: unknown;
+    let directError: Error | undefined;
     try {
       runContext.assertValid();
       await renameDirectly();
     } catch (error: unknown) {
-      directError = error;
+      directError = normalizeRenameError(error);
     }
     if (await this.isExactLiveFolder(folder, normalizedTarget, originalPath)) {
       return;
@@ -1124,14 +1131,14 @@ export class ObsidianProjectSyncVault {
       return;
     }
     const recasing = portablePathKey(originalPath) === portablePathKey(normalizedTarget);
-    let directError: unknown;
+    let directError: Error | undefined;
     try {
       await this.runInternalMutation([originalPath, normalizedTarget], async () => {
         runContext.assertValid();
         await this.fileManager.renameFile(file, normalizedTarget);
       });
     } catch (error: unknown) {
-      directError = error;
+      directError = normalizeRenameError(error);
     }
 
     if (!recasing || (await this.isExactLiveFile(file, normalizedTarget, originalPath))) {
@@ -3416,7 +3423,7 @@ const readLegacyProjectIdFromPath = (
   if (!Array.isArray(projectPath) || projectPath.length === 0) {
     return undefined;
   }
-  const projectName = projectPath[projectPath.length - 1];
+  const projectName: unknown = projectPath[projectPath.length - 1];
   if (typeof projectName !== "string") {
     return undefined;
   }
