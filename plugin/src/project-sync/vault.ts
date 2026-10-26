@@ -61,6 +61,10 @@ import {
   TASK_PROPERTY_NAMES,
   TaskPropertyConflictError,
 } from "./properties";
+import {
+  preserveTaskRelationshipLink,
+  type TaskRelationshipLinkResolver,
+} from "./taskRelationshipLinks";
 import type {
   ProjectSyncConfig,
   ProjectSyncConflict,
@@ -290,6 +294,7 @@ export class ObsidianProjectSyncVault {
   private readonly runInternalMutation: ProjectSyncInternalMutationRunner;
   private readonly catalogStorage?: ProjectCatalogStorage;
   private readonly folderOwnershipStorage?: ProjectSyncFolderOwnershipStorage;
+  private readonly resolveTaskRelationshipLink?: TaskRelationshipLinkResolver;
   private readonly managedFileIndexes = new WeakMap<object, Promise<IndexedVaultFile[]>>();
   private readonly propertyMigrationPreparations = new WeakMap<object, Promise<void>>();
 
@@ -300,6 +305,7 @@ export class ObsidianProjectSyncVault {
     runInternalMutation: ProjectSyncInternalMutationRunner = runMutationDirectly,
     catalogStorage?: ProjectCatalogStorage,
     folderOwnershipStorage?: ProjectSyncFolderOwnershipStorage,
+    resolveTaskRelationshipLink?: TaskRelationshipLinkResolver,
   ) {
     this.vault = vault;
     this.fileManager = fileManager;
@@ -307,6 +313,7 @@ export class ObsidianProjectSyncVault {
     this.runInternalMutation = runInternalMutation;
     this.catalogStorage = catalogStorage;
     this.folderOwnershipStorage = folderOwnershipStorage;
+    this.resolveTaskRelationshipLink = resolveTaskRelationshipLink;
   }
 
   public validateConfig(config: ProjectSyncConfig): void {
@@ -1990,41 +1997,47 @@ export class ObsidianProjectSyncVault {
         snapshotTask.task.parentId === undefined
           ? undefined
           : projectedFilesByTaskId.get(parentByTaskId.get(snapshotTask.task.id) ?? "")?.file;
-      const subtasks = (childrenByTaskId.get(snapshotTask.task.id) ?? []).flatMap((child) => {
-        const file = projectedFilesByTaskId.get(child.id)?.file;
-        return file === undefined
-          ? []
-          : [
-              this.fileManager.generateMarkdownLink(
-                file,
-                projected.file.path,
-                undefined,
-                child.content,
-              ),
-            ];
-      });
-      const parentTask =
-        parentFile === undefined
-          ? undefined
-          : this.fileManager.generateMarkdownLink(
-              parentFile,
-              projected.file.path,
-              undefined,
-              tasksById.get(parentByTaskId.get(snapshotTask.task.id) ?? "")?.content ?? "",
-            );
+      const children = childrenByTaskId.get(snapshotTask.task.id) ?? [];
+      const parentLabel =
+        tasksById.get(parentByTaskId.get(snapshotTask.task.id) ?? "")?.content ?? "";
+      const makeRelationships = (frontmatter: ManagedFrontmatter) => {
+        const currentSubtasks = readTaskProperty(frontmatter, "todoist_subtasks");
+        const currentLinks: readonly unknown[] = Array.isArray(currentSubtasks)
+          ? currentSubtasks
+          : [];
+        const link = (current: unknown, target: TFile, label: string) =>
+          preserveTaskRelationshipLink(
+            current,
+            target,
+            projected.file.path,
+            label,
+            () =>
+              this.fileManager.generateMarkdownLink(target, projected.file.path, undefined, label),
+            this.resolveTaskRelationshipLink,
+          );
+        return {
+          subtasks: children.flatMap((child, index) => {
+            const file = projectedFilesByTaskId.get(child.id)?.file;
+            return file === undefined ? [] : [link(currentLinks[index], file, child.content)];
+          }),
+          parentTask:
+            parentFile === undefined
+              ? undefined
+              : link(readTaskProperty(frontmatter, "todoist_parent_task"), parentFile, parentLabel),
+        };
+      };
+      const relationships = makeRelationships(projected.relationshipFrontmatter);
 
       if (
-        parentTask === undefined &&
-        subtasks.length === 0 &&
+        relationships.parentTask === undefined &&
+        relationships.subtasks.length === 0 &&
         !hasTaskRelationshipProperties(projected.relationshipFrontmatter)
       ) {
         continue;
       }
 
       const desiredRelationshipFrontmatter = { ...projected.relationshipFrontmatter };
-      if (
-        !applyManagedTaskRelationships(desiredRelationshipFrontmatter, { parentTask, subtasks })
-      ) {
+      if (!applyManagedTaskRelationships(desiredRelationshipFrontmatter, relationships)) {
         continue;
       }
 
@@ -2044,10 +2057,18 @@ export class ObsidianProjectSyncVault {
                 `Managed note '${projected.file.path}' changed identity before task relationships were projected`,
               );
             }
-            changed = applyManagedTaskRelationships(frontmatter, { parentTask, subtasks });
+            changed = applyManagedTaskRelationships(frontmatter, makeRelationships(frontmatter));
+            if (!changed) {
+              // A concurrent inbound sync may already have applied these links. Abort before
+              // native processFrontMatter serializes identical properties and touches mtime.
+              throw new NoManagedDocumentChangeError();
+            }
           });
         });
       } catch (error: unknown) {
+        if (error instanceof NoManagedDocumentChangeError) {
+          continue;
+        }
         if (
           !(error instanceof ManagedNoteIdentityConflictError) &&
           !(error instanceof TaskPropertyConflictError)

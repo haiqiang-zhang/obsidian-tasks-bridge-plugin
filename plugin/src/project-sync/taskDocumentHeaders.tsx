@@ -260,10 +260,11 @@ export class TaskDocumentHeaders {
     const previous = this.nativeSources.get(view);
     // Native loadFile assigns view.file before its asynchronous read replaces the old text.
     // Never borrow a previous file's task identity during that interval. A rename retains TFile.
+    // During startup the text can arrive before the first TFile; that is hydration, not a switch.
     const stale =
       previous !== undefined &&
       source === previous.source &&
-      (previous.stale || previous.file !== view.file);
+      (previous.stale || (previous.file !== null && previous.file !== view.file));
     const hydrated =
       !stale && (source !== "" || (previous?.file === view.file && previous.hydrated));
     this.nativeSources.set(view, { file: view.file, source, stale, hydrated });

@@ -6,6 +6,7 @@ import { makeSettings } from "@/factories/settings";
 import { OBSIDIAN_SYNC_SETTLE_MS } from "@/infra/obsidianSyncGate";
 import {
   PROJECT_SYNC_FOLDER_OWNERSHIP_DATA_KEY,
+  type ProjectCatalog,
   type ProjectSyncConfig,
   type ProjectSyncResult,
 } from "@/project-sync";
@@ -31,6 +32,8 @@ const runtime = vi.hoisted(() => ({
   startTaskPresentation: vi.fn(),
   startTaskPropertyTypes: vi.fn(),
   disposeTaskPropertyTypes: vi.fn(),
+  startTaskStartupStyles: vi.fn(),
+  disposeTaskStartupStyles: vi.fn(),
   settings: {
     current: {} as Record<string, unknown>,
   },
@@ -152,6 +155,13 @@ vi.mock("@/project-sync/taskPropertyTypes", () => ({
   TaskPropertyTypes: class {
     public start = runtime.startTaskPropertyTypes;
     public dispose = runtime.disposeTaskPropertyTypes;
+  },
+}));
+
+vi.mock("@/project-sync/taskDocumentStartupStyles", () => ({
+  TaskDocumentStartupStyles: class {
+    public start = runtime.startTaskStartupStyles;
+    public dispose = runtime.disposeTaskStartupStyles;
   },
 }));
 
@@ -288,6 +298,19 @@ const workProjectSyncMapping = {
   includeSubprojects: true,
   previousFolders: [],
 };
+
+const unchangedProjectCatalog = (): ProjectCatalog => ({
+  mappingId: "mapping-work",
+  rootProjectId: "work",
+  includeSubprojects: true,
+  syncedAt: "2026-10-27T00:00:00.000Z",
+  projects: [{ id: "work", parentId: null, name: "Work", childOrder: 1 }],
+  tasks: [
+    { id: "parent", projectId: "work", order: 0 },
+    { id: "child", projectId: "work", parentId: "parent", order: 1 },
+  ],
+  completionEvents: [],
+});
 
 const emptyResult = (): ProjectSyncResult => ({
   conflicts: [],
@@ -488,6 +511,7 @@ describe("TodoistPlugin async lifecycle", () => {
     expect(runtime.startTaskHeaders).toHaveBeenCalledOnce();
     expect(runtime.startTaskPresentation).toHaveBeenCalledOnce();
     expect(runtime.startTaskPropertyTypes).toHaveBeenCalledOnce();
+    expect(runtime.startTaskStartupStyles).toHaveBeenCalledOnce();
     expect(runtime.registerEditorExtension).toHaveBeenCalledOnce();
     expect(runtime.registerMarkdownPostProcessor).toHaveBeenCalledOnce();
     expect(runtime.registerBasesView).toHaveBeenCalledOnce();
@@ -508,6 +532,7 @@ describe("TodoistPlugin async lifecycle", () => {
     expect(runtime.registerCommands).toHaveBeenCalledOnce();
     plugin.onunload();
     expect(runtime.disposeTaskPropertyTypes).toHaveBeenCalledOnce();
+    expect(runtime.disposeTaskStartupStyles).toHaveBeenCalledOnce();
   });
 
   it("does not register or initialize twice while settings are pending", async () => {
@@ -934,6 +959,143 @@ describe("TodoistPlugin async lifecycle", () => {
     await plugin.loadOptions();
 
     expect(runtime.saveData).not.toHaveBeenCalled();
+  });
+
+  it("accepts synchronized JSON key ordering without rewriting settings on startup", async () => {
+    runtime.loadData.mockResolvedValueOnce(
+      Object.fromEntries(Object.entries(makeSettings()).reverse()),
+    );
+    const plugin = makePlugin(makeServices());
+
+    await plugin.loadOptions();
+
+    expect(runtime.saveData).not.toHaveBeenCalled();
+  });
+
+  it("does not save data.json for repeated unchanged project polls", async () => {
+    const catalog = unchangedProjectCatalog();
+    runtime.loadData.mockResolvedValueOnce({
+      ...makeSettings(),
+      projectSyncCatalogs: { version: 2, items: [catalog] },
+    });
+    const plugin = makePlugin(makeServices());
+    await plugin.loadOptions();
+    runtime.saveData.mockClear();
+    let latest = catalog;
+    for (let cycle = 1; cycle <= 120; cycle++) {
+      latest = {
+        ...catalog,
+        syncedAt: new Date(Date.parse(catalog.syncedAt) + cycle * 30_000).toISOString(),
+      };
+      await plugin.projectCatalogStorage.persistCatalogs([latest]);
+      // The statistics pass submits the same run again after the Vault projection.
+      await plugin.projectCatalogStorage.persistCatalogs([latest]);
+    }
+    // Re-saving an unchanged control must not flush a newer polling timestamp either.
+    await plugin.writeOptions({ debugLogging: false });
+
+    expect(runtime.saveData).not.toHaveBeenCalled();
+    expect(plugin.projectCatalogStorage.getCatalog(catalog.mappingId)?.syncedAt).toBe(
+      latest.syncedAt,
+    );
+  });
+
+  it("preserves retained tasks across two same-run catalog submissions without writing", async () => {
+    const catalog = unchangedProjectCatalog();
+    runtime.loadData.mockResolvedValueOnce({
+      ...makeSettings(),
+      projectSyncCatalogs: { version: 2, items: [catalog] },
+    });
+    const plugin = makePlugin(makeServices());
+    await plugin.loadOptions();
+    runtime.saveData.mockClear();
+    const retained = { ...catalog, syncedAt: "2026-10-27T01:00:00.000Z" };
+
+    await plugin.projectCatalogStorage.persistCatalogs([retained]);
+    await plugin.projectCatalogStorage.persistCatalogs([
+      { ...retained, tasks: [catalog.tasks[0]] },
+    ]);
+
+    expect(plugin.projectCatalogStorage.getCatalog(catalog.mappingId)?.tasks).toEqual(
+      catalog.tasks,
+    );
+    expect(runtime.saveData).not.toHaveBeenCalled();
+  });
+
+  it("persists real catalog changes and retries a failed write of the same content", async () => {
+    const catalog = unchangedProjectCatalog();
+    runtime.loadData.mockResolvedValueOnce({
+      ...makeSettings(),
+      projectSyncCatalogs: { version: 2, items: [catalog] },
+    });
+    const plugin = makePlugin(makeServices());
+    await plugin.loadOptions();
+    runtime.saveData.mockClear();
+    runtime.saveData.mockRejectedValueOnce(new Error("disk unavailable"));
+    const changed = { ...catalog, syncedAt: "2026-10-27T01:00:00.000Z", tasks: [catalog.tasks[0]] };
+
+    await expect(plugin.projectCatalogStorage.persistCatalogs([changed])).rejects.toThrow(
+      "disk unavailable",
+    );
+    await plugin.projectCatalogStorage.persistCatalogs([changed]);
+
+    expect(runtime.saveData).toHaveBeenCalledTimes(2);
+    expect(runtime.saveData).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        projectSyncCatalogs: { version: 2, items: [changed] },
+      }),
+    );
+  });
+
+  it("does not echo a remote catalog that differs only by polling time", async () => {
+    const catalog = unchangedProjectCatalog();
+    const stored = { ...makeSettings(), projectSyncCatalogs: { version: 2, items: [catalog] } };
+    runtime.loadData.mockResolvedValueOnce(stored);
+    const plugin = makePlugin(makeServices());
+    await plugin.loadOptions();
+    runtime.saveData.mockClear();
+    const latest = { ...catalog, syncedAt: "2026-10-27T01:00:00.000Z" };
+    await plugin.projectCatalogStorage.persistCatalogs([latest]);
+    runtime.loadData.mockResolvedValueOnce(stored);
+
+    await plugin.onExternalSettingsChange();
+
+    expect(runtime.saveData).not.toHaveBeenCalled();
+    expect(plugin.projectCatalogStorage.getCatalog(catalog.mappingId)?.syncedAt).toBe(
+      latest.syncedAt,
+    );
+  });
+
+  it("skips redundant local settings writes but retries failed changes", async () => {
+    const plugin = makePlugin(makeServices());
+    runtime.loadData.mockResolvedValueOnce(makeSettings());
+    await plugin.loadOptions();
+    await plugin.writeOptions({ debugLogging: false });
+    expect(runtime.saveData).not.toHaveBeenCalled();
+
+    runtime.saveData.mockRejectedValueOnce(new Error("disk unavailable"));
+    await expect(plugin.writeOptions({ debugLogging: true })).rejects.toThrow("disk unavailable");
+    await plugin.writeOptions({ debugLogging: true });
+    await plugin.writeOptions({ debugLogging: true });
+
+    expect(runtime.saveData).toHaveBeenCalledTimes(2);
+  });
+
+  it("writes the previous setting again after a failed save leaves disk state uncertain", async () => {
+    const plugin = makePlugin(makeServices());
+    runtime.loadData.mockResolvedValueOnce(makeSettings({ debugLogging: false }));
+    await plugin.loadOptions();
+    runtime.saveData.mockRejectedValueOnce(new Error("write acknowledgement failed"));
+
+    await expect(plugin.writeOptions({ debugLogging: true })).rejects.toThrow(
+      "write acknowledgement failed",
+    );
+    await plugin.writeOptions({ debugLogging: false });
+
+    expect(runtime.saveData).toHaveBeenCalledTimes(2);
+    expect(runtime.saveData).toHaveBeenLastCalledWith(
+      expect.objectContaining({ debugLogging: false }),
+    );
   });
 
   it("preserves Project catalogs in plugin data when settings are updated", async () => {
@@ -2087,6 +2249,25 @@ describe("TodoistPlugin async lifecycle", () => {
     runtime.loadData.mockResolvedValueOnce(makeSettings({ renderDateIcon: false, version: 1 }));
 
     await plugin.onExternalSettingsChange();
+
+    expect(runtime.settings.current.renderDateIcon).toBe(false);
+    expect(runtime.saveData).not.toHaveBeenCalled();
+  });
+
+  it("does not echo overlapping read-only Sync notifications or reordered JSON keys", async () => {
+    const plugin = makePlugin(makeServices());
+    runtime.loadData.mockResolvedValueOnce(makeSettings());
+    await plugin.loadOptions();
+    const firstRead = deferred<unknown>();
+    const incoming = makeSettings({ renderDateIcon: false });
+    runtime.loadData
+      .mockReturnValueOnce(firstRead.promise)
+      .mockResolvedValueOnce(Object.fromEntries(Object.entries(incoming).reverse()));
+
+    const first = plugin.onExternalSettingsChange();
+    const second = plugin.onExternalSettingsChange();
+    firstRead.resolve(incoming);
+    await Promise.all([first, second]);
 
     expect(runtime.settings.current.renderDateIcon).toBe(false);
     expect(runtime.saveData).not.toHaveBeenCalled();

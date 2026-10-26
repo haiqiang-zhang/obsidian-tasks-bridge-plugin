@@ -1,4 +1,4 @@
-import { dump as dumpYaml, load as loadYaml } from "js-yaml";
+import { CORE_SCHEMA, dump as dumpYaml, load as loadYaml } from "js-yaml";
 import type { FileManager, TAbstractFile, TFile, Vault } from "obsidian";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -35,7 +35,7 @@ import type { ProjectSyncConfig, ProjectSyncMapping, ProjectSyncSnapshot } from 
 import { ObsidianProjectSyncVault } from "./vault";
 
 vi.mock("obsidian", async () => {
-  const { load, dump } = await import("js-yaml");
+  const { CORE_SCHEMA, load, dump } = await import("js-yaml");
   // biome-ignore lint/complexity/noStaticOnlyClass: constructor-shaped mock for instanceof checks
   class MockTFile {
     static [Symbol.hasInstance](value: unknown): boolean {
@@ -83,8 +83,10 @@ vi.mock("obsidian", async () => {
         .filter((segment) => segment !== "")
         .join("/"),
     getFrontMatterInfo: getFrontmatterInfo,
-    parseYaml: (yaml: string) => load(yaml),
-    stringifyYaml: (value: unknown) => dump(value, { lineWidth: -1, noRefs: true }),
+    // Obsidian's native YAML core schema leaves unquoted timestamps as strings.
+    parseYaml: (yaml: string) => load(yaml, { schema: CORE_SCHEMA }),
+    stringifyYaml: (value: unknown) =>
+      dump(value, { schema: CORE_SCHEMA, lineWidth: -1, noRefs: true }),
   };
 });
 
@@ -267,11 +269,11 @@ class FakeFileManager {
         throw new Error("Missing fake file");
       }
       const info = frontmatterInfo(entry.content);
-      const parsed = loadYaml(info.frontmatter);
+      const parsed = loadYaml(info.frontmatter, { schema: CORE_SCHEMA });
       const frontmatter = isRecord(parsed) ? parsed : {};
       update(frontmatter);
       const tail = entry.content.slice(info.contentStart);
-      entry.content = `---\n${dumpYaml(frontmatter, { lineWidth: -1, noRefs: true })}---\n${tail}`;
+      entry.content = `---\n${dumpYaml(frontmatter, { schema: CORE_SCHEMA, lineWidth: -1, noRefs: true })}---\n${tail}`;
       this.afterProcessFrontMatter?.();
     },
   );
@@ -2317,6 +2319,161 @@ describe("ObsidianProjectSyncVault", () => {
 
     expect(secondResult).toMatchObject({ created: 0, moved: 0, unchanged: 3 });
     expect(secondResult.conflicts).toEqual([]);
+  });
+
+  it.each([
+    "wiki",
+    "markdown",
+  ] as const)("does not rewrite unchanged relationships created by another device using %s links", async (initialFormat) => {
+    const project = makeProject("root", { name: "Root" });
+    const parent = makeTask("parent", { content: "Parent task", project });
+    const child = makeTask("child", { content: "Child task", parentId: parent.id, project });
+    const snapshot: ProjectSyncSnapshot = {
+      rootProjectId: project.id,
+      projects: [project],
+      tasks: [
+        { task: parent, completed: false },
+        { task: child, completed: false },
+      ],
+      syncedAt: "2026-10-27T00:00:00.000Z",
+    };
+    const wikiLink = fileManager.generateMarkdownLink.bind(fileManager);
+    let format: string = initialFormat;
+    vi.spyOn(fileManager, "generateMarkdownLink").mockImplementation(
+      (file, source, subpath, alias) =>
+        format === "wiki"
+          ? wikiLink(file, source, subpath, alias)
+          : `[${alias ?? file.name}](${encodeURI(file.path)})`,
+    );
+    adapter = new ObsidianProjectSyncVault(
+      vault as unknown as Vault,
+      fileManager as unknown as FileManager,
+      () => new Set(),
+      undefined,
+      catalogStorage,
+      folderOwnershipStorage,
+      (linkpath) =>
+        vault.files.get(linkpath.endsWith(".md") ? linkpath : `${linkpath}.md`)?.file ?? null,
+    );
+    await adapter.reconcile(snapshot, mapping);
+    const original = [...vault.files].map(([path, entry]) => [path, entry.content]);
+    vault.process.mockClear();
+    fileManager.processFrontMatter.mockClear();
+    format = initialFormat === "wiki" ? "markdown" : "wiki";
+
+    const result = await adapter.reconcile(
+      { ...snapshot, syncedAt: "2026-10-28T08:00:00.000Z" },
+      mapping,
+    );
+
+    expect(result).toMatchObject({ created: 0, moved: 0, updated: 0, unchanged: 2 });
+    expect(result.conflicts).toEqual([]);
+    expect([...vault.files].map(([path, entry]) => [path, entry.content])).toEqual(original);
+    expect(vault.process).not.toHaveBeenCalled();
+    expect(fileManager.processFrontMatter).not.toHaveBeenCalled();
+
+    const renamed = { ...child, content: "Renamed child" };
+    await adapter.reconcile(
+      {
+        ...snapshot,
+        tasks: [
+          { task: parent, completed: false },
+          { task: renamed, completed: false },
+        ],
+      },
+      mapping,
+    );
+    const parentProperties = parseFrontmatter(
+      vault.files.get("Sync/Parent task/Parent task.task.md")?.content ?? "",
+    );
+    expect(parentProperties.subtasks).toEqual([
+      format === "markdown"
+        ? "[Renamed child](Sync/Parent%20task/Renamed%20child.task.md)"
+        : "[[Sync/Parent task/Renamed child.task|Renamed child]]",
+    ]);
+  });
+
+  it("does not rewrite an inbound relationship that became current before the atomic callback", async () => {
+    const project = makeProject("root", { name: "Root" });
+    const parent = makeTask("parent", { content: "Parent", project });
+    const child = makeTask("child", { content: "Child", parentId: parent.id, project });
+    const snapshot: ProjectSyncSnapshot = {
+      rootProjectId: project.id,
+      projects: [project],
+      tasks: [
+        { task: parent, completed: false },
+        { task: child, completed: false },
+      ],
+      syncedAt: "2026-10-27T00:00:00.000Z",
+    };
+    await adapter.reconcile(snapshot, mapping);
+    const entry = vault.files.get("Sync/Parent/Parent.task.md");
+    if (entry === undefined) {
+      throw new Error("Missing parent fixture");
+    }
+    const original = entry.content.replace(
+      "subtasks:",
+      "# Keep this native YAML comment\nsubtasks:",
+    );
+    entry.content = original.replace("[[Sync/Parent/Child.task|Child]]", "[[Old child]]");
+    const nativeProcess = fileManager.processFrontMatter.getMockImplementation();
+    if (nativeProcess === undefined) {
+      throw new Error("Missing native frontmatter fixture");
+    }
+    fileManager.processFrontMatter.mockImplementationOnce(async (file, update) => {
+      entry.content = original;
+      await nativeProcess(file, update);
+    });
+    const wroteFrontmatter = vi.fn();
+    fileManager.afterProcessFrontMatter = wroteFrontmatter;
+
+    const result = await adapter.reconcile(snapshot, mapping);
+
+    expect(result).toMatchObject({ updated: 0, unchanged: 2 });
+    expect(result.conflicts).toEqual([]);
+    expect(entry.content).toBe(original);
+    expect(wroteFrontmatter).not.toHaveBeenCalled();
+  });
+
+  it("preserves native unquoted dates and precise timestamps across unchanged syncs", async () => {
+    const project = makeProject("root", { name: "Root" });
+    const parent = makeTask("parent", { content: "Parent", project });
+    const child = makeTask("child", {
+      content: "Child",
+      parentId: parent.id,
+      project,
+      authoritativeCreatedAt: "2026-10-01T09:15:16.123456+08:00",
+      updatedAt: "2026-10-20T08:10:11.654321Z",
+      completedAt: "2026-10-22T07:08:09.123456Z",
+      due: { date: "2026-10-22", datetime: "2026-10-22T09:30:00+08:00", isRecurring: false },
+      deadline: { date: "2026-10-23" },
+    });
+    const snapshot: ProjectSyncSnapshot = {
+      rootProjectId: project.id,
+      projects: [project],
+      tasks: [
+        { task: parent, completed: false },
+        { task: child, completed: true },
+      ],
+      syncedAt: "2026-10-27T00:00:00.000Z",
+    };
+    await adapter.reconcile(snapshot, mapping);
+    const path = "Sync/Parent/Child.task.md";
+    const original = vault.files.get(path)?.content ?? "";
+    // Native processFrontMatter uses YAML's core schema and emits these string scalars plainly.
+    expect(original).toContain("created at: 2026-10-01T09:15:16.123456+08:00");
+    expect(original).toContain("due date: 2026-10-22");
+    vault.process.mockClear();
+    fileManager.processFrontMatter.mockClear();
+
+    for (const syncedAt of ["2026-10-27T01:00:00.000Z", "2026-10-28T01:00:00.000Z"]) {
+      const result = await adapter.reconcile({ ...snapshot, syncedAt }, mapping);
+      expect(result).toMatchObject({ updated: 0, unchanged: 2 });
+    }
+
+    expect(vault.files.get(path)?.content).toBe(original);
+    expect(vault.process).not.toHaveBeenCalled();
+    expect(fileManager.processFrontMatter).not.toHaveBeenCalled();
   });
 
   it("recursively nests a task that is both a subtask and a parent", async () => {
@@ -6284,7 +6441,7 @@ const emptySnapshot = (project: ReturnType<typeof makeProject>): ProjectSyncSnap
 });
 
 const parseFrontmatter = (content: string): Record<string, unknown> => {
-  const parsed = loadYaml(frontmatterInfo(content).frontmatter);
+  const parsed = loadYaml(frontmatterInfo(content).frontmatter, { schema: CORE_SCHEMA });
   return isRecord(parsed) ? parsed : {};
 };
 

@@ -12,6 +12,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### 🐛 Bug Fixes
+
+- Stop unchanged Todoist polls and duplicate settings notifications from rewriting plugin data through Obsidian Sync.
+- Preserve equivalent task relationship links across devices with different link preferences, avoiding unnecessary Markdown rewrites.
+- Prepare a native `tasks-bridge-mobile-startup` CSS snippet for the next phone startup, keeping the temporary task preview behind Obsidian's loading indicator until the real workspace is ready. Installation is idempotent, preserves user edits, and does not rewrite task files.
+- Recognize task text restored before its native file reference, so local task headers do not wait for an edit or the metadata index.
+
 ## v2.11.7 (2026-10-27)
 
 ### 🐛 Bug Fixes

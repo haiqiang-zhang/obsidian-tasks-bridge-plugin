@@ -11,6 +11,7 @@ export {
   type ProjectCatalogCollection,
   type ProjectCatalogStorage,
   parseProjectCatalog,
+  projectCatalogCollectionsHaveSameContent,
   readProjectCatalogCollection,
   withProjectCatalogCollection,
 } from "./catalog";

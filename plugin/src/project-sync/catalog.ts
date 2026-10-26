@@ -40,6 +40,70 @@ export type ProjectCatalogStorage = {
   persistCatalogs(catalogs: readonly ProjectCatalog[]): Promise<void>;
 };
 
+/**
+ * Poll freshness belongs in the in-memory merge state, but is not a content change worth
+ * synchronizing through data.json. Keep mergeProjectCatalogCollections' timestamp ordering;
+ * use this only after merging to decide whether the resulting catalog needs to be written.
+ */
+export const projectCatalogCollectionsHaveSameContent = (
+  current: ProjectCatalogCollection,
+  incoming: ProjectCatalogCollection,
+): boolean => {
+  const mappingIds = Object.keys(current);
+  return (
+    mappingIds.length === Object.keys(incoming).length &&
+    mappingIds.every((mappingId) => {
+      const left = current[mappingId];
+      const right = incoming[mappingId];
+      return (
+        right !== undefined &&
+        left.mappingId === right.mappingId &&
+        left.rootProjectId === right.rootProjectId &&
+        left.includeSubprojects === right.includeSubprojects &&
+        sameCatalogItems(
+          left.projects,
+          right.projects,
+          (a, b) => a.parentId === b.parentId && a.name === b.name && a.childOrder === b.childOrder,
+        ) &&
+        sameCatalogItems(
+          left.tasks,
+          right.tasks,
+          (a, b) =>
+            a.projectId === b.projectId &&
+            a.parentId === b.parentId &&
+            a.sectionId === b.sectionId &&
+            a.order === b.order &&
+            (a.missingCount ?? 0) === (b.missingCount ?? 0),
+        ) &&
+        sameCatalogItems(
+          left.completionEvents,
+          right.completionEvents,
+          (a, b) =>
+            a.taskId === b.taskId && a.projectId === b.projectId && a.completedAt === b.completedAt,
+        )
+      );
+    })
+  );
+};
+
+const sameCatalogItems = <T extends { id: string }>(
+  left: readonly T[],
+  right: readonly T[],
+  sameContent: (left: T, right: T) => boolean,
+): boolean => {
+  if (left.length !== right.length) {
+    return false;
+  }
+  const byId = new Map(right.map((item) => [item.id, item]));
+  if (byId.size !== right.length || new Set(left.map((item) => item.id)).size !== left.length) {
+    return false;
+  }
+  return left.every((item) => {
+    const matching = byId.get(item.id);
+    return matching !== undefined && sameContent(item, matching);
+  });
+};
+
 export const makeProjectCatalog = (
   snapshot: ProjectSyncSnapshot,
   mapping: ProjectSyncMapping,

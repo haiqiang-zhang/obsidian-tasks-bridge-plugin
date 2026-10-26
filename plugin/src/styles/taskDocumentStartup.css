@@ -1,0 +1,117 @@
+/* Tasks Bridge mobile startup guard. Managed by Tasks Bridge. */
+/* Obsidian shows a temporary MarkdownView before community plugins execute. Native snippets
+   load before that surface is revealed. Match only its own task properties, never an embed.
+   This signature does not require rewriting task files or waiting for the metadata index.
+   The native loading spinner remains visible until Obsidian replaces the temporary page. */
+.app-container.mod-loading
+.workspace-leaf-content[data-type="markdown"]:has(
+  > .view-header .mod-loading-icon
+)[data-mode="source"]:has(
+  > .view-content
+    > .markdown-source-view.is-live-preview
+    > .cm-editor
+    > .cm-scroller
+    > .cm-sizer
+    > .metadata-container
+    > .metadata-content
+    > .metadata-properties
+    > .metadata-property[data-property-key="task id"]
+):has(
+  > .view-content
+    > .markdown-source-view.is-live-preview
+    > .cm-editor
+    > .cm-scroller
+    > .cm-sizer
+    > .metadata-container
+    > .metadata-content
+    > .metadata-properties
+    > .metadata-property[data-property-key="content"]
+):has(
+  > .view-content
+    > .markdown-source-view.is-live-preview
+    > .cm-editor
+    > .cm-scroller
+    > .cm-sizer
+    > .metadata-container
+    > .metadata-content
+    > .metadata-properties
+    > .metadata-property[data-property-key="status"]
+):has(
+  > .view-content
+    > .markdown-source-view.is-live-preview
+    > .cm-editor
+    > .cm-scroller
+    > .cm-sizer
+    > .metadata-container
+    > .metadata-content
+    > .metadata-properties
+    > .metadata-property[data-property-key="url"]
+    > .metadata-property-value
+    > .metadata-link
+    > .external-link:is(
+      [data-href^="https://todoist.com/app/project/"][data-href*="/task/"],
+      [data-href^="https://app.todoist.com/app/task/"]
+    )
+),
+.app-container.mod-loading
+  .workspace-leaf-content[data-type="markdown"]:has(
+    > .view-header .mod-loading-icon
+  )[data-mode="preview"]:has(
+    > .view-content
+      > .markdown-reading-view
+      > .markdown-preview-view
+      > .markdown-preview-sizer
+      > .mod-header
+      > .metadata-container
+      > .metadata-content
+      > .metadata-properties
+      > .metadata-property[data-property-key="task id"]
+  ):has(
+    > .view-content
+      > .markdown-reading-view
+      > .markdown-preview-view
+      > .markdown-preview-sizer
+      > .mod-header
+      > .metadata-container
+      > .metadata-content
+      > .metadata-properties
+      > .metadata-property[data-property-key="content"]
+  ):has(
+    > .view-content
+      > .markdown-reading-view
+      > .markdown-preview-view
+      > .markdown-preview-sizer
+      > .mod-header
+      > .metadata-container
+      > .metadata-content
+      > .metadata-properties
+      > .metadata-property[data-property-key="status"]
+  ):has(
+    > .view-content
+      > .markdown-reading-view
+      > .markdown-preview-view
+      > .markdown-preview-sizer
+      > .mod-header
+      > .metadata-container
+      > .metadata-content
+      > .metadata-properties
+      > .metadata-property[data-property-key="url"]
+      > .metadata-property-value
+      > .metadata-link
+      > .external-link:is(
+        [data-href^="https://todoist.com/app/project/"][data-href*="/task/"],
+        [data-href^="https://app.todoist.com/app/task/"]
+      )
+  ) {
+  --tasks-bridge-mobile-preview-visibility: hidden;
+}
+
+.app-container.mod-loading
+  .workspace-leaf-content[data-type="markdown"]:has(> .view-header .mod-loading-icon)
+  > .view-content,
+.app-container.mod-loading
+  .workspace-leaf-content[data-type="markdown"]:has(> .view-header .mod-loading-icon)
+  > .view-header
+  .view-header-title-container {
+  visibility: var(--tasks-bridge-mobile-preview-visibility, inherit);
+}

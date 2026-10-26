@@ -41,6 +41,7 @@ import {
   type ProjectSyncFolderOwnershipRegistry,
   type ProjectSyncFolderOwnershipStorage,
   type ProjectSyncResult,
+  projectCatalogCollectionsHaveSameContent,
   readProjectCatalogCollection,
   recordCreatedFolders as recordCreatedFolderOwnership,
   releaseOwnedFolderPaths as releaseFolderOwnership,
@@ -53,6 +54,7 @@ import { TaskDocumentEmbeds } from "@/project-sync/taskDocumentEmbeds";
 import { TaskDocumentHeaders } from "@/project-sync/taskDocumentHeaders";
 import { TaskDocumentPresentation } from "@/project-sync/taskDocumentPresentation";
 import { createTaskDocumentReadyExtension } from "@/project-sync/taskDocumentReadyExtension";
+import { TaskDocumentStartupStyles } from "@/project-sync/taskDocumentStartupStyles";
 import { taskManagedRegionExtension } from "@/project-sync/taskManagedRegionExtension";
 import { TaskPropertyTypes } from "@/project-sync/taskPropertyTypes";
 import { LEGACY_QUERY_CODE_BLOCK, QUERY_CODE_BLOCK, QueryInjector } from "@/query/injector";
@@ -89,8 +91,9 @@ export default class TodoistPlugin extends Plugin {
   public readonly projectSyncFolderOwnershipStorage: ProjectSyncFolderOwnershipStorage;
 
   private settingsQueue: Promise<void> = Promise.resolve();
-  private settingsOperationGeneration = 0;
-  private completedSettingsOperationGeneration = 0;
+  private settingsWriteGeneration = 0;
+  private settingsWriteInFlight = false;
+  private persistedSettingsData: string | undefined;
   private apiTokenUpdateQueue: Promise<void> = Promise.resolve();
   private apiTokenGeneration = 0;
   private projectSyncConfigGeneration = 0;
@@ -104,9 +107,11 @@ export default class TodoistPlugin extends Plugin {
   private readonly taskDocumentHeaders: TaskDocumentHeaders;
   private readonly taskDocumentPresentation: TaskDocumentPresentation;
   private readonly taskPropertyTypes: TaskPropertyTypes;
+  private readonly taskDocumentStartupStyles: TaskDocumentStartupStyles;
   private initialization: Promise<void> | undefined;
   private disposed = false;
   private projectCatalogs: ProjectCatalogCollection = {};
+  private projectCatalogsNeedsPersist = false;
   private projectSyncFolderOwnership: ProjectSyncFolderOwnershipRegistry =
     emptyProjectSyncFolderOwnershipRegistry();
   private projectSyncFolderOwnershipOpaque: ProjectSyncFolderOwnershipOpaqueData | undefined;
@@ -145,6 +150,7 @@ export default class TodoistPlugin extends Plugin {
     this.taskDocumentHeaders = new TaskDocumentHeaders(this);
     this.taskDocumentEmbeds = new TaskDocumentEmbeds(this);
     this.taskPropertyTypes = new TaskPropertyTypes(app);
+    this.taskDocumentStartupStyles = new TaskDocumentStartupStyles(app);
   }
 
   onload(): void {
@@ -152,6 +158,7 @@ export default class TodoistPlugin extends Plugin {
       return;
     }
     this.taskPropertyTypes.start((eventRef) => this.registerEvent(eventRef));
+    this.taskDocumentStartupStyles.start();
     // Restored Markdown views can render while settings and credentials are still loading.
     // Install local document presentation before yielding so their first paint is a task view.
     this.taskDocumentPresentation.start((eventRef) => this.registerEvent(eventRef));
@@ -357,6 +364,7 @@ export default class TodoistPlugin extends Plugin {
     this.taskDocumentHeaders.dispose();
     this.taskDocumentEmbeds.dispose();
     this.taskPropertyTypes.dispose();
+    this.taskDocumentStartupStyles.dispose();
     this.apiTokenGeneration++;
     this.projectSyncConfigGeneration++;
     this.services.todoist.reset();
@@ -392,6 +400,7 @@ export default class TodoistPlugin extends Plugin {
         return;
       }
 
+      this.persistedSettingsData = serializeSettingsData(storedData);
       const localQueryCache: unknown = this.app.loadLocalStorage(queryCacheStorageKey);
       const legacyQueryCache = isRecord(storedData) ? storedData.queryCache : undefined;
       this.queryCache.load(localQueryCache ?? legacyQueryCache);
@@ -479,6 +488,15 @@ export default class TodoistPlugin extends Plugin {
       useSettingsStore.setState(normalizedUpdate);
       this.releaseProjectSyncFolderOwnershipOutsideSettings(useSettingsStore.getState());
       this.applySettingsRuntime(previousSettings);
+      if (
+        this.persistedSettingsData !== undefined &&
+        !this.projectCatalogsNeedsPersist &&
+        !this.projectSyncFolderOwnershipNeedsPersist &&
+        serializeSettingsData(previousSettings) ===
+          serializeSettingsData(useSettingsStore.getState())
+      ) {
+        return;
+      }
       await this.persistSettings();
     });
   }
@@ -491,20 +509,30 @@ export default class TodoistPlugin extends Plugin {
     // Start the read before queueing. If a local save was already in flight when Sync replaced
     // data.json, this captures Sync's version before that stale save can finish and overwrite it.
     const storedDataRead = this.loadData();
-    const restoreAfterOlderSettingsOperation =
-      this.completedSettingsOperationGeneration < this.settingsOperationGeneration;
+    const writeGeneration = this.settingsWriteGeneration;
+    const writeWasInFlight = this.settingsWriteInFlight;
     return this.enqueueSettingsOperation(async () => {
       const storedData: unknown = await storedDataRead;
       if (this.disposed) {
         return;
       }
 
+      // Only a real write can overwrite this captured external file. Overlapping read-only
+      // Sync notifications must not make us echo the same settings back to the other device.
+      const restoreAfterOlderSettingsWrite =
+        writeWasInFlight || writeGeneration !== this.settingsWriteGeneration;
+      this.persistedSettingsData = restoreAfterOlderSettingsWrite
+        ? undefined
+        : serializeSettingsData(storedData);
       const previousSettings = useSettingsStore.getState();
       const externalCatalogs = readProjectCatalogCollection(storedData);
       const mergedCatalogs = mergeProjectCatalogCollections(this.projectCatalogs, externalCatalogs);
-      const catalogsNeedRestore =
-        JSON.stringify(mergedCatalogs) !== JSON.stringify(externalCatalogs);
+      const catalogsNeedRestore = !projectCatalogCollectionsHaveSameContent(
+        mergedCatalogs,
+        externalCatalogs,
+      );
       this.projectCatalogs = mergedCatalogs;
+      this.projectCatalogsNeedsPersist ||= catalogsNeedRestore;
       const externalFolderOwnership = decodeProjectSyncFolderOwnershipRegistry(storedData);
       let folderOwnershipNeedsRestore = false;
       if (externalFolderOwnership.status === "opaque") {
@@ -554,8 +582,8 @@ export default class TodoistPlugin extends Plugin {
       }
 
       if (
-        restoreAfterOlderSettingsOperation ||
-        catalogsNeedRestore ||
+        restoreAfterOlderSettingsWrite ||
+        this.projectCatalogsNeedsPersist ||
         folderOwnershipNeedsRestore ||
         folderOwnershipScopesRevoked ||
         !hasCanonicalStoredSettings(storedData, nextSettings)
@@ -1024,16 +1052,7 @@ export default class TodoistPlugin extends Plugin {
   }
 
   private enqueueSettingsOperation(operation: () => Promise<void>): Promise<void> {
-    const generation = ++this.settingsOperationGeneration;
-    const pending = this.settingsQueue
-      .catch(() => undefined)
-      .then(operation)
-      .finally(() => {
-        this.completedSettingsOperationGeneration = Math.max(
-          this.completedSettingsOperationGeneration,
-          generation,
-        );
-      });
+    const pending = this.settingsQueue.catch(() => undefined).then(operation);
     this.settingsQueue = pending;
     return pending;
   }
@@ -1043,21 +1062,31 @@ export default class TodoistPlugin extends Plugin {
       return;
     }
 
+    const data = withProjectSyncFolderOwnershipRegistry(
+      withProjectCatalogCollection({ ...useSettingsStore.getState() }, this.projectCatalogs),
+      this.projectSyncFolderOwnership,
+      this.projectSyncFolderOwnershipOpaque,
+    );
+    const serialized = serializeSettingsData(data);
     try {
-      await this.saveData(
-        withProjectSyncFolderOwnershipRegistry(
-          withProjectCatalogCollection({ ...useSettingsStore.getState() }, this.projectCatalogs),
-          this.projectSyncFolderOwnership,
-          this.projectSyncFolderOwnershipOpaque,
-        ),
-      );
+      if (serialized !== this.persistedSettingsData) {
+        this.settingsWriteGeneration++;
+        this.settingsWriteInFlight = true;
+        await this.saveData(data);
+        this.persistedSettingsData = serialized;
+      }
+      this.projectCatalogsNeedsPersist = false;
       this.projectSyncFolderOwnershipNeedsPersist = false;
       this.clearProjectSyncFolderOwnershipRetry();
     } catch (error: unknown) {
+      // A failed write can still have changed the file before reporting its error.
+      this.persistedSettingsData = undefined;
       if (this.projectSyncFolderOwnershipNeedsPersist) {
         this.scheduleProjectSyncFolderOwnershipRetry();
       }
       throw error;
+    } finally {
+      this.settingsWriteInFlight = false;
     }
   }
 
@@ -1075,10 +1104,16 @@ export default class TodoistPlugin extends Plugin {
         incoming[catalog.mappingId] = catalog;
       }
       const merged = mergeProjectCatalogCollections(this.projectCatalogs, incoming);
-      if (JSON.stringify(merged) === JSON.stringify(this.projectCatalogs)) {
+      this.projectCatalogsNeedsPersist ||= !projectCatalogCollectionsHaveSameContent(
+        this.projectCatalogs,
+        merged,
+      );
+      // Retain the newest observation for conflict resolution and same-run catalog unions,
+      // even when only the polling timestamp changed and no synchronized write is needed.
+      this.projectCatalogs = merged;
+      if (!this.projectCatalogsNeedsPersist) {
         return;
       }
-      this.projectCatalogs = merged;
       await this.persistSettings();
     });
   }
@@ -1478,14 +1513,23 @@ const hasFolderOwnershipRecoveryContext = (storedData: unknown): boolean =>
   isRecord(storedData) &&
   (typeof storedData.version === "number" || PROJECT_SYNC_FOLDER_OWNERSHIP_DATA_KEY in storedData);
 
+const serializeSettingsData = (data: unknown): string | undefined =>
+  JSON.stringify(data, (_key: string, value: unknown) =>
+    isRecord(value)
+      ? Object.fromEntries(
+          Object.entries(value).sort(([left], [right]) => left.localeCompare(right)),
+        )
+      : value,
+  );
+
 const hasCanonicalStoredSettings = (storedData: unknown, settings: Settings): boolean => {
   if (!isRecord(storedData)) {
     return false;
   }
   const folderOwnership = decodeProjectSyncFolderOwnershipRegistry(storedData);
   return (
-    JSON.stringify(storedData) ===
-    JSON.stringify(
+    serializeSettingsData(storedData) ===
+    serializeSettingsData(
       withProjectSyncFolderOwnershipRegistry(
         withProjectCatalogCollection({ ...settings }, readProjectCatalogCollection(storedData)),
         folderOwnership.registry,

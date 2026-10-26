@@ -62,6 +62,7 @@ export const makeServices = (plugin: TodoistPlugin): Services => {
       runInternalMutation,
       plugin.projectCatalogStorage,
       plugin.projectSyncFolderOwnershipStorage,
+      (linkpath, sourcePath) => plugin.app.metadataCache.getFirstLinkpathDest(linkpath, sourcePath),
     ),
     projectSyncConfig,
     new ObsidianProjectSyncStatisticsRepository(

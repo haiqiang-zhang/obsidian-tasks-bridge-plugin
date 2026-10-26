@@ -469,6 +469,63 @@ describe("native task document headers", () => {
     expect(harness.caches.size).toBe(0);
   });
 
+  it.each([
+    "source",
+    "preview",
+  ] as const)("hydrates a restored %s task whose native text arrives before its file", async (mode) => {
+    const harness = setup();
+    const file = harness.addFile("Projects/Restored.task.md");
+    const native = harness.addView(file);
+    const source = taskSource("restored");
+    native.view.file = null;
+    native.setMode(mode);
+    native.setSource(source);
+    harness.headers.start(harness.registerEvent);
+    await flushMicrotasks();
+    expect(native.contentEl.querySelector(hostSelector)).toBeNull();
+
+    native.view.file = file;
+    harness.emit("workspace", "file-open");
+    await flushMicrotasks();
+
+    const host = native.contentEl.querySelector(hostSelector);
+    expect(host).toHaveTextContent("Task title");
+    expect(host?.parentElement).toBe(mode === "source" ? native.sourceSizer : native.previewHeader);
+    expect(native.contentEl).toHaveClass(contentClass);
+    expect(native.view.getViewData()).toBe(source);
+    expect(harness.caches.size).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+
+    harness.headers.requestRefresh();
+    await flushMicrotasks();
+    expect(native.contentEl.querySelector(hostSelector)).toBe(host);
+  });
+
+  it("keeps previous-file text stale when a file switch temporarily clears the native file", async () => {
+    const harness = setup();
+    const first = harness.addFile("Projects/First.task.md");
+    const second = harness.addFile("Projects/Second.task.md");
+    const native = harness.addView(first);
+    native.setSource(taskSource("first", taskProperties("first", "First")));
+    harness.start();
+    await flushMicrotasks();
+    expect(native.contentEl.querySelector(hostSelector)).toHaveTextContent("First");
+
+    native.view.file = null;
+    harness.emit("workspace", "file-open");
+    await flushMicrotasks();
+    native.view.file = second;
+    harness.emit("workspace", "file-open");
+    await flushMicrotasks();
+    expect(native.contentEl.querySelector(hostSelector)).toBeNull();
+
+    native.setSource(taskSource("second", taskProperties("second", "Second")));
+    harness.headers.requestRefresh();
+    await flushMicrotasks();
+    expect(native.contentEl.querySelector(hostSelector)).toHaveTextContent("Second");
+    expect(latestProps().task.taskId).toBe("second");
+  });
+
   it("retains known duplicate protection for local source and another indexed task", async () => {
     const harness = setup();
     const native = harness.addView(harness.addFile("Projects/Restored.task.md"));
