@@ -16,20 +16,20 @@
 
 // Task documents use the native Markdown index and editor. Only the visual Properties panel is
 // hidden; the YAML remains editable in Source mode and available to native property/link features.
-// Use the validated header state, never the separately debounced filename decoration. Limit this
-// to the file's own native header so embedded notes keep their ordinary Properties and titles.
-.view-content.tasks-bridge-task-content {
-  > .markdown-source-view > .cm-editor > .cm-scroller > .cm-sizer,
-  > .markdown-reading-view > .markdown-preview-view > .markdown-preview-sizer > .mod-header {
-    > .metadata-container {
-      --metadata-display-editing: none;
-      --metadata-display-reading: none;
-      display: none !important;
-    }
+// The validated editor state is ready before the workspace exposes its restored Markdown leaf.
+// Cover that first paint as well as mounted headers, never using the debounced filename class.
+// Limit selectors to the file's own native header so embeds keep their Properties and titles.
+.view-content.tasks-bridge-task-content > .markdown-source-view > .cm-editor > .cm-scroller > .cm-sizer,
+.view-content.tasks-bridge-task-content > .markdown-reading-view > .markdown-preview-view > .markdown-preview-sizer > .mod-header,
+.view-content:not(.tasks-bridge-task-native-fallback) > .markdown-source-view > .cm-editor.tasks-bridge-task-editor > .cm-scroller > .cm-sizer {
+  > .metadata-container {
+    --metadata-display-editing: none;
+    --metadata-display-reading: none;
+    display: none !important;
+  }
 
-    > .inline-title {
-      display: none;
-    }
+  > .inline-title {
+    display: none;
   }
 }
 

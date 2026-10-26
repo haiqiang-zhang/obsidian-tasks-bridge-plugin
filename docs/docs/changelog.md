@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### 🐛 Bug Fixes
+
+- Prevent task documents from showing native Properties while Obsidian Mobile starts: load task header styles immediately and render restored tasks from their local Markdown before the metadata index is ready.
+
 ## v2.11.5 (2026-10-25)
 
 ### 🐛 Bug Fixes

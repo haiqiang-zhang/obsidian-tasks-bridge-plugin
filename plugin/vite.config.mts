@@ -195,6 +195,8 @@ export default defineConfig({
   },
   test: {
     watch: false,
+    // The startup guard executes inline CSS before Obsidian loads the plugin stylesheet.
+    css: { include: [/taskDocumentStartup\.scss/] },
     exclude: [...configDefaults.exclude, ".direnv/**/*"],
     globals: true,
     environment: "jsdom",

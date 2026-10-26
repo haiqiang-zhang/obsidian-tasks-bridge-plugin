@@ -1,4 +1,5 @@
 import { act } from "@testing-library/react";
+import { JSON_SCHEMA, load } from "js-yaml";
 import {
   type CachedMetadata,
   type Component,
@@ -8,16 +9,29 @@ import {
   type WorkspaceLeaf,
 } from "obsidian";
 import { createElement } from "react";
+import * as sass from "sass";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type TodoistPlugin from "@/index";
 import type { ProjectTaskCardActions, ProjectTaskCardModel } from "@/ui/projectTaskCard";
 
+import {
+  MANAGED_BODY_END,
+  MANAGED_BODY_START,
+  makeManagedTaskIdentityMarker,
+  renderNewTaskDocument,
+} from "./document";
 import { TaskDocumentHeaders } from "./taskDocumentHeaders";
+import { resolve } from "node:path";
 
 const rendered = vi.hoisted(() => ({
   props: [] as { actions: ProjectTaskCardActions; task: ProjectTaskCardModel }[],
 }));
+
+vi.mock("obsidian", async () => {
+  const actual = await vi.importActual<typeof import("obsidian")>("obsidian");
+  return { ...actual, parseYaml: (source: string) => load(source, { schema: JSON_SCHEMA }) };
+});
 
 vi.mock("@/ui/projectTaskHeader", () => ({
   ProjectTaskHeader: (props: { actions: ProjectTaskCardActions; task: ProjectTaskCardModel }) => {
@@ -28,6 +42,15 @@ vi.mock("@/ui/projectTaskHeader", () => ({
 
 const hostSelector = ".tasks-bridge-task-header-host";
 const contentClass = "tasks-bridge-task-content";
+const nativeFallbackClass = "tasks-bridge-task-native-fallback";
+let nativeCss: string | undefined;
+const installNativeCss = () => {
+  nativeCss ??= sass.compile(resolve(process.cwd(), "src/styles/main.scss")).css;
+  const stylesheet = document.createElement("style");
+  stylesheet.textContent = nativeCss;
+  document.head.append(stylesheet);
+  return stylesheet;
+};
 
 const taskProperties = (id: string, content = "Task title"): Record<string, unknown> => ({
   "task id": id,
@@ -40,6 +63,14 @@ const taskProperties = (id: string, content = "Task title"): Record<string, unkn
   priority: "P2",
   url: `https://app.todoist.com/app/task/${id}`,
 });
+
+const taskSource = (id: string, properties = taskProperties(id)): string =>
+  renderNewTaskDocument(
+    properties,
+    [MANAGED_BODY_START, makeManagedTaskIdentityMarker(id), MANAGED_BODY_END, "", "My notes"].join(
+      "\n",
+    ),
+  );
 
 const makeHarness = () => {
   const listeners = new Map<string, ((file?: TFile) => void)[]>();
@@ -98,6 +129,7 @@ const makeHarness = () => {
     }
     const containerEl = doc.createElement("div");
     const contentEl = doc.createElement("div");
+    contentEl.className = "view-content";
     const source = doc.createElement("div");
     source.className = "markdown-source-view mod-cm6";
     const sourceEditor = doc.createElement("div");
@@ -141,11 +173,13 @@ const makeHarness = () => {
     doc.body.append(containerEl);
     const children = new Set<Component>();
     let mode: "source" | "preview" = "source";
+    let sourceText = "";
     const view = Object.assign(Object.create(MarkdownView.prototype), {
       file,
       containerEl,
       contentEl,
       getMode: () => mode,
+      getViewData: vi.fn(() => sourceText),
       onResize: vi.fn(),
       addChild: vi.fn((child: Component) => {
         children.add(child);
@@ -180,6 +214,9 @@ const makeHarness = () => {
       sourceScroller,
       sourceSizer,
       view,
+      setSource: (source: string) => {
+        sourceText = source;
+      },
       setMode: (next: "source" | "preview") => {
         mode = next;
         source.style.display = mode === "source" ? "" : "none";
@@ -365,6 +402,275 @@ describe("native task document headers", () => {
     expect(native.contentEl.querySelector(hostSelector)).toHaveTextContent("Task title");
     expect(native.contentEl).toHaveClass(contentClass);
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each([
+    "source",
+    "preview",
+  ] as const)("renders a restored %s task from native text while the metadata index is still unavailable", async (mode) => {
+    const harness = setup();
+    const file = harness.addFile("Projects/Restored.task.md");
+    const native = harness.addView(file);
+    const properties = {
+      ...taskProperties("restored"),
+      "due date": "2026-10-27",
+      "due datetime": "2026-10-27T09:30:00.123456+08:00",
+      "due timezone": "Asia/Shanghai",
+      subtasks: ["[[Projects/Child.task.md]]"],
+    };
+    const source = taskSource("restored", properties);
+    native.setMode(mode);
+    native.setSource(source);
+
+    // Neither layout-ready nor metadata-cache callbacks have run yet.
+    harness.headers.start(harness.registerEvent);
+    await flushMicrotasks();
+    const host = native.contentEl.querySelector(hostSelector);
+    expect(host).toHaveTextContent("Task title");
+    expect(host?.parentElement).toBe(mode === "source" ? native.sourceSizer : native.previewHeader);
+    expect(native.contentEl).toHaveClass(contentClass);
+    expect(latestProps().task.subtasks).toEqual([]);
+    expect(latestProps().task).toMatchObject({
+      dueDate: "2026-10-27",
+      dueDatetime: "2026-10-27T09:30:00.123456+08:00",
+      dueTimezone: "Asia/Shanghai",
+    });
+    expect(native.view.getViewData()).toBe(source);
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(native.contentEl.querySelector(hostSelector)).toBe(host);
+    const child = harness.addFile("Projects/Child.task.md", taskProperties("child", "Child"));
+    harness.caches.set(file.path, {
+      frontmatter: properties,
+      frontmatterLinks: [{ key: "subtasks.0", link: child.path, original: `[[${child.path}]]` }],
+    } as CachedMetadata);
+    harness.emit("metadata", "changed", file);
+    await flushMicrotasks();
+
+    expect(native.contentEl.querySelector(hostSelector)).toBe(host);
+    expect(latestProps().task.subtasks).toMatchObject([{ taskId: "child", content: "Child" }]);
+    expect(native.view.getViewData()).toBe(source);
+    expect(native.children.size).toBe(1);
+  });
+
+  it("uses late native text without waiting for the metadata cache or requiring an edit", async () => {
+    const harness = setup();
+    const native = harness.addView(harness.addFile("Projects/Restored.task.md"));
+    harness.headers.start(harness.registerEvent);
+    await flushMicrotasks();
+    expect(native.contentEl.querySelector(hostSelector)).toBeNull();
+
+    native.setSource(taskSource("restored"));
+    harness.headers.requestRefresh();
+    await flushMicrotasks();
+
+    expect(native.contentEl.querySelector(hostSelector)).toHaveTextContent("Task title");
+    expect(native.contentEl).toHaveClass(contentClass);
+    expect(harness.caches.size).toBe(0);
+  });
+
+  it("retains known duplicate protection for local source and another indexed task", async () => {
+    const harness = setup();
+    const native = harness.addView(harness.addFile("Projects/Restored.task.md"));
+    native.setSource(taskSource("duplicate"));
+    const duplicate = harness.addFile("Notes/Duplicate.md", taskProperties("duplicate"));
+    harness.start();
+    await flushMicrotasks();
+    expect(native.contentEl.querySelector(hostSelector)).toBeNull();
+    expect(native.contentEl).not.toHaveClass(contentClass);
+
+    harness.files.splice(harness.files.indexOf(duplicate), 1);
+    harness.caches.delete(duplicate.path);
+    harness.emit("vault", "delete", duplicate);
+    await flushMicrotasks();
+    expect(native.contentEl.querySelector(hostSelector)).toHaveTextContent("Task title");
+  });
+
+  it("restores visible native Properties for a known duplicate despite the editor first-paint marker", async () => {
+    const stylesheet = installNativeCss();
+    try {
+      const harness = setup();
+      const native = harness.addView(harness.addFile("Projects/Restored.task.md"));
+      native.setSource(taskSource("duplicate"));
+      native.sourceEditor.classList.add("tasks-bridge-task-editor");
+      const duplicate = harness.addFile("Notes/Duplicate.md", taskProperties("duplicate"));
+      expect(getComputedStyle(native.properties).display).toBe("none");
+
+      harness.start();
+      await flushMicrotasks();
+      expect(native.contentEl.querySelector(hostSelector)).toBeNull();
+      expect(native.contentEl).toHaveClass(nativeFallbackClass);
+      expect(native.sourceEditor).toHaveClass("tasks-bridge-task-editor");
+      expect(getComputedStyle(native.properties).display).toBe("block");
+      expect(getComputedStyle(native.inlineTitle).display).toBe("block");
+
+      harness.files.splice(harness.files.indexOf(duplicate), 1);
+      harness.caches.delete(duplicate.path);
+      harness.emit("vault", "delete", duplicate);
+      await flushMicrotasks();
+      expect(native.contentEl).not.toHaveClass(nativeFallbackClass);
+      expect(native.contentEl.querySelector(hostSelector)).not.toBeNull();
+      expect(getComputedStyle(native.properties).display).toBe("none");
+    } finally {
+      stylesheet.remove();
+    }
+  });
+
+  it.each([
+    ["missing content", { ...taskProperties("task-1"), content: undefined }],
+    ["missing URL", { ...taskProperties("task-1"), url: undefined }],
+    ["invalid status", { ...taskProperties("task-1"), status: "invalid" }],
+  ])("keeps native Properties visible for %s until the full header model is repaired", async (_reason, properties) => {
+    const stylesheet = installNativeCss();
+    try {
+      const harness = setup();
+      const native = harness.addView(harness.addFile("Projects/Task.task.md"));
+      const source = taskSource("task-1", properties);
+      native.setSource(source);
+      native.sourceEditor.classList.add("tasks-bridge-task-editor");
+      harness.start();
+      await flushMicrotasks();
+
+      expect(native.contentEl).toHaveClass(nativeFallbackClass);
+      expect(native.contentEl.querySelector(hostSelector)).toBeNull();
+      expect(getComputedStyle(native.properties).display).toBe("block");
+      expect(native.view.getViewData()).toBe(source);
+
+      native.setSource(taskSource("task-1"));
+      harness.headers.requestRefresh();
+      await flushMicrotasks();
+      expect(native.contentEl).not.toHaveClass(nativeFallbackClass);
+      expect(native.contentEl.querySelector(hostSelector)).not.toBeNull();
+      expect(getComputedStyle(native.properties).display).toBe("none");
+    } finally {
+      stylesheet.remove();
+    }
+  });
+
+  it("leaves unknown restored editors guarded and clears previous-file rejection during hydration", async () => {
+    const stylesheet = installNativeCss();
+    try {
+      const harness = setup();
+      const file = harness.addFile("Projects/Restored.task.md");
+      const native = harness.addView(file);
+      native.sourceEditor.classList.add("tasks-bridge-task-editor");
+      harness.start();
+      await flushMicrotasks();
+      expect(native.contentEl).not.toHaveClass(nativeFallbackClass);
+      expect(getComputedStyle(native.properties).display).toBe("none");
+
+      native.setSource(taskSource("restored", { "task id": "restored" }));
+      harness.headers.requestRefresh();
+      await flushMicrotasks();
+      expect(native.contentEl).toHaveClass(nativeFallbackClass);
+      expect(getComputedStyle(native.properties).display).toBe("block");
+
+      native.view.file = harness.addFile("Projects/Next.task.md");
+      harness.emit("workspace", "file-open");
+      await flushMicrotasks();
+      expect(native.contentEl).not.toHaveClass(nativeFallbackClass);
+      expect(getComputedStyle(native.properties).display).toBe("none");
+
+      native.setSource(taskSource("next", { "task id": "next" }));
+      harness.headers.requestRefresh();
+      await flushMicrotasks();
+      expect(native.contentEl).toHaveClass(nativeFallbackClass);
+      harness.headers.dispose();
+      expect(native.contentEl).not.toHaveClass(nativeFallbackClass);
+    } finally {
+      stylesheet.remove();
+    }
+  });
+
+  it("rejects duplicate identities in two restored native documents before either is indexed", async () => {
+    const harness = setup();
+    const first = harness.addView(harness.addFile("Projects/First.task.md"));
+    const second = harness.addView(harness.addFile("Projects/Second.task.md"));
+    first.setSource(taskSource("duplicate"));
+    second.setSource(taskSource("duplicate"));
+    harness.start();
+    await flushMicrotasks();
+
+    expect(first.contentEl.querySelector(hostSelector)).toBeNull();
+    expect(second.contentEl.querySelector(hostSelector)).toBeNull();
+  });
+
+  it.each([
+    ["malformed YAML", "---\ntask id: [\n---\nMy notes"],
+    ["missing identity", taskSource("task-1", { content: "Ordinary note" })],
+    [
+      "conflicting identity",
+      taskSource("task-1", { ...taskProperties("task-1"), todoist_task_id: "other" }),
+    ],
+    ["mismatched marker", taskSource("other", taskProperties("task-1"))],
+    ["missing managed body", "---\ntask id: task-1\n---\nMy notes"],
+  ])("leaves %s visible even when an earlier cache still contains valid metadata", async (_name, source) => {
+    const harness = setup();
+    const native = harness.addView(
+      harness.addFile("Projects/Task.task.md", taskProperties("task-1")),
+    );
+    native.setSource(source);
+    harness.start();
+    await flushMicrotasks();
+
+    expect(native.contentEl.querySelector(hostSelector)).toBeNull();
+    expect(native.contentEl).not.toHaveClass(contentClass);
+    expect(native.view.getViewData()).toBe(source);
+  });
+
+  it("never assigns the previous native document's source to a newly opened task file", async () => {
+    const harness = setup();
+    const first = harness.addFile("Projects/First.task.md");
+    const second = harness.addFile("Projects/Second.task.md");
+    const ordinary = harness.addFile("Notes/Ordinary.md");
+    const native = harness.addView(first);
+    native.setSource(taskSource("first", taskProperties("first", "First")));
+    harness.start();
+    await flushMicrotasks();
+    expect(native.contentEl.querySelector(hostSelector)).toHaveTextContent("First");
+
+    // Obsidian assigns the next TFile before its async read replaces currentMode.get().
+    native.view.file = second;
+    harness.emit("workspace", "file-open");
+    await flushMicrotasks();
+    expect(native.contentEl.querySelector(hostSelector)).toBeNull();
+    harness.headers.requestRefresh();
+    await flushMicrotasks();
+    expect(native.contentEl.querySelector(hostSelector)).toBeNull();
+
+    native.setSource(taskSource("second", taskProperties("second", "Second")));
+    harness.headers.requestRefresh();
+    await flushMicrotasks();
+    expect(native.contentEl.querySelector(hostSelector)).toHaveTextContent("Second");
+    expect(latestProps().task.taskId).toBe("second");
+
+    native.view.file = ordinary;
+    harness.emit("workspace", "file-open");
+    await flushMicrotasks();
+    expect(native.contentEl.querySelector(hostSelector)).toBeNull();
+    expect(native.contentEl).not.toHaveClass(contentClass);
+  });
+
+  it("restores native presentation when a hydrated document is cleared despite stale cached metadata", async () => {
+    const harness = setup();
+    const native = harness.addView(
+      harness.addFile("Projects/Task.task.md", taskProperties("task-1")),
+    );
+    native.setSource(taskSource("task-1"));
+    harness.start();
+    await flushMicrotasks();
+    expect(native.contentEl.querySelector(hostSelector)).not.toBeNull();
+
+    native.setSource("");
+    harness.headers.requestRefresh();
+    await flushMicrotasks();
+    expect(native.contentEl.querySelector(hostSelector)).toBeNull();
+    expect(native.contentEl).not.toHaveClass(contentClass);
+
+    native.setSource(taskSource("task-1"));
+    harness.headers.requestRefresh();
+    await flushMicrotasks();
+    expect(native.contentEl.querySelector(hostSelector)).toHaveTextContent("Task title");
   });
 
   it("moves the same header between native scrolling surfaces when mode styles change", async () => {

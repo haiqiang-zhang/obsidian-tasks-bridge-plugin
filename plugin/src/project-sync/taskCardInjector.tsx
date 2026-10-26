@@ -173,13 +173,16 @@ export const readTaskCardModel = (
   file: TFile,
   seen = new Set<string>(),
   blockTaskId?: string,
+  rootFrontmatter?: Record<string, unknown>,
 ): ProjectTaskCardModel | null => {
   if (seen.has(file.path)) {
     return null;
   }
   seen.add(file.path);
   const cache = plugin.app.metadataCache.getFileCache(file);
-  const frontmatter = cache?.frontmatter;
+  // A restored native document can be hydrated before the Vault's metadata index. Its caller
+  // may supply validated local frontmatter for the root; linked children still use native caches.
+  const frontmatter = rootFrontmatter ?? cache?.frontmatter;
   if (frontmatter === undefined) {
     return null;
   }

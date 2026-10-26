@@ -93,4 +93,27 @@ describe("native task document first-paint styles", () => {
     expect(getComputedStyle(properties).display).toBe("block");
     expect(getComputedStyle(title).display).toBe("block");
   });
+
+  it("hides a validated editor's own Properties before its workspace leaf or task header is ready", () => {
+    const { content, header, properties, title } = makeView("source");
+    const editor = content.querySelector(".cm-editor");
+    const embed = document.createElement("div");
+    embed.className = "markdown-embed";
+    header.append(embed);
+    const embedded = addNativeSurface(embed, "source");
+    embed.querySelector(".cm-editor")?.classList.add("tasks-bridge-task-editor");
+
+    expect(content).not.toHaveClass("tasks-bridge-task-content");
+    expect(content.querySelector(".tasks-bridge-task-header-host")).toBeNull();
+    editor?.classList.add("tasks-bridge-task-editor");
+    expect(getComputedStyle(properties).display).toBe("none");
+    expect(getComputedStyle(title).display).toBe("none");
+    expect(getComputedStyle(embedded.properties).display).toBe("block");
+    expect(getComputedStyle(embedded.title).display).toBe("block");
+
+    // Invalid source, mode changes, ordinary-file reuse and plugin unload all remove the facet.
+    editor?.classList.remove("tasks-bridge-task-editor");
+    expect(getComputedStyle(properties).display).toBe("block");
+    expect(getComputedStyle(title).display).toBe("block");
+  });
 });

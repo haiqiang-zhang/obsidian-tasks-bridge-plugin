@@ -318,6 +318,11 @@ export const taskManagedRegionExtension = StateField.define<ManagedRegionState>(
     return makeState(transaction.state);
   },
   provide: (field) => [
+    EditorView.editorAttributes.from(
+      field,
+      (value): Record<string, string> =>
+        value.region === undefined ? {} : { class: "tasks-bridge-task-editor" },
+    ),
     EditorView.decorations.from(field, (value) => value.decorations),
     EditorView.atomicRanges.of((view) => view.state.field(field).decorations),
     EditorState.transactionFilter.of((transaction) =>

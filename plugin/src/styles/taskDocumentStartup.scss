@@ -1,0 +1,5 @@
+// Obsidian loads styles.css only after a plugin's asynchronous onload has finished. Keep the
+// native task header usable during that interval, using the same sources as the final stylesheet.
+@use "main";
+@use "../ui/projectTaskHeader/styles" as header;
+@use "../ui/components/obsidian-icon/styles" as icons;

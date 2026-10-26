@@ -77,6 +77,59 @@ const ranges = (state: EditorState) => {
 const region = (inner: string) => `${MANAGED_BODY_START}\n${inner}\n${MANAGED_BODY_END}`;
 
 describe("taskManagedRegionExtension", () => {
+  it("marks a validated native editor on its initial render before metadata or workspace callbacks", () => {
+    const state = createState();
+    const view = new EditorView({ state });
+    try {
+      expect(view.dom).toHaveClass("tasks-bridge-task-editor");
+      expect(view.state).toBe(state);
+      expect(view.state.doc.toString()).toBe(source);
+      expect(view.state.selection.eq(state.selection)).toBe(true);
+
+      view.dispatch({ effects: contextEffect.of({ livePreview: false }) });
+      expect(view.dom).not.toHaveClass("tasks-bridge-task-editor");
+      expect(view.state.doc.toString()).toBe(source);
+      view.dispatch({ effects: contextEffect.of({ livePreview: true }) });
+      expect(view.dom).toHaveClass("tasks-bridge-task-editor");
+
+      view.dispatch({ effects: contextEffect.of({ path: "Notes/Ordinary.md" }) });
+      expect(view.dom).not.toHaveClass("tasks-bridge-task-editor");
+      view.dispatch({ effects: contextEffect.of({ path: "Tasks/Example.task.md" }) });
+      expect(view.dom).toHaveClass("tasks-bridge-task-editor");
+
+      // Removing the plugin extension must restore native presentation without editing text.
+      view.dispatch({
+        effects: StateEffect.reconfigure.of([editorInfoField, editorLivePreviewField]),
+      });
+      expect(view.dom).not.toHaveClass("tasks-bridge-task-editor");
+      expect(view.state.doc.toString()).toBe(source);
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it("removes its initial-paint marker when hydrated task identity becomes invalid and restores it after repair", () => {
+    const view = new EditorView({ state: createState() });
+    try {
+      const invalid = source.replace('"task-1"', '"other-task"');
+      view.dispatch({
+        changes: { from: 0, to: view.state.doc.length, insert: invalid },
+        annotations: Transaction.remote.of(true),
+      });
+      expect(view.dom).not.toHaveClass("tasks-bridge-task-editor");
+      expect(view.state.doc.toString()).toBe(invalid);
+
+      view.dispatch({
+        changes: { from: 0, to: view.state.doc.length, insert: source },
+        annotations: Transaction.remote.of(true),
+      });
+      expect(view.dom).toHaveClass("tasks-bridge-task-editor");
+      expect(view.state.doc.toString()).toBe(source);
+    } finally {
+      view.destroy();
+    }
+  });
+
   it.each([
     ["source-only comment", body],
     ["historical card", region(makeProjectTaskBlock("task-1"))],
@@ -143,7 +196,14 @@ describe("taskManagedRegionExtension", () => {
     ["copied backtick example", `\`\`\`\`md\n${body}\n\`\`\`\``],
   ])("keeps %s visible", (_kind, managed) => {
     const doc = renderNewTaskDocument({ "task id": "task-1" }, managed);
-    expect(ranges(createState(doc))).toEqual([]);
+    const state = createState(doc);
+    expect(ranges(state)).toEqual([]);
+    const view = new EditorView({ state });
+    try {
+      expect(view.dom).not.toHaveClass("tasks-bridge-task-editor");
+    } finally {
+      view.destroy();
+    }
   });
 
   it.each([
@@ -151,7 +211,14 @@ describe("taskManagedRegionExtension", () => {
     "task id: task-1\ntodoist_task_id: another-task",
     "unrelated: value",
   ])("keeps invalid or unidentified task source visible: %j", (yaml) => {
-    expect(ranges(createState(`---\n${yaml}\n---\n${body}`))).toEqual([]);
+    const state = createState(`---\n${yaml}\n---\n${body}`);
+    expect(ranges(state)).toEqual([]);
+    const view = new EditorView({ state });
+    try {
+      expect(view.dom).not.toHaveClass("tasks-bridge-task-editor");
+    } finally {
+      view.destroy();
+    }
   });
 
   it("preserves edit and inverse-edit transactions and updates the decoration from current text", () => {

@@ -4,6 +4,7 @@ import { EditorView } from "@codemirror/view";
 import { editorInfoField } from "obsidian";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { MANAGED_BODY_END, MANAGED_BODY_START, makeManagedTaskIdentityMarker } from "./document";
 import { createTaskDocumentReadyExtension } from "./taskDocumentReadyExtension";
 
 vi.mock("obsidian", async () => {
@@ -165,7 +166,7 @@ describe("native task document editor readiness", () => {
     expect(onReady).not.toHaveBeenCalled();
   });
 
-  it("does not notify again for edits, selection changes, undo, or deleting and retyping all text", () => {
+  it("does not notify again for body edits, selection changes, or undo", () => {
     const { onReady, onUpdate, view } = makeView();
     view.dispatch({
       changes: { from: view.state.doc.length, insert: " added" },
@@ -175,12 +176,79 @@ describe("native task document editor readiness", () => {
     expect(undoDepth(view.state)).toBe(1);
     expect(undo(view)).toBe(true);
     expect(view.state.doc.toString()).toBe(source);
+    expect(onReady).toHaveBeenCalledOnce();
+    expect(onUpdate).toHaveBeenCalledTimes(3);
+    expect(view.state.doc.toString()).toBe(source);
+  });
+
+  it("notifies when same-path hydration replaces the previous task's equally long native text", () => {
+    const { onReady, view } = makeView();
+    view.dispatch({ effects: contextEffect.of({ taskDocumentReadyPath: "Tasks/Second.task.md" }) });
+    expect(onReady).toHaveBeenCalledTimes(2);
+
+    const next = source.replace("task-1", "task-2");
+    expect(next.length).toBe(source.length);
+    view.dispatch({
+      changes: { from: 0, to: view.state.doc.length, insert: next },
+      annotations: Transaction.addToHistory.of(false),
+    });
+
+    expect(onReady).toHaveBeenCalledTimes(3);
+    expect(view.state.doc.toString()).toBe(next);
+    expect(undoDepth(view.state)).toBe(0);
+  });
+
+  it("notifies when task metadata becomes malformed or is repaired before cache updates", () => {
+    const { onReady, view } = makeView();
+    const malformed = source.replace("task-1", "[");
+    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: malformed } });
+    expect(onReady).toHaveBeenCalledTimes(2);
+
+    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: source } });
+    expect(onReady).toHaveBeenCalledTimes(3);
+    expect(view.state.doc.toString()).toBe(source);
+  });
+
+  it("notifies when a hydrated document is cleared and restored", () => {
+    const { onReady, view } = makeView();
     view.dispatch({ changes: { from: 0, to: view.state.doc.length } });
+    expect(onReady).toHaveBeenCalledTimes(2);
     view.dispatch({ changes: { from: 0, insert: source } });
 
-    expect(onReady).toHaveBeenCalledOnce();
-    expect(onUpdate).toHaveBeenCalledTimes(5);
+    expect(onReady).toHaveBeenCalledTimes(3);
     expect(view.state.doc.toString()).toBe(source);
+  });
+
+  it("tracks managed identity corruption without refreshing for ordinary body typing", () => {
+    const managedSource = [
+      '---\n"task id": task-1\n---',
+      MANAGED_BODY_START,
+      makeManagedTaskIdentityMarker("task-1"),
+      MANAGED_BODY_END,
+      "My notes",
+    ].join("\n");
+    const { onReady, view } = makeView({ doc: managedSource });
+    view.dispatch({ changes: { from: view.state.doc.length, insert: " and more thoughts" } });
+    expect(onReady).toHaveBeenCalledOnce();
+    const beforeDuplicate = view.state.doc.toString();
+
+    view.dispatch({
+      changes: {
+        from: view.state.doc.length,
+        insert: `\n${makeManagedTaskIdentityMarker("task-1")}`,
+      },
+    });
+    expect(onReady).toHaveBeenCalledTimes(2);
+    view.dispatch({ changes: { from: beforeDuplicate.length, to: view.state.doc.length } });
+    expect(onReady).toHaveBeenCalledTimes(3);
+
+    const marker = view.state.doc
+      .toString()
+      .indexOf('"task-1"', view.state.doc.toString().indexOf(MANAGED_BODY_START));
+    view.dispatch({
+      changes: { from: marker, to: marker + '"task-1"'.length, insert: '"task-2"' },
+    });
+    expect(onReady).toHaveBeenCalledTimes(4);
   });
 
   it("leaves no readiness callback pending after an unhydrated editor is destroyed", async () => {
