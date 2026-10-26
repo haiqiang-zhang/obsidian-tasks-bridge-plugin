@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v2.11.8 (2026-10-27)
+
 ### 🐛 Bug Fixes
 
 - Stop unchanged Todoist polls and duplicate settings notifications from rewriting plugin data through Obsidian Sync.
