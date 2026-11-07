@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### ✨ Improvements
+
+- Refine task query blocks with separators between tasks and open outer edges, including grouped and nested tasks.
+- Tighten spacing below query names and keep unnamed blocks compact.
+
 ## v2.11.8 (2026-10-27)
 
 ### 🐛 Bug Fixes

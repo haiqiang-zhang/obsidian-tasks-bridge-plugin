@@ -166,30 +166,23 @@
 }
 
 .todoist-tasks-list {
-  margin-top: 1em;
+  margin-block-start: var(--size-4-2);
+
+  // Subtask lists are siblings of their parent row. Separate subsequent peers even when
+  // a subtree comes between them, leaving the first row and the list's outer edges open.
+  > .todoist-task-container ~ .todoist-task-container {
+    border-block-start: 1px solid var(--todoist-task-separator-color);
+  }
 
   .todoist-tasks-list {
-    margin-top: 0em;
+    margin-block-start: 0;
     margin-left: 2em;
-
-    & + .todoist-task-container {
-      border-top: none;
-    }
-
-    .todoist-task-container:first-child {
-      border-top: none;
-    }
   }
 }
 
 .todoist-task-container {
   display: flex;
   padding: 0.5em 0;
-  border-bottom: 1px solid var(--todoist-task-separator-color);
-
-  &:first-child {
-    border-top: 1px solid var(--todoist-task-separator-color);
-  }
 
   &[data-priority="1"] {
     --todoist-checkbox-border: var(--todoist-p4-border);
